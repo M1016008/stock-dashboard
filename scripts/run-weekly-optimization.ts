@@ -9,8 +9,24 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
+import { CURRENT_SERVING_PRICE_BASIS } from '@/lib/research/six-stage-current-serving-adapter'
+import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
+import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { usUniverseActivityCutoff } from '@/lib/us-universe-activity'
+import { acquirePidProcessLock, type PidProcessLock } from '@/lib/pid-process-lock'
+import { signalProcessGroup, waitForProcessGroupExit } from '@/lib/child-process-group'
+import {
+  assessWeeklyPromotionReadiness,
+  assessWeeklySourceReadiness,
+  createWeeklyOptimizationRunContract,
+  weeklyOptimizationContractEnv,
+  type WeeklyOptimizationRunContract,
+  type WeeklyServingObservation,
+  type WeeklySourceObservation,
+} from '@/lib/weekly-optimization-run-contract'
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -41,6 +57,8 @@ type RunState = {
   heartbeatAt: string
   finishedAt: string | null
   status: 'running' | 'completed' | 'failed'
+  contract?: WeeklyOptimizationRunContract
+  error?: string | null
   steps: StepResult[]
 }
 
@@ -62,7 +80,8 @@ const statePath = path.join(supportDir, 'weekly-optimization-state.json')
 const dryRun = process.argv.includes('--dry-run') || process.env.WEEKLY_OPTIMIZATION_DRY_RUN === '1'
 const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 let activeChild: ChildProcess | null = null
-let lockOwned = false
+let activeChildProcessGroupId: number | null = null
+let weeklyProcessLock: PidProcessLock | null = null
 let shutdownSignal: NodeJS.Signals | null = null
 
 function errorMessage(error: unknown): string {
@@ -71,16 +90,6 @@ function errorMessage(error: unknown): string {
 
 function isoNow(): string {
   return new Date().toISOString()
-}
-
-function pidExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
 }
 
 function writeState(state: RunState): void {
@@ -97,15 +106,221 @@ function readState(): RunState | null {
   }
 }
 
-function sqliteScalar(dbPath: string, sql: string): string {
+function sqliteJsonRow<T extends Record<string, unknown>>(dbPath: string, sql: string): T {
   try {
-    return execFileSync(
+    if (!fs.existsSync(dbPath)) throw new Error('database file does not exist')
+    const output = execFileSync(
       'sqlite3',
-      ['-cmd', '.timeout 5000', dbPath, sql],
+      ['-readonly', '-json', '-cmd', '.timeout 5000', dbPath, sql],
       { encoding: 'utf8', timeout: 10_000 },
-    ).trim() || 'missing'
-  } catch {
-    return 'missing'
+    ).trim()
+    const rows = JSON.parse(output || '[]') as T[]
+    if (!rows[0]) throw new Error('query returned no row')
+    return rows[0]
+  } catch (error) {
+    throw new Error(`weekly optimization lineage query failed for ${dbPath}: ${errorMessage(error)}`)
+  }
+}
+
+function databasePaths(): { jpDbPath: string; usDbPath: string } {
+  return {
+    jpDbPath: resolveConfiguredStoragePath(path.resolve(
+      process.env.STOCKBOARD_DB_PATH?.trim()
+        || path.join(process.cwd(), 'data', 'stockboard.db'),
+    )),
+    usDbPath: resolveConfiguredStoragePath(path.resolve(
+      process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
+    )),
+  }
+}
+
+function sourceObservation(
+  market: 'JP' | 'US',
+  jpDbPath: string,
+): WeeklySourceObservation {
+  const row = market === 'JP'
+    ? sqliteJsonRow<Record<string, unknown>>(jpDbPath, `
+        WITH relevant AS (
+          SELECT id, status, started_at, finished_at
+          FROM batch_runs
+          WHERE job_type = 'ohlcv_fetch:jquants'
+        ), latest AS (
+          SELECT * FROM relevant ORDER BY id DESC LIMIT 1
+        )
+        SELECT
+          COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+          COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+          COALESCE((SELECT status FROM latest), 'missing') AS latestRunStatus,
+          (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
+          (SELECT started_at FROM latest) AS startedAt,
+          (SELECT finished_at FROM latest) AS finishedAt,
+          COALESCE((SELECT MAX(date) FROM ohlcv_daily), '') AS priceDate,
+          (SELECT finished_at FROM latest) AS maxImportedAt,
+          COALESCE((
+            SELECT GROUP_CONCAT(value, '|') FROM (
+              SELECT job_type || ':' || COALESCE(owner, '') AS value
+              FROM update_locks
+              WHERE status = 'running' AND lease_expires_at > unixepoch()
+              ORDER BY job_type, owner
+            )
+          ), '') AS activeWriterLocks
+      `)
+    : sqliteJsonRow<Record<string, unknown>>(jpDbPath, `
+        WITH relevant AS (
+          SELECT id, status, started_at, finished_at
+          FROM market_data_runs
+          WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
+        ), latest AS (
+          SELECT * FROM relevant ORDER BY id DESC LIMIT 1
+        ), universe_relevant AS (
+          SELECT id, status, finished_at
+          FROM market_data_runs
+          WHERE market = 'US' AND job_type = 'tiingo_universe'
+        ), universe_latest AS (
+          SELECT * FROM universe_relevant ORDER BY id DESC LIMIT 1
+        )
+        SELECT
+          COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+          COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+          COALESCE((SELECT status FROM latest), 'missing') AS latestRunStatus,
+          (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
+          (SELECT started_at FROM latest) AS startedAt,
+          (SELECT finished_at FROM latest) AS finishedAt,
+          COALESCE((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US'), '') AS priceDate,
+          (SELECT MAX(imported_at) FROM market_ohlcv_daily WHERE market = 'US') AS maxImportedAt,
+          COALESCE((
+            SELECT GROUP_CONCAT(value, '|') FROM (
+              SELECT job_type || ':' || COALESCE(owner, '') AS value
+              FROM update_locks
+              WHERE status = 'running' AND lease_expires_at > unixepoch()
+              ORDER BY job_type, owner
+            )
+          ), '') AS activeWriterLocks,
+          COALESCE((SELECT id FROM universe_latest), 0) AS universeLatestRunId,
+          COALESCE((SELECT MAX(id) FROM universe_relevant WHERE status IN ('success', 'partial')), 0)
+            AS universeLatestPublishableRunId,
+          COALESCE((SELECT status FROM universe_latest), 'missing') AS universeLatestRunStatus,
+          (SELECT COUNT(*) FROM universe_relevant WHERE status = 'running') AS universeRunningCount,
+          (SELECT finished_at FROM universe_latest) AS universeFinishedAt,
+          (SELECT MAX(updated_at) FROM market_universe WHERE market = 'US') AS universeMaxUpdatedAt,
+          (SELECT COUNT(*) FROM market_universe WHERE market = 'US' AND active = 1) AS universeActiveCount
+      `)
+  const numberOrNull = (value: unknown): number | null => value == null ? null : Number(value)
+  return {
+    latestRunId: Number(row.latestRunId ?? 0),
+    latestPublishableRunId: Number(row.latestPublishableRunId ?? 0),
+    latestRunStatus: String(row.latestRunStatus ?? 'missing'),
+    runningCount: Number(row.runningCount ?? 0),
+    startedAt: numberOrNull(row.startedAt),
+    finishedAt: numberOrNull(row.finishedAt),
+    priceDate: String(row.priceDate ?? ''),
+    maxImportedAt: numberOrNull(row.maxImportedAt),
+    priceBasis: CURRENT_SERVING_PRICE_BASIS[market],
+    activeWriterLocks: String(row.activeWriterLocks ?? '').split('|').filter(Boolean),
+    universeGeneration: market === 'US'
+      ? {
+          latestRunId: Number(row.universeLatestRunId ?? 0),
+          latestPublishableRunId: Number(row.universeLatestPublishableRunId ?? 0),
+          latestRunStatus: String(row.universeLatestRunStatus ?? 'missing'),
+          runningCount: Number(row.universeRunningCount ?? 0),
+          finishedAt: numberOrNull(row.universeFinishedAt),
+          maxUpdatedAt: numberOrNull(row.universeMaxUpdatedAt),
+          activeCount: Number(row.universeActiveCount ?? 0),
+        }
+      : null,
+  }
+}
+
+function servingObservation(
+  market: 'JP' | 'US',
+  dbPath: string,
+): WeeklyServingObservation {
+  const row = sqliteJsonRow<Record<string, unknown>>(dbPath, `
+    SELECT
+      generation_version AS generationVersion,
+      status,
+      baseline_source_date AS baselineSourceDate,
+      last_delta_source_date AS lastDeltaSourceDate,
+      price_basis AS priceBasis,
+      updated_at AS updatedAt
+    FROM ml_pipeline_generations
+    WHERE market = '${market}' AND pipeline = '${ML_PIPELINE_NAME}'
+    LIMIT 1
+  `)
+  return {
+    generationVersion: String(row.generationVersion ?? ''),
+    status: String(row.status ?? ''),
+    baselineSourceDate: String(row.baselineSourceDate ?? ''),
+    lastDeltaSourceDate: String(row.lastDeltaSourceDate ?? ''),
+    priceBasis: String(row.priceBasis ?? ''),
+    updatedAt: Number(row.updatedAt ?? 0),
+  }
+}
+
+function captureRunContract(paths: { jpDbPath: string; usDbPath: string }): WeeklyOptimizationRunContract {
+  const referenceAt = new Date().toISOString()
+  const reference = new Date(referenceAt)
+  const observe = () => ({
+    JP: {
+      source: sourceObservation('JP', paths.jpDbPath),
+      serving: servingObservation('JP', paths.jpDbPath),
+    },
+    US: {
+      source: sourceObservation('US', paths.jpDbPath),
+      serving: servingObservation('US', paths.usDbPath),
+    },
+  })
+  const first = observe()
+  const second = observe()
+  if (JSON.stringify(first) !== JSON.stringify(second)) {
+    throw new Error('weekly optimization lineage changed while the run contract was captured')
+  }
+  const capturedAt = new Date().toISOString()
+  return createWeeklyOptimizationRunContract({
+    referenceAt,
+    capturedAt,
+    markets: {
+      JP: {
+        expectedTradingDate: expectedLatestTradingDate(reference),
+        universeActivityCutoff: null,
+        priceBasis: CURRENT_SERVING_PRICE_BASIS.JP,
+        source: second.JP.source,
+        serving: second.JP.serving,
+      },
+      US: {
+        expectedTradingDate: expectedLatestUsTradingDate(reference),
+        universeActivityCutoff: usUniverseActivityCutoff(reference),
+        priceBasis: CURRENT_SERVING_PRICE_BASIS.US,
+        source: second.US.source,
+        serving: second.US.serving,
+      },
+    },
+  })
+}
+
+function stepMarket(step: Step): 'JP' | 'US' | null {
+  if (step.id.startsWith('jp-')) return 'JP'
+  if (step.id.startsWith('us-')) return 'US'
+  return null
+}
+
+function assertStepLineageUnchanged(
+  step: Step,
+  contract: WeeklyOptimizationRunContract,
+  paths: { jpDbPath: string; usDbPath: string },
+): void {
+  const market = stepMarket(step)
+  if (!market) return
+  const source = sourceObservation(market, paths.jpDbPath)
+  const strictServingGate = step.id === 'jp-features-models' || step.id === 'us-features-models'
+  const assessment = strictServingGate
+    ? assessWeeklyPromotionReadiness(contract.markets[market], {
+        source,
+        serving: servingObservation(market, market === 'JP' ? paths.jpDbPath : paths.usDbPath),
+      })
+    : assessWeeklySourceReadiness(contract.markets[market], source)
+  if (!assessment.ok) {
+    throw new Error(`${step.id} pinned lineage gate failed: ${assessment.issues.join(', ')}`)
   }
 }
 
@@ -128,9 +343,17 @@ function implementationFingerprint(): string {
     'scripts/run-ml-learning.ts',
     'scripts/run-us-ml-job.ts',
     'scripts/ensure-us-adjusted-foundation.ts',
+    'scripts/check-us-ml-health.ts',
+    'scripts/build-analog-sequence-index.ts',
     'scripts/build-us-analytics-db.ts',
     'scripts/validate-us-analytics-db.ts',
     'lib/backtest/forward-extrema.ts',
+    'lib/analog-generation-lineage.ts',
+    'lib/child-process-group.ts',
+    'lib/pid-process-lock.ts',
+    'lib/sqlite-generation-promotion.ts',
+    'lib/us-ml-process-lock.ts',
+    'lib/weekly-optimization-run-contract.ts',
   ]
   const hash = createHash('sha256')
   for (const file of files) {
@@ -141,24 +364,14 @@ function implementationFingerprint(): string {
   return hash.digest('hex').slice(0, 16)
 }
 
-function buildRunKey(configuredSteps: Step[]): string {
-  const jpDb = path.resolve(
-    process.env.STOCKBOARD_DB_PATH?.trim()
-      || path.join(process.cwd(), 'data', 'stockboard.db'),
-  )
-  const usDb = path.resolve(
-    process.env.US_ANALYTICS_DB_PATH?.trim()
-      || defaultUsDb,
-  )
+function buildRunKey(
+  configuredSteps: Step[],
+  contract: WeeklyOptimizationRunContract,
+): string {
   const input = {
-    version: 1,
+    version: 4,
     week: currentJstWeek(),
-    jpPriceDate: sqliteScalar(jpDb, 'SELECT MAX(date) FROM ohlcv_daily'),
-    usPriceDate: sqliteScalar(usDb, 'SELECT MAX(date) FROM ohlcv_daily'),
-    usPriceBasis: sqliteScalar(
-      usDb,
-      `SELECT value FROM us_analytics_metadata WHERE key = 'ohlcv_price_basis'`,
-    ),
+    lineage: contract.lineageSha256,
     implementation: implementationFingerprint(),
     steps: configuredSteps.map((step) => ({ id: step.id, npmScript: step.npmScript })),
   }
@@ -166,46 +379,20 @@ function buildRunKey(configuredSteps: Step[]): string {
 }
 
 function acquireProcessLock(): boolean {
-  fs.mkdirSync(supportDir, { recursive: true })
-  try {
-    const handle = fs.openSync(lockPath, 'wx', 0o600)
-    fs.writeFileSync(handle, `${process.pid}\n`)
-    fs.closeSync(handle)
-    lockOwned = true
-    return true
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
-  }
-
-  const existingPid = Number(fs.readFileSync(lockPath, 'utf8').trim())
-  if (pidExists(existingPid)) {
-    console.log(`Weekly optimization already running (pid=${existingPid}); skipping duplicate launch.`)
-    return false
-  }
-
-  fs.unlinkSync(lockPath)
-  return acquireProcessLock()
+  weeklyProcessLock = acquirePidProcessLock(lockPath, 'Weekly optimization')
+  return weeklyProcessLock != null
 }
 
 function releaseProcessLock(): void {
-  if (!lockOwned) return
-  try {
-    const owner = Number(fs.readFileSync(lockPath, 'utf8').trim())
-    if (owner === process.pid) fs.unlinkSync(lockPath)
-  } catch {
-    // A missing stale lock is already released.
-  }
-  lockOwned = false
+  weeklyProcessLock?.release()
+  weeklyProcessLock = null
 }
 
-function steps(): Step[] {
-  const jpDbPath = resolveConfiguredStoragePath(path.resolve(
-    process.env.STOCKBOARD_DB_PATH?.trim()
-      || path.join(process.cwd(), 'data', 'stockboard.db'),
-  ))
-  const usDbPath = resolveConfiguredStoragePath(path.resolve(
-    process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
-  ))
+function steps(
+  paths = databasePaths(),
+  contract?: WeeklyOptimizationRunContract,
+): Step[] {
+  const { jpDbPath, usDbPath } = paths
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     USE_LOCAL_DB: '1',
@@ -213,9 +400,11 @@ function steps(): Step[] {
     SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '20',
     ML_FEATURE_HEALTH_STRICT: '1',
     ML_ACCURACY_STRICT: '1',
+    WEEKLY_OPTIMIZATION_IMPLEMENTATION_FINGERPRINT: implementationFingerprint(),
     UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
     ML_MODEL_DETERIORATION_STRICT: '1',
     US_ANALYTICS_DB_PATH: usDbPath,
+    ...(contract ? weeklyOptimizationContractEnv(contract) : {}),
   }
   return [
     {
@@ -386,15 +575,27 @@ async function runStep(step: Step): Promise<{
   await waitForMemoryHeadroom({ label: step.label })
   console.log(`\n[weekly-optimization] START ${step.id}: npm run ${step.npmScript}`)
   return new Promise((resolve, reject) => {
-    activeChild = spawn('npm', ['run', step.npmScript], {
+    const child = spawn('npm', ['run', step.npmScript], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...process.env, ...step.env }),
+      detached: true,
       stdio: 'inherit',
     })
-    activeChild.once('error', reject)
-    activeChild.once('close', (exitCode, signal) => {
-      activeChild = null
-      resolve({ exitCode, signal })
+    activeChild = child
+    activeChildProcessGroupId = child.pid ?? null
+    child.once('error', (error) => {
+      if (activeChild === child) activeChild = null
+      if (activeChildProcessGroupId === child.pid) activeChildProcessGroupId = null
+      reject(error)
+    })
+    child.once('close', (exitCode, signal) => {
+      const processGroupId = child.pid
+      void (async () => {
+        if (processGroupId) await waitForProcessGroupExit(processGroupId)
+        if (activeChild === child) activeChild = null
+        if (activeChildProcessGroupId === processGroupId) activeChildProcessGroupId = null
+        resolve({ exitCode, signal })
+      })().catch(reject)
     })
   })
 }
@@ -420,18 +621,21 @@ function installSignalHandlers(): void {
   const handler = (signal: NodeJS.Signals) => {
     shutdownSignal = signal
     console.error(`[weekly-optimization] received ${signal}`)
-    if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
+    if (activeChildProcessGroupId) {
+      signalProcessGroup(activeChildProcessGroupId, 'SIGTERM')
+    } else if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
       activeChild.kill('SIGTERM')
     }
   }
-  process.once('SIGINT', handler)
-  process.once('SIGTERM', handler)
+  process.on('SIGINT', handler)
+  process.on('SIGTERM', handler)
   process.once('exit', releaseProcessLock)
 }
 
 async function main(): Promise<void> {
-  const configuredSteps = steps()
+  const paths = databasePaths()
   if (dryRun) {
+    const configuredSteps = steps(paths)
     console.log(JSON.stringify({
       dryRun: true,
       cwd: process.cwd(),
@@ -443,7 +647,36 @@ async function main(): Promise<void> {
   if (!acquireProcessLock()) return
   installSignalHandlers()
 
-  const runKey = buildRunKey(configuredSteps)
+  const captureStartedAt = isoNow()
+  let contract: WeeklyOptimizationRunContract
+  try {
+    contract = captureRunContract(paths)
+  } catch (error) {
+    const failure = errorMessage(error)
+    const finishedAt = isoNow()
+    writeState({
+      pid: process.pid,
+      runKey: `contract-capture-failed-${createHash('sha256').update(failure).digest('hex').slice(0, 12)}`,
+      startedAt: captureStartedAt,
+      heartbeatAt: finishedAt,
+      finishedAt,
+      status: 'failed',
+      error: failure,
+      steps: steps(paths).map((step) => ({
+        id: step.id,
+        label: step.label,
+        status: 'pending',
+        startedAt: null,
+        finishedAt: null,
+        exitCode: null,
+        signal: null,
+        error: null,
+      })),
+    })
+    throw error
+  }
+  const configuredSteps = steps(paths, contract)
+  const runKey = buildRunKey(configuredSteps, contract)
   const previousState = readState()
   const reusableSteps = previousState?.runKey === runKey
     ? new Map(
@@ -459,6 +692,7 @@ async function main(): Promise<void> {
     heartbeatAt: isoNow(),
     finishedAt: null,
     status: 'running',
+    contract,
     steps: configuredSteps.map((step) => {
       const reusable = reusableSteps.get(step.id)
       return reusable
@@ -493,6 +727,7 @@ async function main(): Promise<void> {
       writeState(state)
     }, 60_000)
     try {
+      assertStepLineageUnchanged(step, contract, paths)
       modelSnapshot = await snapshotModels(step.modelDbPath)
       const completed = await runStep(step)
       result.exitCode = completed.exitCode

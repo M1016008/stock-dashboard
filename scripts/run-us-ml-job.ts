@@ -15,16 +15,9 @@ import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
-const US_ML_LOCK_PATH = path.join(
-  os.homedir(),
-  'Library',
-  'Application Support',
-  'StockBoard',
-  'us-ml-job.lock',
-)
-
 type Mode = 'daily' | 'weekly' | 'full' | 'after-pms'
 type EnvOverrides = Record<string, string | undefined>
 
@@ -35,56 +28,6 @@ type ChunkCheckpoint = {
   signature: string
   completed: string[]
   updatedAt: string
-}
-
-let usMlLockOwned = false
-
-function pidExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function acquireUsMlProcessLock(mode: Mode): boolean {
-  fs.mkdirSync(path.dirname(US_ML_LOCK_PATH), { recursive: true })
-  try {
-    const handle = fs.openSync(US_ML_LOCK_PATH, 'wx', 0o600)
-    fs.writeFileSync(handle, `${JSON.stringify({ pid: process.pid, mode, startedAt: new Date().toISOString() })}\n`)
-    fs.closeSync(handle)
-    usMlLockOwned = true
-    return true
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
-  }
-
-  try {
-    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown; mode?: unknown }
-    const pid = Number(value.pid)
-    if (pidExists(pid)) {
-      console.log(`US ML ${mode} skipped: another US ML job is active (pid=${pid}, mode=${String(value.mode ?? '-')})`)
-      return false
-    }
-  } catch {
-    // An unreadable lock is treated as stale and replaced atomically below.
-  }
-
-  fs.unlinkSync(US_ML_LOCK_PATH)
-  return acquireUsMlProcessLock(mode)
-}
-
-function releaseUsMlProcessLock(): void {
-  if (!usMlLockOwned) return
-  try {
-    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown }
-    if (Number(value.pid) === process.pid) fs.unlinkSync(US_ML_LOCK_PATH)
-  } catch {
-    // A missing stale lock is already released.
-  }
-  usMlLockOwned = false
 }
 
 function sleep(ms: number): Promise<void> {
@@ -809,7 +752,8 @@ async function main(): Promise<void> {
   if (!fs.existsSync(usAnalyticsDbPath)) {
     throw new Error(`US analytics DB not found: ${usAnalyticsDbPath}`)
   }
-  if (!acquireUsMlProcessLock(mode)) return
+  const usMlLock = acquireUsMlProcessLock(mode)
+  if (!usMlLock) return
 
   try {
     const configuredStockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
@@ -852,7 +796,7 @@ async function main(): Promise<void> {
       ML_PIPELINE_MARKET: 'US',
     })
   } finally {
-    releaseUsMlProcessLock()
+    usMlLock.release()
   }
 }
 

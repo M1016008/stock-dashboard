@@ -8,6 +8,7 @@ import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { foundationGenerationChanged } from '@/lib/weekly-optimization-run-contract'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
@@ -19,6 +20,7 @@ const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
   || 'data/stockboard.db'
 const usAnalogDbPath = process.env.ANALOG_US_DB_PATH?.trim()
   || path.join(path.dirname(usAnalyticsDbPath), `analog-sequence-us-v${MA_SEQUENCE_VERSION}.db`)
+const FOUNDATION_SOURCE_LINEAGE_KEY = 'foundation_source_lineage_sha256'
 
 function nonNegativeInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
@@ -227,16 +229,31 @@ async function runNpm(
 }
 
 async function main(): Promise<void> {
-  const [foundationWasCurrent, auditedBaselineExists] = await Promise.all([
+  const [foundationWasCurrent, auditedBaselineExists, foundationLineageBefore] = await Promise.all([
     adjustedFoundationIsCurrent(),
     auditedFullHistoryBaselineExists(),
+    metadataValue(FOUNDATION_SOURCE_LINEAGE_KEY),
   ])
   await runNpm('batch:us-adjusted-foundation', {}, 'source')
   await runNpm('batch:us-analytics-validate')
+  const foundationLineageAfter = await metadataValue(FOUNDATION_SOURCE_LINEAGE_KEY)
+  if (!foundationLineageAfter) {
+    throw new Error('US weekly: Foundation completed without source-lineage metadata')
+  }
+  const foundationWasRebuilt = foundationGenerationChanged(
+    foundationLineageBefore,
+    foundationLineageAfter,
+  )
+  if (!foundationWasCurrent && !foundationWasRebuilt) {
+    console.warn(
+      'US weekly: Foundation repaired without changing source lineage; '
+      + 'weekly ML replay remains required',
+    )
+  }
 
-  if (foundationWasCurrent && auditedBaselineExists) {
+  if (!foundationWasRebuilt && auditedBaselineExists) {
     await runNpm('batch:us-ml-weekly-replay')
-  } else if (foundationWasCurrent) {
+  } else if (!foundationWasRebuilt) {
     console.log('US weekly: audited full-history baseline proof is missing; running one full-history baseline')
     await runNpm('batch:us-ml-full-history')
   } else {

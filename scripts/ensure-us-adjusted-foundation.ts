@@ -1,4 +1,5 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
@@ -14,8 +15,25 @@ import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-g
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { assertWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
+import { ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import {
+  promoteSqliteGeneration,
+  rollbackSqliteGeneration,
+  type SqliteGenerationPromotion,
+} from '@/lib/sqlite-generation-promotion'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { acquireUsMlProcessLock, type UsMlProcessLock } from '@/lib/us-ml-process-lock'
+import { acquirePidProcessLock, type PidProcessLock } from '@/lib/pid-process-lock'
+import { analogGenerationMetadataIsCurrent } from '@/lib/analog-generation-lineage'
+import { signalProcessGroup, waitForProcessGroupExit } from '@/lib/child-process-group'
+import {
+  assessWeeklyPromotionReadiness,
+  parseWeeklyOptimizationRunContract,
+  weeklySourceGenerationSha256,
+  type WeeklyServingObservation,
+  type WeeklySourceObservation,
+} from '@/lib/weekly-optimization-run-contract'
 import { and, eq } from 'drizzle-orm'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
@@ -39,6 +57,14 @@ const SOURCE_SNAPSHOT_LOCK_JOB = 'us_adjusted_source_snapshots'
 const SOURCE_SNAPSHOT_CONFLICTS = EXCLUSIVE_UPDATE_JOB_TYPES.filter(
   (jobType) => jobType !== 'us_adjusted_foundation',
 )
+const weeklyRunContract = process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()
+  ? parseWeeklyOptimizationRunContract(process.env.WEEKLY_OPTIMIZATION_CONTRACT)
+  : null
+const FOUNDATION_SOURCE_LINEAGE_KEY = 'foundation_source_lineage_sha256'
+const FOUNDATION_IMPLEMENTATION_FINGERPRINT =
+  process.env.WEEKLY_OPTIMIZATION_IMPLEMENTATION_FINGERPRINT?.trim() || 'standalone-foundation-v2'
+let activeNpmChild: ChildProcess | null = null
+let activeNpmProcessGroupId: number | null = null
 
 type FoundationProcessLock = {
   release: () => void
@@ -122,7 +148,7 @@ function heavyMlIsActive(): boolean {
     }
     const candidates = rows.filter((row) => (
       !currentFamilyPids.has(row.pid)
-      && /scripts\/(?:run-us-ml-job|run-us-ml-weekly-efficient|batch-forward-extrema|batch-ml-features|batch-ml-physics-features)\.(?:ts|js)\b/.test(row.command)
+      && /scripts\/(?:run-us-ml-job|run-us-ml-weekly-efficient|batch-(?:forward-extrema|ml-[\w-]+)|build-serving-[\w-]+)\.(?:ts|js)\b/.test(row.command)
     ))
 
     return candidates.some((candidate) => {
@@ -161,7 +187,7 @@ function heavyMlIsActive(): boolean {
       }
     })
   } catch {
-    return false
+    return true
   }
 }
 
@@ -179,6 +205,7 @@ async function runNpm(script: string, env: Record<string, string>): Promise<void
   await new Promise<void>((resolve, reject) => {
     const child = spawn('npm', ['run', script], {
       cwd: process.cwd(),
+      detached: true,
       stdio: 'inherit',
       env: withMemoryGuardEnv({
         ...process.env,
@@ -187,11 +214,23 @@ async function runNpm(script: string, env: Record<string, string>): Promise<void
         USE_LOCAL_DB: '1',
       }),
     })
+    activeNpmChild = child
+    activeNpmProcessGroupId = child.pid ?? null
     child.on('close', (code, signal) => {
-      if (code === 0) resolve()
-      else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+      const processGroupId = child.pid
+      void (async () => {
+        if (processGroupId) await waitForProcessGroupExit(processGroupId)
+        if (activeNpmChild === child) activeNpmChild = null
+        if (activeNpmProcessGroupId === processGroupId) activeNpmProcessGroupId = null
+        if (code === 0) resolve()
+        else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+      })().catch(reject)
     })
-    child.on('error', reject)
+    child.on('error', (error) => {
+      if (activeNpmChild === child) activeNpmChild = null
+      if (activeNpmProcessGroupId === child.pid) activeNpmProcessGroupId = null
+      reject(error)
+    })
   })
 }
 
@@ -310,13 +349,14 @@ async function resumableSnapshotTicker(): Promise<string | null> {
   }
 }
 
-async function analyticsPriceBasisIsCurrent(): Promise<boolean> {
-  const [priceBasis, derivedBasis, derivedDate, analogBasis, analogDate, priceDate] = await Promise.all([
+async function analyticsPriceBasisIsCurrent(sourceLineageSha256: string): Promise<boolean> {
+  const [priceBasis, derivedBasis, derivedDate, analogBasis, analogDate, sourceLineage, priceDate] = await Promise.all([
     analyticsMetadataValue(usAnalyticsDbPath, 'ohlcv_price_basis'),
     analyticsMetadataValue(usAnalyticsDbPath, 'derived_price_basis'),
     analyticsMetadataValue(usAnalyticsDbPath, 'derived_price_date'),
     analyticsMetadataValue(usAnalyticsDbPath, 'analog_index_price_basis'),
     analyticsMetadataValue(usAnalyticsDbPath, 'analog_index_price_date'),
+    analyticsMetadataValue(usAnalyticsDbPath, FOUNDATION_SOURCE_LINEAGE_KEY),
     analyticsMaxPriceDate(usAnalyticsDbPath),
   ])
   if (!priceDate) return false
@@ -326,7 +366,8 @@ async function analyticsPriceBasisIsCurrent(): Promise<boolean> {
     && derivedDate === priceDate
     && analogBasis === US_ADJUSTED_PRICE_BASIS
     && analogDate === priceDate
-    && await analogGenerationIsCurrent(usAnalogDbPath, priceDate)
+    && sourceLineage === sourceLineageSha256
+    && await analogGenerationIsCurrent(usAnalogDbPath, priceDate, sourceLineageSha256)
   )
 }
 
@@ -385,8 +426,38 @@ async function analogMetadataValue(dbPath: string, key: string): Promise<string 
   }
 }
 
-async function analogGenerationIsCurrent(dbPath: string, sourceDate: string): Promise<boolean> {
-  const [version, completed, indexDate, priceCompleted, priceDate, chunkCompleted, chunkDate] = await Promise.all([
+async function writeAnalogMetadata(dbPath: string, key: string, value: string): Promise<void> {
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
+  try {
+    await client.execute({
+      sql: `
+        INSERT INTO analog_sequence_meta (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `,
+      args: [key, value],
+    })
+  } finally {
+    client.close()
+  }
+}
+
+async function analogGenerationIsCurrent(
+  dbPath: string,
+  sourceDate: string,
+  sourceLineageSha256: string,
+): Promise<boolean> {
+  const [
+    version,
+    completed,
+    indexDate,
+    priceCompleted,
+    priceDate,
+    chunkCompleted,
+    chunkDate,
+    priceBasis,
+    storedSourceLineageSha256,
+  ] = await Promise.all([
     analogMetadataValue(dbPath, 'version'),
     analogMetadataValue(dbPath, 'completed'),
     analogMetadataValue(dbPath, 'source_date'),
@@ -394,14 +465,25 @@ async function analogGenerationIsCurrent(dbPath: string, sourceDate: string): Pr
     analogMetadataValue(dbPath, 'price_source_date'),
     analogMetadataValue(dbPath, 'price_chunks_completed'),
     analogMetadataValue(dbPath, 'price_chunks_source_date'),
+    analogMetadataValue(dbPath, 'price_basis'),
+    analogMetadataValue(dbPath, FOUNDATION_SOURCE_LINEAGE_KEY),
   ])
-  return Number(version) === MA_SEQUENCE_VERSION
-    && completed === '1'
-    && indexDate === sourceDate
-    && priceCompleted === '1'
-    && priceDate === sourceDate
-    && chunkCompleted === '1'
-    && chunkDate === sourceDate
+  return analogGenerationMetadataIsCurrent({
+    version,
+    completed,
+    sourceDate: indexDate,
+    priceCompleted,
+    priceSourceDate: priceDate,
+    priceChunksCompleted: chunkCompleted,
+    priceChunksSourceDate: chunkDate,
+    priceBasis,
+    sourceLineageSha256: storedSourceLineageSha256,
+  }, {
+    version: MA_SEQUENCE_VERSION,
+    sourceDate,
+    priceBasis: US_ADJUSTED_PRICE_BASIS,
+    sourceLineageSha256,
+  })
 }
 
 async function analyticsMaxPriceDate(dbPath: string): Promise<string | null> {
@@ -416,11 +498,160 @@ async function analyticsMaxPriceDate(dbPath: string): Promise<string | null> {
   }
 }
 
-async function resumableAdjustedShadowExists(): Promise<boolean> {
+async function currentWeeklyUsSourceObservation(): Promise<WeeklySourceObservation> {
+  const row = await execGet<Record<string, unknown>>(`
+    WITH relevant AS (
+      SELECT id, status, started_at, finished_at
+      FROM market_data_runs
+      WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
+    ), latest AS (
+      SELECT * FROM relevant ORDER BY id DESC LIMIT 1
+    ), universe_relevant AS (
+      SELECT id, status, finished_at
+      FROM market_data_runs
+      WHERE market = 'US' AND job_type = 'tiingo_universe'
+    ), universe_latest AS (
+      SELECT * FROM universe_relevant ORDER BY id DESC LIMIT 1
+    )
+    SELECT
+      COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+      COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+      COALESCE((SELECT status FROM latest), 'missing') AS latestRunStatus,
+      (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
+      (SELECT started_at FROM latest) AS startedAt,
+      (SELECT finished_at FROM latest) AS finishedAt,
+      COALESCE((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US'), '') AS priceDate,
+      (SELECT MAX(imported_at) FROM market_ohlcv_daily WHERE market = 'US') AS maxImportedAt,
+      COALESCE((
+        SELECT GROUP_CONCAT(value, '|') FROM (
+          SELECT job_type || ':' || COALESCE(owner, '') AS value
+          FROM update_locks
+          WHERE status = 'running'
+            AND lease_expires_at > unixepoch()
+            AND job_type NOT IN ('us_adjusted_foundation', 'us_adjusted_source_snapshots')
+          ORDER BY job_type, owner
+        )
+      ), '') AS activeWriterLocks,
+      COALESCE((SELECT id FROM universe_latest), 0) AS universeLatestRunId,
+      COALESCE((SELECT MAX(id) FROM universe_relevant WHERE status IN ('success', 'partial')), 0)
+        AS universeLatestPublishableRunId,
+      COALESCE((SELECT status FROM universe_latest), 'missing') AS universeLatestRunStatus,
+      (SELECT COUNT(*) FROM universe_relevant WHERE status = 'running') AS universeRunningCount,
+      (SELECT finished_at FROM universe_latest) AS universeFinishedAt,
+      (SELECT MAX(updated_at) FROM market_universe WHERE market = 'US') AS universeMaxUpdatedAt,
+      (SELECT COUNT(*) FROM market_universe WHERE market = 'US' AND active = 1) AS universeActiveCount
+  `)
+  const numberOrNull = (value: unknown): number | null => value == null ? null : Number(value)
+  return {
+    latestRunId: Number(row?.latestRunId ?? 0),
+    latestPublishableRunId: Number(row?.latestPublishableRunId ?? 0),
+    latestRunStatus: String(row?.latestRunStatus ?? 'missing'),
+    runningCount: Number(row?.runningCount ?? 0),
+    startedAt: numberOrNull(row?.startedAt),
+    finishedAt: numberOrNull(row?.finishedAt),
+    priceDate: String(row?.priceDate ?? ''),
+    maxImportedAt: numberOrNull(row?.maxImportedAt),
+    priceBasis: US_ADJUSTED_PRICE_BASIS,
+    activeWriterLocks: String(row?.activeWriterLocks ?? '').split('|').filter(Boolean),
+    universeGeneration: {
+      latestRunId: Number(row?.universeLatestRunId ?? 0),
+      latestPublishableRunId: Number(row?.universeLatestPublishableRunId ?? 0),
+      latestRunStatus: String(row?.universeLatestRunStatus ?? 'missing'),
+      runningCount: Number(row?.universeRunningCount ?? 0),
+      finishedAt: numberOrNull(row?.universeFinishedAt),
+      maxUpdatedAt: numberOrNull(row?.universeMaxUpdatedAt),
+      activeCount: Number(row?.universeActiveCount ?? 0),
+    },
+  }
+}
+
+async function expectedFoundationSourceLineageSha256(): Promise<string> {
+  const currentSource = weeklyRunContract ? null : await currentWeeklyUsSourceObservation()
+  if (currentSource) {
+    const universe = currentSource.universeGeneration
+    if (
+      currentSource.latestRunId <= 0
+      || currentSource.latestPublishableRunId !== currentSource.latestRunId
+      || !['success', 'partial'].includes(currentSource.latestRunStatus)
+      || currentSource.runningCount !== 0
+      || currentSource.activeWriterLocks.length !== 0
+      || currentSource.finishedAt == null
+      || !universe
+      || universe.latestRunId <= 0
+      || universe.latestPublishableRunId !== universe.latestRunId
+      || !['success', 'partial'].includes(universe.latestRunStatus)
+      || universe.runningCount !== 0
+      || universe.finishedAt == null
+    ) {
+      throw new Error('US adjusted foundation source generation is not an immutable publication')
+    }
+  }
+  const sourceSha256 = weeklyRunContract?.markets.US.source.generationSha256
+    || weeklySourceGenerationSha256(currentSource!)
+  return createHash('sha256').update(JSON.stringify({
+    sourceSha256,
+    expectedTradingDate: weeklyRunContract?.markets.US.expectedTradingDate ?? null,
+    priceBasis: US_ADJUSTED_PRICE_BASIS,
+    implementation: FOUNDATION_IMPLEMENTATION_FINGERPRINT,
+  })).digest('hex')
+}
+
+async function currentWeeklyUsServingObservation(): Promise<WeeklyServingObservation> {
+  const client = openExistingGuardedClient(usAnalyticsDbPath, 'us-adjusted-foundation-lineage')
+  try {
+    const result = await client.execute({
+      sql: `
+        SELECT
+          generation_version AS generationVersion,
+          status,
+          baseline_source_date AS baselineSourceDate,
+          last_delta_source_date AS lastDeltaSourceDate,
+          price_basis AS priceBasis,
+          updated_at AS updatedAt
+        FROM ml_pipeline_generations
+        WHERE market = 'US' AND pipeline = ?
+        LIMIT 1
+      `,
+      args: [ML_PIPELINE_NAME],
+    })
+    const row = result.rows[0]
+    if (!row) throw new Error('US serving generation is missing')
+    return {
+      generationVersion: String(row.generationVersion ?? ''),
+      status: String(row.status ?? ''),
+      baselineSourceDate: String(row.baselineSourceDate ?? ''),
+      lastDeltaSourceDate: String(row.lastDeltaSourceDate ?? ''),
+      priceBasis: String(row.priceBasis ?? ''),
+      updatedAt: Number(row.updatedAt ?? 0),
+    }
+  } finally {
+    client.close()
+  }
+}
+
+async function assertWeeklyUsLineageUnchanged(stage: 'start' | 'promotion'): Promise<void> {
+  if (!weeklyRunContract) return
+  const [source, serving] = await Promise.all([
+    currentWeeklyUsSourceObservation(),
+    currentWeeklyUsServingObservation(),
+  ])
+  const assessment = assessWeeklyPromotionReadiness(weeklyRunContract.markets.US, {
+    source,
+    serving,
+  })
+  if (!assessment.ok) {
+    throw new Error(
+      `US adjusted foundation ${stage} lineage gate failed: ${assessment.issues.join(', ')}`,
+    )
+  }
+}
+
+async function resumableAdjustedShadowExists(expectedSourceLineageSha256: string): Promise<boolean> {
   if (!fs.existsSync(adjustedShadowDbPath)) return false
-  const [basis, shadowDate, source] = await Promise.all([
+  const [basis, shadowDate, sourceLineage, source] = await Promise.all([
     analyticsMetadataValue(adjustedShadowDbPath, 'ohlcv_price_basis'),
     analyticsMaxPriceDate(adjustedShadowDbPath),
+    analyticsMetadataValue(adjustedShadowDbPath, FOUNDATION_SOURCE_LINEAGE_KEY),
     execGet<{ date: string | null }>(
       `SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = 'US'`,
     ),
@@ -428,13 +659,30 @@ async function resumableAdjustedShadowExists(): Promise<boolean> {
   return basis === US_ADJUSTED_PRICE_BASIS
     && shadowDate != null
     && shadowDate === source?.date
+    && sourceLineage === expectedSourceLineageSha256
 }
 
-async function seedAdjustedAnalyticsShadow(): Promise<boolean> {
+function quarantineStaleSqliteGeneration(dbPath: string, label: string): void {
+  if (!fs.existsSync(dbPath)) return
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const quarantinePath = `${dbPath}.stale-lineage-${timestamp}`
+  for (const suffix of ['', '-wal', '-shm']) {
+    const source = `${dbPath}${suffix}`
+    if (fs.existsSync(source)) fs.renameSync(source, `${quarantinePath}${suffix}`)
+  }
+  console.warn(`US adjusted foundation: quarantined stale ${label} at ${quarantinePath}`)
+}
+
+function quarantineStaleAdjustedShadowLineage(): void {
+  quarantineStaleSqliteGeneration(adjustedShadowDbPath, 'analytics shadow')
+}
+
+async function seedAdjustedAnalyticsShadow(expectedSourceLineageSha256: string): Promise<boolean> {
   if (fs.existsSync(adjustedShadowDbPath)) return false
-  const [basis, analyticsDate, source] = await Promise.all([
+  const [basis, analyticsDate, sourceLineage, source] = await Promise.all([
     analyticsMetadataValue(usAnalyticsDbPath, 'ohlcv_price_basis'),
     analyticsMaxPriceDate(usAnalyticsDbPath),
+    analyticsMetadataValue(usAnalyticsDbPath, FOUNDATION_SOURCE_LINEAGE_KEY),
     execGet<{ date: string | null }>(
       `SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = 'US'`,
     ),
@@ -443,6 +691,7 @@ async function seedAdjustedAnalyticsShadow(): Promise<boolean> {
     basis !== US_ADJUSTED_PRICE_BASIS
     || analyticsDate == null
     || analyticsDate !== source?.date
+    || sourceLineage !== expectedSourceLineageSha256
   ) return false
 
   await checkpointDb(usAnalyticsDbPath)
@@ -575,10 +824,6 @@ async function checkpointDb(dbPath: string): Promise<void> {
   }
 }
 
-function moveIfPresent(from: string, to: string): void {
-  if (fs.existsSync(from)) fs.renameSync(from, to)
-}
-
 function cloneFile(source: string, target: string): void {
   if (process.platform === 'darwin') {
     // Node/libuv can report ENOSYS for APFS clone flags on removable volumes,
@@ -589,56 +834,61 @@ function cloneFile(source: string, target: string): void {
   fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE_FORCE)
 }
 
-async function promoteAdjustedShadow(): Promise<string> {
-  if (!fs.existsSync(adjustedShadowDbPath)) {
-    throw new Error(`US adjusted shadow DB not found: ${adjustedShadowDbPath}`)
-  }
+async function promoteAdjustedShadow(beforeReplace?: () => void): Promise<SqliteGenerationPromotion> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const backupPath = `${usAnalyticsDbPath}.pre-${US_ADJUSTED_PRICE_BASIS}-${timestamp}`
-  await checkpointDb(usAnalyticsDbPath)
-  await checkpointDb(adjustedShadowDbPath)
-
-  // APFS clones retain a rollback generation without copying hundreds of GB.
-  // Replacing the main file is atomic, so readers keep serving the old inode
-  // until the generation-aware client reconnects on its next request.
-  cloneFile(usAnalyticsDbPath, backupPath)
-  moveIfPresent(`${usAnalyticsDbPath}-wal`, `${backupPath}-wal`)
-  moveIfPresent(`${usAnalyticsDbPath}-shm`, `${backupPath}-shm`)
-  moveIfPresent(`${adjustedShadowDbPath}-wal`, `${backupPath}.promoted-shadow-wal`)
-  moveIfPresent(`${adjustedShadowDbPath}-shm`, `${backupPath}.promoted-shadow-shm`)
-  fs.renameSync(adjustedShadowDbPath, usAnalyticsDbPath)
-  return backupPath
+  return promoteSqliteGeneration({
+    primaryPath: usAnalyticsDbPath,
+    shadowPath: adjustedShadowDbPath,
+    backupPath,
+    checkpoint: checkpointDb,
+    clone: cloneFile,
+    beforeReplace,
+  })
 }
 
-async function seedAdjustedAnalogShadow(): Promise<void> {
+async function seedAdjustedAnalogShadow(
+  priceDate: string,
+  expectedSourceLineageSha256: string,
+): Promise<void> {
   if (fs.existsSync(adjustedAnalogShadowDbPath) || !fs.existsSync(usAnalogDbPath)) return
+  if (!await analogGenerationIsCurrent(
+    usAnalogDbPath,
+    priceDate,
+    expectedSourceLineageSha256,
+  )) return
   await checkpointDb(usAnalogDbPath)
   cloneFile(usAnalogDbPath, adjustedAnalogShadowDbPath)
   fs.chmodSync(adjustedAnalogShadowDbPath, 0o600)
 }
 
-async function promoteAdjustedAnalogShadow(): Promise<string> {
-  if (!fs.existsSync(adjustedAnalogShadowDbPath)) {
-    throw new Error(`US adjusted analog shadow DB not found: ${adjustedAnalogShadowDbPath}`)
-  }
+async function promoteAdjustedAnalogShadow(beforeReplace?: () => void): Promise<SqliteGenerationPromotion> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const backupPath = `${usAnalogDbPath}.pre-${US_ADJUSTED_PRICE_BASIS}-${timestamp}`
-  await checkpointDb(usAnalogDbPath)
-  await checkpointDb(adjustedAnalogShadowDbPath)
-  if (fs.existsSync(usAnalogDbPath)) {
-    cloneFile(usAnalogDbPath, backupPath)
-  }
-  moveIfPresent(`${usAnalogDbPath}-wal`, `${backupPath}-wal`)
-  moveIfPresent(`${usAnalogDbPath}-shm`, `${backupPath}-shm`)
-  moveIfPresent(`${adjustedAnalogShadowDbPath}-wal`, `${backupPath}.promoted-shadow-wal`)
-  moveIfPresent(`${adjustedAnalogShadowDbPath}-shm`, `${backupPath}.promoted-shadow-shm`)
-  fs.renameSync(adjustedAnalogShadowDbPath, usAnalogDbPath)
-  return backupPath
+  return promoteSqliteGeneration({
+    primaryPath: usAnalogDbPath,
+    shadowPath: adjustedAnalogShadowDbPath,
+    backupPath,
+    checkpoint: checkpointDb,
+    clone: cloneFile,
+    beforeReplace,
+  })
 }
 
-async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<void>): Promise<void> {
-  await seedAdjustedAnalyticsShadow()
-  if (await resumableAdjustedShadowExists()) {
+async function buildAdjustedShadow(
+  onStage: (stage: FoundationStage) => Promise<void>,
+  expectedSourceLineageSha256: string,
+): Promise<{ analogPromotionRequired: boolean; priceDate: string }> {
+  let analogPromotionRequired = false
+  let resumableShadow = await resumableAdjustedShadowExists(expectedSourceLineageSha256)
+  if (!resumableShadow && fs.existsSync(adjustedShadowDbPath)) {
+    quarantineStaleAdjustedShadowLineage()
+  }
+  if (!resumableShadow) {
+    await seedAdjustedAnalyticsShadow(expectedSourceLineageSha256)
+    resumableShadow = await resumableAdjustedShadowExists(expectedSourceLineageSha256)
+  }
+  if (resumableShadow) {
     console.log(`US adjusted foundation: resuming validated shadow generation ${adjustedShadowDbPath}`)
   } else {
     await onStage('analytics_copy')
@@ -646,7 +896,13 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
       US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
       US_ANALYTICS_REBUILD_PRICE_BASIS: '1',
       US_ANALYTICS_NATIVE_CHUNK: process.env.US_FOUNDATION_ANALYTICS_CHUNK ?? '100',
+      STOCKBOARD_PROCESS_LOCK_REQUIRED: '1',
     })
+    await writeAnalyticsMetadata(
+      adjustedShadowDbPath,
+      FOUNDATION_SOURCE_LINEAGE_KEY,
+      expectedSourceLineageSha256,
+    )
   }
   await onStage('validation')
   await runNpm('batch:us-analytics-validate', {
@@ -731,42 +987,66 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
     analyticsMetadataValue(adjustedShadowDbPath, 'analog_index_price_basis'),
     analyticsMetadataValue(adjustedShadowDbPath, 'analog_index_price_date'),
   ])
-  const currentAnalogIsCurrent = await analogGenerationIsCurrent(usAnalogDbPath, priceDate)
+  const currentAnalogIsCurrent = await analogGenerationIsCurrent(
+    usAnalogDbPath,
+    priceDate,
+    expectedSourceLineageSha256,
+  )
   if (
     analogBasis !== US_ADJUSTED_PRICE_BASIS
     || analogPriceDate !== priceDate
     || !currentAnalogIsCurrent
   ) {
     await onStage('analog_index')
-    if (!await analogGenerationIsCurrent(adjustedAnalogShadowDbPath, priceDate)) {
-      await seedAdjustedAnalogShadow()
+    if (!await analogGenerationIsCurrent(
+      adjustedAnalogShadowDbPath,
+      priceDate,
+      expectedSourceLineageSha256,
+    )) {
+      if (fs.existsSync(adjustedAnalogShadowDbPath)) {
+        quarantineStaleSqliteGeneration(adjustedAnalogShadowDbPath, 'analog shadow')
+      }
+      await seedAdjustedAnalogShadow(priceDate, expectedSourceLineageSha256)
       await runNpm('batch:analog-index:us-full', {
         US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
         ANALOG_US_DB_PATH: adjustedAnalogShadowDbPath,
+        STOCKBOARD_PROCESS_LOCK_REQUIRED: '1',
       })
+      await writeAnalogMetadata(adjustedAnalogShadowDbPath, 'price_basis', US_ADJUSTED_PRICE_BASIS)
+      await writeAnalogMetadata(
+        adjustedAnalogShadowDbPath,
+        FOUNDATION_SOURCE_LINEAGE_KEY,
+        expectedSourceLineageSha256,
+      )
     }
-    if (!await analogGenerationIsCurrent(adjustedAnalogShadowDbPath, priceDate)) {
+    if (!await analogGenerationIsCurrent(
+      adjustedAnalogShadowDbPath,
+      priceDate,
+      expectedSourceLineageSha256,
+    )) {
       throw new Error('US adjusted analog shadow did not complete for the current source date')
     }
-    const analogBackupPath = await promoteAdjustedAnalogShadow()
-    console.log(`US adjusted analog index promoted; previous generation retained: ${analogBackupPath}`)
-    await writeAnalyticsMetadata(adjustedShadowDbPath, 'analog_index_price_basis', US_ADJUSTED_PRICE_BASIS)
-    await writeAnalyticsMetadata(adjustedShadowDbPath, 'analog_index_price_date', priceDate)
+    analogPromotionRequired = true
   }
   await onStage('validation')
   await runNpm('batch:us-analytics-validate', {
     US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
     US_ANALYTICS_REQUIRE_DERIVED_BASIS: '1',
   })
+  return { analogPromotionRequired, priceDate }
 }
 
 async function main(): Promise<void> {
+  assertWritableTargetPath(usAnalyticsDbPath, 'us-adjusted-primary')
+  assertWritableTargetPath(usAnalogDbPath, 'us-adjusted-analog-primary')
   assertWritableTargetPath(adjustedShadowDbPath, 'us-adjusted-shadow')
   assertWritableTargetPath(adjustedAnalogShadowDbPath, 'us-adjusted-analog-shadow')
   await ensureReady()
+  await assertWeeklyUsLineageUnchanged('start')
+  const expectedSourceLineageSha256 = await expectedFoundationSourceLineageSha256()
   let [sourceCurrent, analyticsCurrent] = await Promise.all([
     sourceSnapshotBasisIsCurrent(),
-    analyticsPriceBasisIsCurrent(),
+    analyticsPriceBasisIsCurrent(expectedSourceLineageSha256),
   ])
   if (!sourceCurrent && await completedSnapshotRebuildCanRecoverBasis()) {
     await recordSourceSnapshotBasis()
@@ -785,20 +1065,20 @@ async function main(): Promise<void> {
   }
 
   const processLock = acquireFoundationProcessLock()
-  let updateLockForSignal: UpdateLockHandle | null = null
-  let signalExitStarted = false
+  let deferredPromotionSignal: NodeJS.Signals | null = null
   const releaseOnSignal = (signal: NodeJS.Signals) => {
-    if (signalExitStarted) return
-    signalExitStarted = true
-    void updateLockForSignal?.release()
-      .catch(() => undefined)
-      .finally(() => {
-        processLock.release()
-        process.exit(signal === 'SIGINT' ? 130 : 143)
-      })
+    deferredPromotionSignal ??= signal
+    if (activeNpmProcessGroupId) {
+      signalProcessGroup(activeNpmProcessGroupId, 'SIGTERM')
+    } else if (activeNpmChild && activeNpmChild.exitCode === null && activeNpmChild.signalCode === null) {
+      activeNpmChild.kill('SIGTERM')
+    }
+    console.warn(
+      `US adjusted foundation received ${signal}; deferring exit until child work and the atomic boundary are safe`,
+    )
   }
-  process.once('SIGINT', releaseOnSignal)
-  process.once('SIGTERM', releaseOnSignal)
+  process.on('SIGINT', releaseOnSignal)
+  process.on('SIGTERM', releaseOnSignal)
   const lock = await acquireUsStockboardUpdateLock(
     'us_adjusted_foundation',
     72 * 60 * 60,
@@ -807,7 +1087,6 @@ async function main(): Promise<void> {
     processLock.release()
     throw new Error('US adjusted foundation is already active')
   }
-  updateLockForSignal = lock
   let heartbeat: ReturnType<typeof setInterval> | null = null
   let statusWriteQueue: Promise<void> = Promise.resolve()
   const enqueueStatusWrite = (operation: () => Promise<void>): Promise<void> => {
@@ -844,6 +1123,11 @@ async function main(): Promise<void> {
       stage: FoundationStage,
       details: Record<string, unknown> = {},
     ): Promise<void> => {
+      if (deferredPromotionSignal && stage !== 'failed') {
+        throw new Error(
+          `US adjusted foundation cancelled by ${deferredPromotionSignal} before stage ${stage}`,
+        )
+      }
       currentStage = stage
       await enqueueStatusWrite(
         () => updateFoundationRun(foundationRun.id, stage, details),
@@ -892,12 +1176,124 @@ async function main(): Promise<void> {
           shadowPath: path.basename(adjustedShadowDbPath),
         })
         console.log(`Building isolated US adjusted analytics generation: ${adjustedShadowDbPath}`)
-        await buildAdjustedShadow(setStage)
+        const { analogPromotionRequired, priceDate } = await buildAdjustedShadow(
+          setStage,
+          expectedSourceLineageSha256,
+        )
         await enqueueStatusWrite(() => lock.heartbeat())
-        await setStage('promoting')
-        const backupPath = await promoteAdjustedShadow()
-        console.log(`US adjusted analytics promoted; previous generation retained: ${backupPath}`)
-        await enqueueStatusWrite(() => lock.heartbeat())
+        let promotionLock: UpdateLockHandle | null = null
+        let promotionMlLock: UsMlProcessLock | null = null
+        let promotionAnalyticsProcessLock: PidProcessLock | null = null
+        let promotionAnalogProcessLock: PidProcessLock | null = null
+        let promotionHeartbeat: ReturnType<typeof setInterval> | null = null
+        try {
+          promotionMlLock = acquireUsMlProcessLock('adjusted-foundation-promotion')
+          if (!promotionMlLock) {
+            throw new Error('US adjusted foundation promotion deferred: another US ML writer is active')
+          }
+          promotionLock = await acquireUpdateLock(
+            SOURCE_SNAPSHOT_LOCK_JOB,
+            72 * 60 * 60,
+            SOURCE_SNAPSHOT_CONFLICTS,
+          )
+          if (!promotionLock) {
+            throw new Error('US adjusted foundation promotion deferred: source generation is changing')
+          }
+          promotionAnalyticsProcessLock = acquirePidProcessLock(
+            `${usAnalyticsDbPath}.process.lock`,
+            `US adjusted analytics promotion for ${usAnalyticsDbPath}`,
+          )
+          if (!promotionAnalyticsProcessLock) {
+            throw new Error('US adjusted foundation promotion deferred: the analytics builder is active')
+          }
+          promotionAnalogProcessLock = acquirePidProcessLock(
+            `${usAnalogDbPath}.process.lock`,
+            `US adjusted analog promotion for ${usAnalogDbPath}`,
+          )
+          if (!promotionAnalogProcessLock) {
+            throw new Error('US adjusted foundation promotion deferred: the analog builder is active')
+          }
+          promotionHeartbeat = setInterval(() => {
+            void promotionLock?.heartbeat().catch((error) => {
+              console.warn(
+                `US adjusted foundation promotion heartbeat failed: `
+                + `${error instanceof Error ? error.message : String(error)}`,
+              )
+            })
+          }, 60 * 1_000)
+          if (heavyMlIsActive()) {
+            throw new Error('US adjusted foundation promotion deferred: an uncoordinated ML writer is active')
+          }
+          await assertWeeklyUsLineageUnchanged('promotion')
+          if (deferredPromotionSignal) {
+            throw new Error(
+              `US adjusted foundation promotion cancelled by ${deferredPromotionSignal} before file replacement`,
+            )
+          }
+          await setStage('promoting')
+          let analogPromotion: SqliteGenerationPromotion | null = null
+          try {
+            if (analogPromotionRequired) {
+              analogPromotion = await promoteAdjustedAnalogShadow(() => {
+                if (deferredPromotionSignal) {
+                  throw new Error(`Analog promotion cancelled by ${deferredPromotionSignal}`)
+                }
+              })
+              console.log(
+                `US adjusted analog index promoted; previous generation retained: `
+                + `${analogPromotion.backupPath ?? 'none'}`,
+              )
+              await writeAnalyticsMetadata(
+                adjustedShadowDbPath,
+                'analog_index_price_basis',
+                US_ADJUSTED_PRICE_BASIS,
+              )
+              await writeAnalyticsMetadata(adjustedShadowDbPath, 'analog_index_price_date', priceDate)
+              if (deferredPromotionSignal) {
+                throw new Error(`Analytics promotion cancelled by ${deferredPromotionSignal}`)
+              }
+            }
+            const analyticsPromotion = await promoteAdjustedShadow(() => {
+              if (deferredPromotionSignal) {
+                throw new Error(`Analytics promotion cancelled by ${deferredPromotionSignal}`)
+              }
+            })
+            console.log(
+              `US adjusted analytics promoted; previous generation retained: `
+              + `${analyticsPromotion.backupPath ?? 'none'}`,
+            )
+          } catch (promotionError) {
+            if (analogPromotion) {
+              try {
+                await rollbackSqliteGeneration(analogPromotion, checkpointDb)
+                console.warn(
+                  'US adjusted analog promotion was compensated after analytics promotion failed',
+                )
+              } catch (rollbackError) {
+                throw new Error(
+                  `US adjusted analytics promotion failed (${promotionError instanceof Error ? promotionError.message : String(promotionError)}); `
+                  + `analog compensation failed (${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)})`,
+                )
+              }
+            }
+            throw promotionError
+          }
+          await enqueueStatusWrite(() => lock.heartbeat())
+        } finally {
+          if (promotionHeartbeat) clearInterval(promotionHeartbeat)
+          promotionAnalogProcessLock?.release()
+          promotionAnalyticsProcessLock?.release()
+          await promotionLock?.release().catch(() => undefined)
+          promotionMlLock?.release()
+        }
+        if (deferredPromotionSignal) {
+          const signal = deferredPromotionSignal
+          deferredPromotionSignal = null
+          throw new Error(
+            `US adjusted foundation received ${signal} during promotion; `
+            + 'the atomic boundary completed before shutdown',
+          )
+        }
       }
       await setStage('complete')
       await enqueueStatusWrite(async () => {
@@ -924,7 +1320,6 @@ async function main(): Promise<void> {
     if (heartbeat) clearInterval(heartbeat)
     await statusWriteQueue.catch(() => undefined)
     await lock.release()
-    updateLockForSignal = null
     process.removeListener('SIGINT', releaseOnSignal)
     process.removeListener('SIGTERM', releaseOnSignal)
     processLock.release()

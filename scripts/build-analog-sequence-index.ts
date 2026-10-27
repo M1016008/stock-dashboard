@@ -23,6 +23,7 @@ import {
   type MaSequencePriceRow,
 } from '@/lib/ml/ma-sequence'
 import { encodeAnalogPriceChunk } from '@/lib/ml/analog-price-chunks'
+import { acquirePidProcessLock } from '@/lib/pid-process-lock'
 
 type Market = 'JP' | 'US'
 type Mode = 'full' | 'incremental'
@@ -49,52 +50,6 @@ const INCREMENTAL_LOOKBACK_ROWS = Math.max(
   Number(process.env.ANALOG_INDEX_INCREMENTAL_LOOKBACK_ROWS ?? 3_000),
 )
 const MAX_GAP_DAYS = 60
-let ownedProcessLock: string | null = null
-
-function pidExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function releaseProcessLock(): void {
-  if (!ownedProcessLock) return
-  try {
-    const owner = Number(fs.readFileSync(ownedProcessLock, 'utf8').trim())
-    if (owner === process.pid) fs.unlinkSync(ownedProcessLock)
-  } catch {
-    // Missing or replaced locks no longer belong to this process.
-  }
-  ownedProcessLock = null
-}
-
-function acquireProcessLock(target: string): boolean {
-  const lockPath = `${target}.process.lock`
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = fs.openSync(lockPath, 'wx', 0o600)
-      fs.writeFileSync(handle, `${process.pid}\n`)
-      fs.closeSync(handle)
-      ownedProcessLock = lockPath
-      process.once('exit', releaseProcessLock)
-      return true
-    } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
-      const owner = Number(fs.readFileSync(lockPath, 'utf8').trim())
-      if (pidExists(owner)) {
-        console.log(`Analog index build already running for ${target} (pid=${owner}); skipping duplicate.`)
-        return false
-      }
-      fs.unlinkSync(lockPath)
-    }
-  }
-  return false
-}
-
 function lowerProcessPriority(): void {
   if (process.env.ANALOG_HIGH_PRIORITY?.trim() === '1') {
     console.log('[analog-sequence-index] high-priority mode: standard CPU and I/O priority')
@@ -521,7 +476,17 @@ async function main(): Promise<void> {
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
   assertWritableTargetPath(target, 'analog-sequence-build-target')
   fs.mkdirSync(path.dirname(target), { recursive: true })
-  if (!acquireProcessLock(target)) return
+  const processLock = acquirePidProcessLock(
+    `${target}.process.lock`,
+    `Analog index build for ${target}`,
+  )
+  if (!processLock) {
+    if (process.env.STOCKBOARD_PROCESS_LOCK_REQUIRED === '1') {
+      throw new Error(`Analog index process lock is required: ${target}`)
+    }
+    return
+  }
+  process.once('exit', processLock.release)
 
   const sourceClient = openExistingGuardedClient(source, 'analog-sequence-build-source')
   const targetClient = openGuardedWritableTargetClient(target, 'analog-sequence-build-target')

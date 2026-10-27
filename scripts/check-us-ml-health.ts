@@ -11,7 +11,7 @@ import path from 'path'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
-import { usUniverseActivityCutoff } from '@/lib/us-universe-activity'
+import { resolvePinnedUsUniverseActivityCutoff } from '@/lib/weekly-optimization-run-contract'
 
 const stockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
 const stockboardDbLooksUs = stockboardDbPath != null && /stockboard-us\.db$/i.test(stockboardDbPath)
@@ -25,6 +25,23 @@ const dbPath = path.resolve(
 const WRITE_HEALTH = process.env.US_ML_HEALTH_WRITE === '1'
 const PROFILE_QUERIES = process.env.US_ML_HEALTH_PROFILE === '1'
 const MIN_HISTORY_DAYS = Math.max(1, Number(process.env.US_ML_HEALTH_MIN_HISTORY_DAYS ?? 220))
+
+function healthReferenceDate(): Date {
+  const raw = process.env.US_ML_HEALTH_REFERENCE_AT?.trim()
+  if (!raw) return new Date()
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== raw) {
+    throw new Error(`US_ML_HEALTH_REFERENCE_AT must be a canonical ISO timestamp; actual=${raw}`)
+  }
+  return parsed
+}
+
+function pinnedActivityCutoff(reference: Date): string {
+  return resolvePinnedUsUniverseActivityCutoff(
+    reference.toISOString(),
+    process.env.US_ML_HEALTH_ACTIVITY_CUTOFF?.trim(),
+  )
+}
 
 type Args = readonly InValue[]
 
@@ -147,7 +164,7 @@ async function main() {
   const latestSnapshotDate = await maxDate('daily_snapshots')
   const snapshotLatestCount = await countRows('daily_snapshots', 'date', latestSnapshotDate)
   const checks: HealthRow[] = []
-  const activityCutoff = usUniverseActivityCutoff()
+  const activityCutoff = pinnedActivityCutoff(healthReferenceDate())
   const analyticsUniverseQuality = await get<{
     activeCount: number
     nonInvestableActiveCount: number
