@@ -14,6 +14,19 @@ type DirectStages = {
 }
 
 async function main() {
+  if (process.env.STOCK_PREVIEW_STATIC_ONLY === '1') {
+    const previewSource = fs.readFileSync(
+      path.join(process.cwd(), 'components/stock-preview/StockPreviewTrigger.tsx'),
+      'utf8',
+    )
+    assert.match(
+      previewSource,
+      /market === 'US'[\s\S]*?mode === 'chart' \? '#chart' : ''/,
+      'US chart previews must open the chart tab on the stock detail page',
+    )
+    console.log('stock preview static link contract: PASS')
+    return
+  }
   // A failed local probe must never create or mutate Production's global incident latch.
   const incidentDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'stockboard-stock-preview-incidents-'),
@@ -116,6 +129,11 @@ async function main() {
     previewSource,
     /株価・ステージ・出来高は基準日（米国時間の終値）時点/,
     'US dated preview must explain which values are point-in-time',
+  )
+  assert.match(
+    previewSource,
+    /market === 'US'[\s\S]*?mode === 'chart' \? '#chart' : ''/,
+    'US chart previews must open the chart tab on the stock detail page',
   )
 
   console.log(JSON.stringify({

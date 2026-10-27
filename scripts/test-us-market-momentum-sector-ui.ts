@@ -23,8 +23,11 @@ assert.doesNotMatch(files.momentum, /exec(?:All|Get)|execUsAnalytics/, 'presenta
 
 assert.match(files.sectors, /classificationAvailability !== 'CURRENT'/, 'historical sector analysis must fail closed')
 assert.match(files.sectors, /UsSectorPitUnavailable/, 'historical sector analysis must render an explicit PIT limitation')
-assert.match(files.sectors, /SEC broad sector market map/, 'sector map must be present')
-assert.match(files.sectors, /SIC industry ranking/, 'industry ranking must be present')
+assert.match(files.sectors, /badge=\{data\?\.date \? \(data\.isLatest \? 'SIC区分・最新日のみ' : '過去日は集計外'\)/, 'badge must stay short enough for 390px')
+assert.match(files.sectors, /業種区分（SIC）マップ/, 'sector map must be present')
+assert.match(files.sectors, /title="業種区分（SIC）ランキング"/, 'ranking heading must use StockBoard SIC division terminology')
+assert.doesNotMatch(files.sectors, /title="Sector ranking"/, 'generic "Sector ranking" heading must not return')
+assert.match(files.sectors, /詳細産業（SIC）ランキング/, 'industry ranking must be present')
 assert.match(files.sectors, /INDUSTRY_PAGE_SIZE = 50/, 'industry ranking must keep the initial server response bounded')
 assert.match(files.sectors, /sampleMode === 'small'/, 'small-sample industries must remain available without entering the initial response')
 assert.match(files.sectors, /IndustryPagination/, 'industry ranking must expose deterministic server pagination')
@@ -35,7 +38,7 @@ assert.match(files.sectorTable, /line-clamp-2/, 'long SIC labels must remain rea
 assert.match(files.sectorTable, /min-w-\[704px\]/, 'tablet table width must fit the bounded content area')
 assert.doesNotMatch(files.sectorTable, /min-w-\[720px\]/, 'the previous 768px overflow width must not return')
 
-assert.match(files.parts, /SEC SIC current classification/)
+assert.match(files.parts, /SEC SIC industry \+ StockBoard SIC division/)
 assert.match(files.parts, /GICS ではなく/)
 assert.match(files.parts, /historical PIT/)
 assert.match(files.sectorPit, /集計そのものを行いません/, 'historical taxonomy must never be reused silently')

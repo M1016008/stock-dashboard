@@ -104,7 +104,7 @@ export function displaySicName(name: string): string {
 
 export type UsIndustryParent = { sectorCode: string; sectorLabel: string }
 
-/** SIC industry → SEC broad sector の対応。最新日の行が持つ分類をそのまま引く (集計はしない) */
+/** SEC SIC industry → StockBoard SIC division の対応。最新日の行が持つ分類をそのまま引く (集計はしない) */
 export function buildUsIndustryParents(rows: UsMarketMomentumRow[]): Map<string, UsIndustryParent> {
   const parents = new Map<string, UsIndustryParent>()
   for (const row of rows) {

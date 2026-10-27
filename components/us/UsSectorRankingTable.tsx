@@ -1,6 +1,6 @@
 // components/us/UsSectorRankingTable.tsx
 //
-// SEC broad sector / SIC industry の比較表。列見出しで並び順 (指標) を切り替える。
+// StockBoard SIC division / SEC SIC industry の比較表。列見出しで並び順 (指標) を切り替える。
 // - md 以上: 表 (1W / 1M / PES は xl 以上で列を足す)
 //   table-fixed で数値列の幅を固定し、残りを名称列に回す。名称は最大 2 行で折り返し、全文は title で読む。
 //   min-width は各ブレークポイントの本文幅に収まる値にしてあり、横スクロールは本文がさらに狭いときの保険。

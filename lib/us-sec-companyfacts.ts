@@ -72,6 +72,18 @@ const CONCEPTS: ConceptSpec[] = [
     metric: 'total_assets', valueKind: 'instant', allowedUnits: ['USD'],
   },
   {
+    taxonomy: 'us-gaap', concepts: ['Liabilities'],
+    metric: 'total_liabilities', valueKind: 'instant', allowedUnits: ['USD'],
+  },
+  {
+    taxonomy: 'us-gaap', concepts: ['AssetsCurrent'],
+    metric: 'current_assets', valueKind: 'instant', allowedUnits: ['USD'],
+  },
+  {
+    taxonomy: 'us-gaap', concepts: ['LiabilitiesCurrent'],
+    metric: 'current_liabilities', valueKind: 'instant', allowedUnits: ['USD'],
+  },
+  {
     taxonomy: 'us-gaap',
     concepts: ['StockholdersEquity', 'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest'],
     metric: 'equity_attributable', valueKind: 'instant', allowedUnits: ['USD'],
@@ -296,6 +308,18 @@ export function normalizeSecCompanyFacts(
           // history while preferring the first approved concept for duplicate contexts.
           const observationKey = [entry.accn, rawUnit, entry.start ?? '', entry.end, entry.frame ?? ''].join('|')
           const previous = candidates.get(observationKey)
+          if (
+            previous
+            && selected.priority === previous.priority
+            && previous.fact.factId === fact.factId
+            && (
+              previous.fact.value !== fact.value
+              || previous.fact.publishedAt !== fact.publishedAt
+              || previous.fact.sourceField !== fact.sourceField
+            )
+          ) {
+            throw new Error(`SEC_COMPANYFACTS_DUPLICATE_CONTEXT_CONFLICT:${fact.factId}`)
+          }
           if (!previous || selected.priority < previous.priority) {
             candidates.set(observationKey, { priority: selected.priority, fact })
           }
@@ -306,7 +330,17 @@ export function normalizeSecCompanyFacts(
   }
 
   const uniqueFacts = new Map<string, NormalizedFinancialFact>()
-  for (const fact of facts) uniqueFacts.set(fact.factId, fact)
+  for (const fact of facts) {
+    const previous = uniqueFacts.get(fact.factId)
+    if (previous && (
+      previous.value !== fact.value
+      || previous.publishedAt !== fact.publishedAt
+      || previous.sourceField !== fact.sourceField
+    )) {
+      throw new Error(`SEC_COMPANYFACTS_DUPLICATE_CONTEXT_CONFLICT:${fact.factId}`)
+    }
+    uniqueFacts.set(fact.factId, fact)
+  }
 
   return {
     disclosures: [...disclosures.values()].sort((a, b) => a.publishedAt.localeCompare(b.publishedAt) || a.eventId.localeCompare(b.eventId)),

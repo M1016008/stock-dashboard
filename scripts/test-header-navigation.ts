@@ -59,6 +59,7 @@ for (const area of Object.keys(NAVIGATION_BY_AREA) as HeaderArea[]) {
 
 assert.equal(PAGE_CATALOG.marketMomentum.href, '/market-momentum')
 assert.equal(PAGE_CATALOG.periodExplorer.href, '/period-explorer')
+assert.equal(PAGE_CATALOG.usPeriodExplorer.href, '/us/period-explorer')
 assert.equal(PAGE_CATALOG.sectorStructure.href, '/sectors?view=structure')
 assert.equal(PAGE_CATALOG.historicalPatterns.href, '/ai/ma-lens#historical-pattern-search')
 assert.equal(PAGE_CATALOG.usAiResearch.href, '/ai/research?market=US')
@@ -67,6 +68,12 @@ assert.equal(PAGE_CATALOG.usMarketMomentum.href, '/us/market-momentum')
 assert.equal(PAGE_CATALOG.usSectors.href, '/us/sectors')
 assert.equal(PAGE_CATALOG.mtfCloseCalendar.href, '/mtf-close-calendar')
 assert.equal(PAGE_CATALOG.usMtfCloseCalendar.href, '/us/mtf-close-calendar')
+assert.equal(PAGE_CATALOG.usEarnings.href, '/us/earnings')
+assert.equal(PAGE_CATALOG.dailyClose.href, '/reports/daily-close')
+assert.equal(PAGE_CATALOG.usDailyClose.href, '/us/daily-close')
+assert.equal(PAGE_CATALOG.usSectorEtfs.href, '/us/sector-etfs')
+assert.equal(PAGE_CATALOG.usTradeWorkbench.href, '/us/trade/workbench')
+assert.equal(PAGE_CATALOG.usMa25mMonitor.href, '/us/ma25m-monitor')
 
 assert.ok(navPageIds('jp').includes('sectors'), 'Industry analysis must remain under Market & Industry.')
 assert.ok(navPageIds('jp').includes('periodExplorer'), 'Period Explorer must be available under stock discovery.')
@@ -77,6 +84,7 @@ assert.ok(!navPageIds('jp').includes('historicalPatterns'), 'Historical pattern 
 assert.ok(!navPageIds('jp').includes('sectorStructure'), 'Sector structure must stay a view inside sector analysis.')
 assert.ok(navPageIds('us').includes('usMarketMomentum'), 'US market momentum must be available under Market & Industry.')
 assert.ok(navPageIds('us').includes('usSectors'), 'US sector analysis must be available under Market & Industry.')
+assert.ok(navPageIds('us').includes('usPeriodExplorer'), 'US Period Explorer must be available under stock discovery.')
 
 function menuPageIds(area: HeaderArea, menuId: string): PageId[] {
   const entries: readonly NavigationEntry[] = NAVIGATION_BY_AREA[area]
@@ -86,7 +94,14 @@ function menuPageIds(area: HeaderArea, menuId: string): PageId[] {
 }
 
 assert.ok(menuPageIds('jp', 'market').includes('mtfCloseCalendar'), 'JP MTF Close Calendar must stay under JP Market & Industry.')
+assert.ok(menuPageIds('jp', 'market').includes('dailyClose'), 'JP Daily Close must stay under JP Market & Industry.')
 assert.ok(menuPageIds('us', 'us-market').includes('usMtfCloseCalendar'), 'US MTF Close Calendar must live under US Market & Industry.')
+assert.ok(menuPageIds('us', 'us-market').includes('usEarnings'), 'US earnings must live under US Market & Industry.')
+assert.ok(menuPageIds('us', 'us-market').includes('usDailyClose'), 'US Daily Close must live under US Market & Industry.')
+assert.ok(menuPageIds('us', 'us-market').includes('usSectorEtfs'), 'US sector ETFs must live under US Market & Industry.')
+assert.ok(menuPageIds('us', 'us-analysis').includes('usTradeWorkbench'), 'US trade workbench must live under US Analysis.')
+assert.ok(menuPageIds('us', 'us-monitor').includes('usMa25mMonitor'), 'US monthly MA monitor must live under US Monitor.')
+assert.ok(menuPageIds('us', 'us-monitor').includes('usTriggerDiscovery'), 'US trigger discovery must live under US Monitor.')
 assert.ok(!navPageIds('us').includes('mtfCloseCalendar'), 'US navigation must not link the JP-session calendar.')
 assert.ok(!navPageIds('jp').includes('usMtfCloseCalendar'), 'JP navigation must not link the US-session calendar.')
 
@@ -108,6 +123,7 @@ const areaCases: Array<[string, string | null, HeaderArea]> = [
   ['/custom-charts', null, 'jp'],
   ['/us', null, 'us'],
   ['/us/screener', null, 'us'],
+  ['/us/period-explorer', null, 'us'],
   ['/us/stock/AAPL', null, 'us'],
   ['/commodities', null, 'commodities'],
   ['/commodities/us/GLD', null, 'commodities'],
@@ -170,6 +186,8 @@ const expectedCounterparts: Array<[string, string | null, Record<HeaderArea, str
   ['/us/sectors', null, { jp: '/sectors', us: '/us', commodities: '/commodities' }],
   ['/mtf-close-calendar', null, { jp: '/', us: '/us/mtf-close-calendar', commodities: '/commodities' }],
   ['/us/mtf-close-calendar', null, { jp: '/mtf-close-calendar', us: '/us', commodities: '/commodities' }],
+  ['/reports/daily-close', null, { jp: '/', us: '/us/daily-close', commodities: '/commodities' }],
+  ['/us/daily-close', null, { jp: '/reports/daily-close', us: '/us', commodities: '/commodities' }],
   ['/screener', null, { jp: '/', us: '/us/screener', commodities: '/commodities/screener' }],
   ['/us/screener', null, { jp: '/screener', us: '/us', commodities: '/commodities/screener' }],
   ['/commodities/screener', null, { jp: '/screener', us: '/us/screener', commodities: '/commodities' }],
@@ -191,9 +209,10 @@ const expectedCounterparts: Array<[string, string | null, Record<HeaderArea, str
   ['/chart-drill', 'us', { jp: '/chart-drill', us: '/us', commodities: '/commodities' }],
   // No commodity research page in navigation: go home rather than guess.
   ['/ai/research', 'COMMODITY', { jp: '/', us: '/us', commodities: '/commodities' }],
-  // Market-specific pages have no counterpart.
+  // Period Explorer keeps the analytical task while dropping JP-only filters.
   ['/hex-stage', null, { jp: '/', us: '/us', commodities: '/commodities' }],
-  ['/period-explorer', 'プライム', { jp: '/', us: '/us', commodities: '/commodities' }],
+  ['/period-explorer', 'プライム', { jp: '/', us: '/us/period-explorer', commodities: '/commodities' }],
+  ['/us/period-explorer', null, { jp: '/period-explorer', us: '/us', commodities: '/commodities' }],
   ['/themes', null, { jp: '/', us: '/us', commodities: '/commodities' }],
   ['/themes/ai', null, { jp: '/', us: '/us', commodities: '/commodities' }],
   ['/sector-etfs/1615', null, { jp: '/', us: '/us', commodities: '/commodities' }],

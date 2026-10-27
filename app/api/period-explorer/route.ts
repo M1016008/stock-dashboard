@@ -59,6 +59,7 @@ export async function GET(request: NextRequest) {
   const startedAt = Date.now()
   try {
     const params = new URL(request.url).searchParams
+    const market = params.get('marketCode') === 'US' ? 'US' : 'JP'
     const rankingValue = params.get('ranking')
     if (rankingValue && !isPeriodExplorerRankingKey(rankingValue)) {
       return NextResponse.json({ error: 'invalid_ranking' }, { status: 400 })
@@ -66,7 +67,7 @@ export async function GET(request: NextRequest) {
     const filters: PeriodExplorerFilters = {
       markets: csv(params, 'market'),
       sectors: csv(params, 'sector'),
-      marginTypes: csv(params, 'margin'),
+      marginTypes: market === 'JP' ? csv(params, 'margin') : undefined,
       marketCapMin: numberParam(params, 'marketCapMin'),
       marketCapMax: numberParam(params, 'marketCapMax'),
       avgVolumeMin: numberParam(params, 'avgVolumeMin'),
@@ -79,10 +80,11 @@ export async function GET(request: NextRequest) {
       low52WithinPct: numberParam(params, 'low52WithinPct'),
       ma25Position: params.get('ma25') === 'above' || params.get('ma25') === 'below' ? params.get('ma25') as 'above' | 'below' : null,
       ma75Position: params.get('ma75') === 'above' || params.get('ma75') === 'below' ? params.get('ma75') as 'above' | 'below' : null,
-      universe: params.get('universe') === 'nikkei225' ? 'nikkei225' : null,
+      universe: market === 'JP' && params.get('universe') === 'nikkei225' ? 'nikkei225' : null,
       stages: stageFilters(params),
     }
     const result = await queryPeriodExplorer({
+      market,
       from: params.get('from'),
       to: params.get('to'),
       ranking: rankingValue && isPeriodExplorerRankingKey(rankingValue) ? rankingValue : null,

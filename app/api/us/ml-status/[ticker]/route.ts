@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET, ML_PHYSICS_MODEL_TYPE } from '@/lib/backtest/ml-physics'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { isIsoDate } from '@/lib/mtf-close-calendar'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -95,8 +96,18 @@ async function safeAll<T = Record<string, unknown>>(sql: string, args: readonly 
 export async function GET(request: NextRequest, context: RouteContext) {
   const { ticker: rawTicker } = await context.params
   const ticker = normalizeTicker(rawTicker)
-  const requestedDate = request.nextUrl.searchParams.get('date')?.trim()
-  const asOfDate = requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : null
+  if (!/^[A-Z0-9.^=-]{1,24}$/.test(ticker)) {
+    return NextResponse.json({ error: 'invalid_ticker' }, { status: 400 })
+  }
+  const requestedDates = request.nextUrl.searchParams.getAll('date')
+  if (requestedDates.length > 1) {
+    return NextResponse.json({ error: 'duplicate_date' }, { status: 400 })
+  }
+  const requestedDate = requestedDates[0]?.trim() ?? ''
+  if (requestedDate && !isIsoDate(requestedDate)) {
+    return NextResponse.json({ error: 'invalid_date' }, { status: 400 })
+  }
+  const asOfDate = requestedDate || null
 
   if (!hasUsAnalyticsDb()) {
     return NextResponse.json({

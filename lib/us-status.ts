@@ -1,4 +1,6 @@
 import { execGet } from '@/lib/db/client'
+import { isPlaceholderOpenAIKey } from '@/lib/assistant/config'
+import { hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { loadUsDailyCoverageSla } from '@/lib/server/us-source-availability-store'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { summarizeUsDailyCoverageSla, type UsDailyCoverageSla } from '@/lib/us-source-availability'
@@ -98,7 +100,50 @@ export type UsStatusSummary = {
       companyForecastsAvailable: false
     }
   }
+  capabilities: UsRuntimeCapabilities
   latestRun: UsLatestRun | null
+}
+
+export type UsRuntimeCapabilities = {
+  analytics: { configured: boolean; available: boolean }
+  historicalAnalog: { mode: 'PROXY' | 'LOCAL' | 'UNAVAILABLE' }
+  earningsCalendar: { source: 'FINNHUB'; configured: boolean }
+  scenarioNarratives: { enabled: boolean; configured: boolean }
+  dailyMl: { enabled: boolean }
+  publicationOverrides: { allowStale: boolean; allowPartial: boolean }
+}
+
+export function summarizeUsRuntimeCapabilities(
+  environment: NodeJS.ProcessEnv,
+  analyticsAvailable: boolean,
+): UsRuntimeCapabilities {
+  const openAiKey = environment.OPENAI_API_KEY?.trim() ?? ''
+  const scenarioEnabled = environment.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
+    && environment.OPENAI_ASSISTANT_ENABLED !== '0'
+  const proxyConfigured = Boolean(environment.ANALOG_SEARCH_PROXY_URL?.trim())
+  const localWorker = environment.ANALOG_SEARCH_WORKER === '1'
+  return {
+    analytics: {
+      configured: Boolean(environment.US_ANALYTICS_DB_PATH?.trim()),
+      available: analyticsAvailable,
+    },
+    historicalAnalog: {
+      mode: proxyConfigured ? 'PROXY' : localWorker || analyticsAvailable ? 'LOCAL' : 'UNAVAILABLE',
+    },
+    earningsCalendar: {
+      source: 'FINNHUB',
+      configured: Boolean(environment.FINNHUB_API_KEY?.trim()),
+    },
+    scenarioNarratives: {
+      enabled: scenarioEnabled,
+      configured: scenarioEnabled && Boolean(openAiKey) && !isPlaceholderOpenAIKey(openAiKey),
+    },
+    dailyMl: { enabled: environment.US_SKIP_DAILY_ML !== '1' },
+    publicationOverrides: {
+      allowStale: environment.US_ALLOW_STALE_DAILY_UPDATE === '1',
+      allowPartial: environment.US_ALLOW_PARTIAL_DAILY_PUBLICATION === '1',
+    },
+  }
 }
 
 export function summarizeUsCoverage(
@@ -261,6 +306,7 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
         companyForecastsAvailable: false,
       },
     },
+    capabilities: summarizeUsRuntimeCapabilities(process.env, hasUsAnalyticsDb()),
     latestRun: latestRun ?? null,
   }
 }

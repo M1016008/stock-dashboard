@@ -14,7 +14,12 @@ import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
-import { decodeUsHexColumnar, US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST } from '@/lib/us-hex-wire'
+import {
+  decodeUsHexColumnar,
+  US_HEX_WIRE_PARAM,
+  US_HEX_WIRE_REQUEST,
+  type UsHexAttributeBasis,
+} from '@/lib/us-hex-wire'
 
 interface Stock {
   code: string
@@ -25,7 +30,7 @@ interface Stock {
   sector33_name?: string | null
   market_segment?: string | null
   margin_type?: string | null
-  market_cap: number
+  market_cap: number | null
   price: number | null
   daily_change?: number | null
   weekly_change?: number | null
@@ -98,6 +103,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
   const [date, setDate] = useState<string | null>(null)
   const [usUniverse, setUsUniverse] = useState<UsUniverseScope | null>(null)
   const [usCoverage, setUsCoverage] = useState<UsCoverage | null>(null)
+  const [usAttributeBasis, setUsAttributeBasis] = useState<UsHexAttributeBasis | null>(null)
   // 再試行ボタン 1 回につき同じ条件の取得を 1 回だけやり直す
   const [retryVersion, setRetryVersion] = useState(0)
 
@@ -158,12 +164,14 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           setDate(decoded.date)
           setUsUniverse(decoded.universe)
           setUsCoverage(decoded.coverage)
+          setUsAttributeBasis(decoded.attributeBasis)
           return
         }
         setData(json.data ?? [])
         setDate(json.date ?? null)
         setUsUniverse(null)
         setUsCoverage(null)
+        setUsAttributeBasis(null)
       })
       .catch((e) => {
         if (cancelled) return
@@ -174,11 +182,21 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           setDate(null)
           setUsUniverse(null)
           setUsCoverage(null)
+          setUsAttributeBasis(null)
         }
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [timeframe, selectedDate, activeUniverse, isUs, retryVersion])
+
+  const historicalAttributesUnavailable = isUs && usAttributeBasis?.membership === 'SNAPSHOT_DATE'
+
+  useEffect(() => {
+    if (!historicalAttributesUnavailable) return
+    setSelectedAssetType('')
+    setSelectedCategory('')
+    setSelectedSubCategory('')
+  }, [historicalAttributesUnavailable])
 
   const categoryStats = useMemo(() => {
     const large: Record<string, number> = {}
@@ -219,7 +237,8 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
   const assetTypeStats = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const row of data) {
-      const assetType = row.margin_type || 'Stock'
+      const assetType = row.margin_type
+      if (!assetType) continue
       counts[assetType] = (counts[assetType] ?? 0) + 1
     }
     return counts
@@ -252,6 +271,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
   // 読み込み中・失敗中は件数が未確定。0 や前回の値を実数のように見せず「—」で置く
   const countsReady = !loading && !error
   const countText = (n: number) => (countsReady ? n.toLocaleString() : '—')
+  const errorMessage = error === 'us_hex_generation_changed'
+    ? 'データ更新中に元データの世代が切り替わりました。更新完了後に再読み込みしてください。'
+    : 'トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。'
 
   return (
     <div className="flex flex-col gap-3">
@@ -267,7 +289,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
       {/* error の中身 (API 文言・例外文) は内部情報を含みうるため表示せず、失敗したことだけを固定文言で伝える */}
       {error && !loading && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border-l-2 border-[var(--color-price-down)] bg-[var(--color-surface-subtle)] p-3">
-          <p role="alert" className="min-w-0 text-[12px] text-[var(--color-price-down)]">トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。</p>
+          <p role="alert" className="min-w-0 text-[12px] text-[var(--color-price-down)]">{errorMessage}</p>
           <button type="button" onClick={() => setRetryVersion((value) => value + 1)} className="btn" data-size="sm">
             再試行
           </button>
@@ -295,7 +317,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
             </div>
           </div>
         ))}
-        {isUs && (
+        {isUs && !historicalAttributesUnavailable && (
           <div
             className="border-b border-r border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 xl:border-b-0"
             title="選択中の日足Stageをまだ算出できない投資対象"
@@ -340,7 +362,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           </FilterField>
         )}
 
-        <FilterField label={isUs ? 'セクター' : '17業種'}>
+        {!historicalAttributesUnavailable && <FilterField label={isUs ? 'セクター' : '17業種'}>
           <select
             value={selectedCategory}
             onChange={(e) => {
@@ -354,9 +376,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
               <option key={cat} value={cat}>{cat}（{countText(n)}）</option>
             ))}
           </select>
-        </FilterField>
+        </FilterField>}
 
-        <FilterField label={isUs ? '産業' : '33業種'}>
+        {!historicalAttributesUnavailable && <FilterField label={isUs ? '産業' : '33業種'}>
           <select
             value={selectedSubCategory}
             onChange={(e) => setSelectedSubCategory(e.target.value)}
@@ -368,7 +390,13 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
               <option key={cat} value={cat}>{cat}（{countText(n)}）</option>
             ))}
           </select>
-        </FilterField>
+        </FilterField>}
+
+        {historicalAttributesUnavailable && (
+          <span className="text-[11px] text-[var(--color-text-tertiary)]">
+            過去日は当日Stage母集団を使用。PIT分類・発行株式数は未収録です。
+          </span>
+        )}
 
         {hasFilter && (
           <button
@@ -390,7 +418,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           {usUniverse && countsReady
             ? `稼働全資産 ${usUniverse.activeAll.toLocaleString()}件（運用対象 ${usUniverse.productionActive.toLocaleString()}件: Stock ${usUniverse.stocks.toLocaleString()} / ETF ${usUniverse.etfs.toLocaleString()} / 投信 ${usUniverse.mutualFunds.toLocaleString()}、テスト ${usUniverse.testSymbols.toLocaleString()}件・非銘柄データ ${usUniverse.excludedArtifacts.toLocaleString()}件を除外）。`
             : ''}
-          全運用対象を一覧に含め、当日価格や必要な履歴がない銘柄も除外せず「未算出」として表示します。
+          {historicalAttributesUnavailable
+            ? ' 過去日は選択日のStage snapshotを母集団とし、当時の分類・発行株式数が保存されていないため分類・時価総額を補完しません。銘柄名のみ現在の参照名です。'
+            : ' 全運用対象を一覧に含め、当日価格や必要な履歴がない銘柄も除外せず「未算出」として表示します。'}
           {usCoverage && countsReady
             ? ` 価格 ${usCoverage.prices.toLocaleString()} / スナップショット ${usCoverage.snapshots.toLocaleString()} / A×B行列 日 ${usCoverage.dailyStage.toLocaleString()}・週 ${usCoverage.weeklyStage.toLocaleString()}・月 ${usCoverage.monthlyStage.toLocaleString()}。`
             : ''}

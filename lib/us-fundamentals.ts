@@ -29,6 +29,13 @@ export type UsDividendYear = {
   payments: number
 }
 
+export type UsFundamentalSectionCoverage = {
+  status: 'READY' | 'PARTIAL' | 'UNAVAILABLE'
+  available: number
+  expected: number
+  missingMetrics: string[]
+}
+
 export type UsFundamentalsModel = {
   contractVersion: 'us-fundamentals-v1'
   ticker: string
@@ -42,6 +49,13 @@ export type UsFundamentalsModel = {
     status: 'READY' | 'PARTIAL' | 'UNAVAILABLE'
     sourceFacts: number
     latestPublishedAt: string | null
+    sections: {
+      performance: UsFundamentalSectionCoverage
+      financialPosition: UsFundamentalSectionCoverage
+      cashFlow: UsFundamentalSectionCoverage
+      capital: UsFundamentalSectionCoverage
+      shareholderReturn: UsFundamentalSectionCoverage
+    }
     forecasts: 'UNAVAILABLE'
     forecastReason: string
   }
@@ -56,10 +70,24 @@ export type UsFundamentalsModel = {
   performance: { periods: UsPerformancePeriod[] }
   financials: {
     totalAssets: UsFundamentalValue
+    totalLiabilities: UsFundamentalValue
     equity: UsFundamentalValue
     cash: UsFundamentalValue
+    currentAssets: UsFundamentalValue
+    currentLiabilities: UsFundamentalValue
+    totalDebt: UsFundamentalValue
+    currentRatio: UsFundamentalValue
+    debtToEquity: UsFundamentalValue
     operatingCashFlow: UsFundamentalValue
+    investingCashFlow: UsFundamentalValue
+    financingCashFlow: UsFundamentalValue
+    capitalExpenditure: UsFundamentalValue
     freeCashFlow: UsFundamentalValue
+  }
+  capital: {
+    sharesOutstanding: UsFundamentalValue
+    weightedAverageShares: UsFundamentalValue
+    dilutedEps: UsFundamentalValue
   }
   valuation: {
     trailingPer: UsFundamentalValue
@@ -255,6 +283,28 @@ function marketCap(
   return available(price.close * shares.value, 'USD', [shares], price.date)
 }
 
+function sectionCoverage(
+  entries: Array<[string, NormalizedFinancialFact | null]>,
+): UsFundamentalSectionCoverage {
+  const missingMetrics = entries.filter(([, fact]) => fact == null).map(([metric]) => metric)
+  const available = entries.length - missingMetrics.length
+  return {
+    status: available === 0 ? 'UNAVAILABLE' : missingMetrics.length === 0 ? 'READY' : 'PARTIAL',
+    available,
+    expected: entries.length,
+    missingMetrics,
+  }
+}
+
+function sumFacts(
+  left: NormalizedFinancialFact | null,
+  right: NormalizedFinancialFact | null,
+  reason: string,
+): UsFundamentalValue {
+  if (!left || !right || left.periodEnd !== right.periodEnd) return missing('USD', reason)
+  return available(left.value + right.value, 'USD', [left, right], left.periodEnd)
+}
+
 export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel {
   const facts = eligibleFacts(input.facts, input.asOf)
   const periods = fiscalPeriods(facts)
@@ -272,12 +322,23 @@ export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel
     ? [ltmEpsReported]
     : ltmNet && weightedShares && weightedShares.value > 0 ? [ltmNet, weightedShares] : []
   const assets = latest(facts, 'total_assets')
-  const equity = latest(facts, 'equity_attributable')
-  const equityAtAssetsDate = assets ? samePeriodFact(facts, 'equity_attributable', assets, 'INSTANT') : null
-  const cash = latest(facts, 'cash_and_equivalents')
+  const balanceFact = (metric: string) => assets
+    ? samePeriodFact(facts, metric, assets, 'INSTANT')
+    : latest(facts, metric)
+  const liabilities = balanceFact('total_liabilities')
+  const currentAssets = balanceFact('current_assets')
+  const currentLiabilities = balanceFact('current_liabilities')
+  const equity = balanceFact('equity_attributable')
+  const equityAtAssetsDate = assets ? equity : null
+  const cash = balanceFact('cash_and_equivalents')
   const cfo = latest(facts, 'operating_cash_flow', 'LTM') ?? latest(facts, 'operating_cash_flow', 'FY')
+  const investingCashFlow = latest(facts, 'investing_cash_flow', 'LTM') ?? latest(facts, 'investing_cash_flow', 'FY')
+  const financingCashFlow = latest(facts, 'financing_cash_flow', 'LTM') ?? latest(facts, 'financing_cash_flow', 'FY')
   const capex = cfo ? samePeriodFact(facts, 'capex', cfo, cfo.accumulationKind) : null
+  const currentDebt = balanceFact('interest_bearing_debt_current')
+  const noncurrentDebt = balanceFact('interest_bearing_debt_noncurrent')
   const shares = latest(facts, 'shares_outstanding')
+  const dilutedEps = latest(facts, 'eps_diluted', 'LTM') ?? latest(facts, 'eps_diluted', 'FY')
   const marketCapitalization = marketCap(input.price, shares)
   const dividends = annualDividends(input.dividends, input.asOf)
   const trailingDividend = trailingDividends(input.dividends, input.asOf, input.dividendCoverageStart)
@@ -321,6 +382,17 @@ export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel
   const freeCashFlow = cfo && capex
     ? available(cfo.value + capex.value, 'USD', [cfo, capex])
     : missing('USD', '営業CFまたは設備投資額がありません。')
+  const totalDebt = sumFacts(currentDebt, noncurrentDebt, '同一時点の短期・長期有利子負債が揃っていません。')
+  const currentRatio = currentAssets && currentLiabilities
+    ? currentLiabilities.value > 0
+      ? available((currentAssets.value / currentLiabilities.value) * 100, 'PERCENT', [currentAssets, currentLiabilities])
+      : notMeaningful('PERCENT', '流動負債が0以下のため流動比率はN/Mです。', [currentAssets, currentLiabilities])
+    : missing('PERCENT', '同一時点の流動資産・流動負債が揃っていません。')
+  const debtToEquity = totalDebt.value != null && equity
+    ? equity.value > 0
+      ? available((totalDebt.value / equity.value) * 100, 'PERCENT', [currentDebt!, noncurrentDebt!, equity])
+      : notMeaningful('PERCENT', '純資産が0以下のため有利子負債比率はN/Mです。', [equity])
+    : missing('PERCENT', '有利子負債または純資産が揃っていません。')
   const payoutRatio = cashDividends && ltmNet
     ? ltmNet.value > 0
       ? available((cashDividends.value / ltmNet.value) * 100, 'PERCENT', [cashDividends, ltmNet])
@@ -330,7 +402,29 @@ export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel
     ? available((repurchases.value / marketCapitalization.value) * 100, 'PERCENT', [repurchases, ...(shares ? [shares] : [])], input.price?.date ?? null)
     : missing('PERCENT', '自社株買い額または時価総額がありません。')
   const latestPublishedAt = facts.map((fact) => fact.publishedAt).sort().at(-1) ?? null
-  const status = facts.length === 0 ? 'UNAVAILABLE' : [ltmRevenue, assets, shares].every(Boolean) ? 'READY' : 'PARTIAL'
+  const sections = {
+    performance: sectionCoverage([
+      ['revenue', ltmRevenue], ['operating_profit', ltmOperating], ['net_income', ltmNet], ['eps', ltmEpsReported],
+    ]),
+    financialPosition: sectionCoverage([
+      ['assets', assets], ['liabilities', liabilities], ['equity', equity], ['cash', cash],
+      ['current_assets', currentAssets], ['current_liabilities', currentLiabilities],
+      ['current_debt', currentDebt], ['noncurrent_debt', noncurrentDebt],
+    ]),
+    cashFlow: sectionCoverage([
+      ['operating_cash_flow', cfo], ['investing_cash_flow', investingCashFlow],
+      ['financing_cash_flow', financingCashFlow], ['capital_expenditure', capex],
+    ]),
+    capital: sectionCoverage([
+      ['shares_outstanding', shares], ['weighted_average_shares', weightedShares], ['diluted_eps', dilutedEps],
+    ]),
+    shareholderReturn: sectionCoverage([
+      ['cash_dividends_paid', cashDividends], ['share_repurchases', repurchases],
+    ]),
+  }
+  const status = facts.length === 0
+    ? 'UNAVAILABLE'
+    : Object.values(sections).every((section) => section.status === 'READY') ? 'READY' : 'PARTIAL'
 
   return {
     contractVersion: 'us-fundamentals-v1',
@@ -345,6 +439,7 @@ export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel
       status,
       sourceFacts: facts.filter((fact) => !fact.isDerived).length,
       latestPublishedAt,
+      sections,
       forecasts: 'UNAVAILABLE',
       forecastReason: '承認済みの米国企業予想ソースがないため、会社予想値は表示しません。',
     },
@@ -352,10 +447,24 @@ export function buildUsFundamentalsModel(input: BuildInput): UsFundamentalsModel
     performance: { periods },
     financials: {
       totalAssets: valueFromFact(assets, 'USD', '総資産factがありません。'),
+      totalLiabilities: valueFromFact(liabilities, 'USD', '負債合計factがありません。'),
       equity: valueFromFact(equity, 'USD', '純資産factがありません。'),
       cash: valueFromFact(cash, 'USD', '現金同等物factがありません。'),
+      currentAssets: valueFromFact(currentAssets, 'USD', '流動資産factがありません。'),
+      currentLiabilities: valueFromFact(currentLiabilities, 'USD', '流動負債factがありません。'),
+      totalDebt,
+      currentRatio,
+      debtToEquity,
       operatingCashFlow: valueFromFact(cfo, 'USD', '営業CF factがありません。'),
+      investingCashFlow: valueFromFact(investingCashFlow, 'USD', '投資CF factがありません。'),
+      financingCashFlow: valueFromFact(financingCashFlow, 'USD', '財務CF factがありません。'),
+      capitalExpenditure: valueFromFact(capex, 'USD', '設備投資factがありません。'),
       freeCashFlow,
+    },
+    capital: {
+      sharesOutstanding: valueFromFact(shares, 'SHARES', '発行済株式数factがありません。'),
+      weightedAverageShares: valueFromFact(weightedShares, 'SHARES', '加重平均株式数factがありません。'),
+      dilutedEps: valueFromFact(dilutedEps, 'USD_PER_SHARE', '希薄化EPS factがありません。'),
     },
     valuation: {
       trailingPer,

@@ -35,7 +35,8 @@ export function formatPrice(price: number | null, isUs: boolean) {
   return isUs ? `$${price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : price.toLocaleString()
 }
 
-export function formatMarketCap(cap: number, isUs: boolean) {
+export function formatMarketCap(cap: number | null, isUs: boolean) {
+  if (cap == null || !Number.isFinite(cap) || cap <= 0) return '—'
   if (isUs) {
     if (!(cap > 0)) return '-'
     if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}T`

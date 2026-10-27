@@ -48,11 +48,20 @@ const facts = [
   fact('net_income_attributable', 120, '2025-12-31', 'LTM'),
   fact('eps_basic', 6, '2025-12-31', 'LTM', { unit: 'USD_PER_SHARE' }),
   fact('total_assets', 2000, '2025-12-31', 'INSTANT'),
+  fact('total_liabilities', 1200, '2025-12-31', 'INSTANT'),
   fact('equity_attributable', 700, '2024-12-31', 'INSTANT'),
   fact('equity_attributable', 800, '2025-12-31', 'INSTANT'),
   fact('cash_and_equivalents', 300, '2025-12-31', 'INSTANT'),
+  fact('current_assets', 600, '2025-12-31', 'INSTANT'),
+  fact('current_liabilities', 300, '2025-12-31', 'INSTANT'),
+  fact('interest_bearing_debt_current', 50, '2025-12-31', 'INSTANT'),
+  fact('interest_bearing_debt_noncurrent', 350, '2025-12-31', 'INSTANT'),
   fact('shares_outstanding', 100, '2025-12-31', 'INSTANT', { unit: 'SHARES', currency: null }),
+  fact('weighted_average_shares', 95, '2025-12-31', 'LTM', { unit: 'SHARES', currency: null }),
+  fact('eps_diluted', 5.5, '2025-12-31', 'LTM', { unit: 'USD_PER_SHARE' }),
   fact('operating_cash_flow', 220, '2025-12-31', 'LTM'),
+  fact('investing_cash_flow', -100, '2025-12-31', 'LTM'),
+  fact('financing_cash_flow', -50, '2025-12-31', 'LTM'),
   fact('capex', -70, '2025-12-31', 'LTM'),
   fact('cash_dividends_paid', 40, '2025-12-31', 'LTM'),
   fact('share_repurchases', 60, '2025-12-31', 'LTM'),
@@ -88,6 +97,10 @@ assert.equal(model.valuation.marketCap.value, 12_000)
 assert.equal(model.valuation.pbr.value, 15)
 assert.equal(model.valuation.psr.value, 12)
 assert.equal(model.financials.freeCashFlow.value, 150)
+assert.equal(model.financials.currentRatio.value, 200)
+assert.equal(model.financials.debtToEquity.value, 50)
+assert.equal(model.capital.weightedAverageShares.value, 95)
+assert.equal(model.capital.dilutedEps.value, 5.5)
 assert.equal(model.shareholderReturn.trailingDividendPerShare.value, 1.5)
 assert.equal(model.shareholderReturn.trailingDividendYield.value, 1.25)
 assert.equal(model.shareholderReturn.payoutRatio.value?.toFixed(2), '33.33')
@@ -127,6 +140,27 @@ const mismatchedPayoutModel = buildUsFundamentalsModel({
 })
 assert.equal(mismatchedPayoutModel.shareholderReturn.payoutRatio.availability, 'missing')
 assert.equal(mismatchedPayoutModel.shareholderReturn.payoutRatio.value, null, 'FY dividends must not be mixed with LTM net income')
+
+const mismatchedBalanceModel = buildUsFundamentalsModel({
+  ticker: 'BALANCE-MISMATCH',
+  name: null,
+  asOf: '2026-03-31',
+  price: { date: '2026-03-31', close: 10 },
+  facts: [
+    fact('total_assets', 1_000, '2025-12-31', 'INSTANT'),
+    fact('equity_attributable', 400, '2025-12-31', 'INSTANT'),
+    fact('current_assets', 500, '2025-12-31', 'INSTANT'),
+    fact('current_liabilities', 200, '2025-09-30', 'INSTANT'),
+    fact('interest_bearing_debt_current', 100, '2025-12-31', 'INSTANT'),
+    fact('interest_bearing_debt_noncurrent', 300, '2025-09-30', 'INSTANT'),
+  ],
+  dividends: [],
+  dividendCoverageStart: '2020-01-02',
+})
+assert.equal(mismatchedBalanceModel.financials.currentRatio.availability, 'missing')
+assert.equal(mismatchedBalanceModel.financials.currentRatio.value, null, 'balance-sheet periods must not be mixed in current ratio')
+assert.equal(mismatchedBalanceModel.financials.debtToEquity.availability, 'missing')
+assert.equal(mismatchedBalanceModel.financials.debtToEquity.value, null, 'balance-sheet periods must not be mixed in debt/equity')
 
 const uncoveredDividendModel = buildUsFundamentalsModel({
   ticker: 'NEW',

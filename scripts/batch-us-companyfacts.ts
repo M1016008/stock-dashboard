@@ -5,21 +5,14 @@ import {
   secCompanyfactsConceptCoverage,
   type SecCompanyFacts,
 } from '@/lib/us-sec-companyfacts'
+import { requiredSecUserAgent, secRequestIntervalMs } from '@/lib/sec-edgar'
 
 const SEC_COMPANYFACTS_BASE = 'https://data.sec.gov/api/xbrl/companyfacts/'
-const RATE_LIMIT_MS = Math.max(100, Number(process.env.SEC_RATE_LIMIT_MS ?? 150))
+const RATE_LIMIT_MS = secRequestIntervalMs()
 const LIMIT = Math.max(0, Number(process.env.US_COMPANYFACTS_LIMIT ?? 0))
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean) ?? []
 
 type Target = { ticker: string; cik: string }
-
-function requiredUserAgent(): string {
-  const userAgent = process.env.SEC_USER_AGENT?.trim()
-  if (!userAgent || !userAgent.includes('@')) {
-    throw new Error('SEC_USER_AGENT with an operator contact email is required in machine-local environment')
-  }
-  return userAgent
-}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -55,7 +48,7 @@ async function targets(): Promise<Target[]> {
 }
 
 async function main() {
-  const userAgent = requiredUserAgent()
+  const userAgent = requiredSecUserAgent()
   await ensureReady()
   const queue = await targets()
   let succeeded = 0

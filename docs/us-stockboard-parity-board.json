@@ -1,58 +1,1831 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-15",
+  "updatedAt": "2026-10-27",
   "benchmark": "JP StockBoard",
   "target": "US StockBoard",
+  "evidenceRevision": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+  "productionState": "NOT_DEPLOYED_THIS_BRANCH",
+  "inventorySnapshot": {
+    "pages": 58,
+    "apiRoutes": 168,
+    "components": 141,
+    "calculations": 108,
+    "jobs": 221,
+    "controlUnits": 1005
+  },
   "statusDefinitions": {
-    "IMPLEMENTED": "JPの分析意図をUSデータで満たし、QA済み",
-    "PARTIAL": "利用可能だが、機能・データ・履歴・UXのいずれかに残差あり",
-    "MISSING": "US側に未実装",
-    "NOT_APPLICABLE": "US制度に同一機能がなく、分析意図上も移植不要",
-    "BLOCKED": "外部データ、契約、重大な移行判断が必要",
-    "UNVERIFIED": "実装はあるが受入検証が未完了"
+    "IMPLEMENTED": "分析意図を満たす実装と対象回帰証拠がある",
+    "PARTIAL": "利用可能だが機能・データ・履歴・UX・検証の残差がある",
+    "MISSING": "実装がなく、外部Blockerにも分類できない",
+    "NOT_APPLICABLE": "市場制度または製品意図上、移植しない合理的差異",
+    "BLOCKED": "承認済みデータ、契約、Production権限または製品判断が必要",
+    "UNVERIFIED": "実装証拠はあるが今回の受入検証を完了していない"
   },
   "features": [
-    { "wave": "W1", "feature": "Global navigation and US market switching", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current market-switching contract" },
-    { "wave": "W2", "feature": "Market dashboard", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Earnings/event panels remain data-blocked until approved Finnhub coverage is configured; current market, movers, candidates and physical-ML views are complete" },
-    { "wave": "W2", "feature": "Dashboard trade candidates", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current deterministic candidate contract" },
-    { "wave": "W2", "feature": "Stock preview from discovery surfaces", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Some US symbols lack registered display names; preview semantics and date propagation are complete" },
-    { "wave": "W1", "feature": "Stock detail overview", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W4", "feature": "Stock fundamentals summary", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "BLOCKED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "PIT contract and UI are complete; configure a machine-local SEC operator contact and validate live Companyfacts coverage before Production activation" },
-    { "wave": "W4", "feature": "Performance fundamentals", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "BLOCKED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "Actual revenue, profit, margin and EPS normalization is complete; live SEC ingestion awaits operator contact and forecasts require a separately approved source" },
-    { "wave": "W4", "feature": "Financial position and cash flow", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "BLOCKED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "Balance-sheet, cash-flow and matching-period FCF contracts are complete; live SEC coverage remains to be ingested and audited" },
-    { "wave": "W4", "feature": "Valuation", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "BLOCKED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "PIT PER/PBR/PSR/market-cap serving is complete; peer distributions and historical valuation ranges remain unavailable until live SEC coverage is sufficient" },
-    { "wave": "W4", "feature": "Shareholder return", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "Tiingo dividend and SEC repurchase contracts are complete; live trailing coverage and Companyfacts rows must be validated before Production activation" },
-    { "wave": "W1", "feature": "Candlestick chart workspace", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W1", "feature": "Current 6 Stage structure", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W1", "feature": "Stage history timeline and classic", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W1", "feature": "Physical Momentum and MA slope", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W1", "feature": "Trade scenario", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W1", "feature": "Similar historical comparison", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Authenticated friend-access stock-detail verification remains in the global access matrix" },
-    { "wave": "W3", "feature": "ML insight and future scenario", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "PIT prediction history and deterministic read-only outcomes are live under the W3J analytical policy, but source coverage is limited to one 40-session horizon and ranked candidates" },
-    { "wave": "W2", "feature": "Integrated screener", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Fundamentals filters remain blocked by SEC point-in-time ingestion; exchange, SIC and market-cap historical filters remain explicitly unavailable until effective-dated sources exist" },
-    { "wave": "W0", "feature": "US screener PIT contract", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "NOT_APPLICABLE", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "NOT_APPLICABLE", "performance": "IMPLEMENTED", "claude": "AUDITED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Client date controls remain tracked under Integrated screener" },
-    { "wave": "W3", "feature": "Stage screener", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the versioned columnar serving contract" },
-    { "wave": "W3", "feature": "Stage transition scanner", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the dated transition contract; effective-dated classification history remains a shared data-source limitation" },
-    { "wave": "W3", "feature": "Backtest", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "W3J is live: RGC remains observed, QMMM halt carries remain raw-only, and the rebuilt candidate gate passed without clipping or winsorization" },
-    { "wave": "W3", "feature": "Market momentum", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current deterministic market-momentum contract" },
-    { "wave": "W3", "feature": "Sector and industry analysis", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "PARTIAL", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Current SEC SIC analysis is complete; historical sector/industry aggregation remains fail-closed until effective-dated classification history exists" },
-    { "wave": "W3", "feature": "Trigger discovery", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "PARTIAL", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Current and single-date search, Mini Charts, market-scoped saved definitions, explicit latest-date evaluations and notification settings are complete; US period scans and historical classification filters remain unavailable" },
-    { "wave": "W3", "feature": "MTF close calendar", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "W3I US TradingView Oracle NASDAQ:AAPL (1D, regular session, America/New_York) observed 2025-01-02 through 2026-10-13: 446 dates x 12 timeframes = 5,352 comparisons, 0 mismatches; JP TSE:7203 remains 5,100/0. Dates outside each observed period are rule projections and no validation beyond AAPL is claimed" },
-    { "wave": "W3", "feature": "Earnings calendar", "jp": "IMPLEMENTED", "us": "BLOCKED", "functional": "PARTIAL", "visual": "BLOCKED", "data": "BLOCKED", "historical": "PARTIAL", "responsive": "BLOCKED", "performance": "BLOCKED", "claude": "AUDITED", "codexQa": "BLOCKED", "git": "MAIN", "production": "BLOCKED", "remaining": "Finnhub is approved and the PIT contract is fixture-tested, but the machine-local credential is not configured; live ingestion, event presentation and scheduling remain blocked without inventing data" },
-    { "wave": "W2", "feature": "Historical date mode", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Current-only metadata remains visibly unavailable rather than reused in historical analysis" },
-    { "wave": "W3", "feature": "Watchlist", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current cross-market watchlist contract" },
-    { "wave": "W3", "feature": "Comparison workspace", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the deterministic four-symbol comparison contract" },
-    { "wave": "W3", "feature": "Custom and composite charts", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "US-only adjusted-price formulas are live; mixed JP/US formulas remain explicitly unavailable until daily USD/JPY is imported" },
-    { "wave": "W3", "feature": "Chart drill", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current JP/US drill contract; mobile grid shrinkability is regression-protected" },
-    { "wave": "W3", "feature": "AI research", "jp": "IMPLEMENTED", "us": "PARTIAL", "functional": "PARTIAL", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "PARTIAL", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "US price, Stage, PMS/PFS/PES, physical-ML, similarity, SEC SIC and exchange reads are live and market-safe; fundamentals, earnings and historical-anchor tools remain unavailable without approved PIT sources, and JP fallback is blocked" },
-    { "wave": "W2", "feature": "Search and symbol aliases", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Symbols absent from the current source universe correctly return no match" },
-    { "wave": "W5", "feature": "Institutional ownership equivalent", "jp": "IMPLEMENTED", "us": "BLOCKED", "functional": "BLOCKED", "visual": "NOT_APPLICABLE", "data": "BLOCKED", "historical": "BLOCKED", "responsive": "NOT_APPLICABLE", "performance": "NOT_APPLICABLE", "claude": "AUDITED", "codexQa": "PASS_CONTRACT", "git": "MAIN", "production": "BLOCKED", "remaining": "Official SEC 13F and Schedule 13D/G are separate selected products; publication is blocked by evidence-backed CUSIP mapping and the machine-local SEC operator contact" },
-    { "wave": "W5", "feature": "Short-interest equivalent", "jp": "IMPLEMENTED", "us": "BLOCKED", "functional": "BLOCKED", "visual": "NOT_APPLICABLE", "data": "BLOCKED", "historical": "BLOCKED", "responsive": "NOT_APPLICABLE", "performance": "NOT_APPLICABLE", "claude": "AUDITED", "codexQa": "PASS_CONTRACT", "git": "MAIN", "production": "BLOCKED", "remaining": "The accepted product is official exchange-reported short interest; listed-universe publication is blocked by Nasdaq/NYSE license and usage rights. OTC-only FINRA data and daily short-sale volume are rejected substitutes" },
-    { "wave": "W5", "feature": "Policy holdings", "jp": "IMPLEMENTED", "us": "NOT_APPLICABLE", "functional": "NOT_APPLICABLE", "visual": "NOT_APPLICABLE", "data": "NOT_APPLICABLE", "historical": "NOT_APPLICABLE", "responsive": "NOT_APPLICABLE", "performance": "NOT_APPLICABLE", "claude": "AUDITED", "codexQa": "ACCEPTED", "git": "BASELINE", "production": "NOT_APPLICABLE", "remaining": "None; US institutional ownership is tracked separately" },
-    { "wave": "W0", "feature": "Data freshness and coverage", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Raw/effective OHLCV SLA and reversible source-availability buckets are live. Production raw coverage is 11,947/12,026 on 2026-10-14; source classification remains unavailable until new exact provider evidence is recorded. W3J keeps raw event rows while excluding official-halt non-observations from analytics" },
-    { "wave": "W0", "feature": "Loading empty and error states", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "NOT_APPLICABLE", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current route-state contract" },
-    { "wave": "W0", "feature": "Responsive coverage", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "NOT_APPLICABLE", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Local and authenticated external major-route coverage is complete at the recorded viewports; new feature waves retain their own responsive gate" },
-    { "wave": "W0", "feature": "Friend access read parity", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "AUDITED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current read-only scope: authenticated Desktop and 390px US Dashboard, AAPL five-view Stock Detail, Transition, Trigger, Backtest and AI Lens passed; safe JSON read POSTs are forwarded while writes, AI sends, admin routes and upgrades remain fail closed" },
-    { "wave": "W0", "feature": "Daily US price and analytics jobs", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "NOT_APPLICABLE", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "NOT_APPLICABLE", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Coverage SLA, exact 404 evidence, reversible permanent classification and blast-radius guard are live. W3J official-event analytical eligibility is active without changing raw source; no historical run payload was backfilled" }
+    {
+      "wave": "W0",
+      "feature": "Global navigation and market switching",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "components/layout/navigation.ts",
+          "components/layout/market-switch.ts"
+        ],
+        "testPaths": [
+          "scripts/test-header-navigation.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Loading, empty and error state contracts",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/error.tsx",
+          "components/us/UsRouteErrorState.tsx",
+          "app/us/trade/workbench/page.tsx",
+          "app/us/ma25m-monitor/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-route-states.ts",
+          "scripts/test-us-trade-workbench.ts",
+          "scripts/test-us-ma25m-monitor.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Strict API query validation and error semantics",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/api/us/screener/route.ts",
+          "app/api/us/earnings-calendar/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-api-error-contracts.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "PIT date and future-leakage guards",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "NOT_APPLICABLE",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "NOT_APPLICABLE",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "data",
+          "historical",
+          "performance"
+        ],
+        "implementationPaths": [
+          "lib/server/period-explorer-read-model.ts",
+          "app/api/us/hex/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-screener-pit.ts",
+          "scripts/test-us-dashboard-pit.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Data freshness and coverage disclosure",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "lib/us-status.ts",
+          "app/api/us/status/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-data-coverage-ui.ts",
+          "scripts/test-data-freshness.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Friend read-only access parity",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "UNVERIFIED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Code contract and isolated gateway/UI regressions exist, but this branch was not deployed and authenticated friend-path browser QA was not run.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "SECURITY: Production deployment and authenticated runtime access require separate approval.",
+      "nextAction": "Run the approved friend-access route matrix after a future deployment.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "data",
+          "performance"
+        ],
+        "implementationPaths": [
+          "proxy.ts"
+        ],
+        "testPaths": [
+          "scripts/test-remote-access.ts",
+          "scripts/test-friend-readonly-gateway.ts",
+          "scripts/test-friend-readonly-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Responsive route coverage",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/loading.tsx",
+          "components/layout/Header.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-layout-shell.ts",
+          "scripts/test-us-route-states.ts",
+          "scripts/bench/browser-plan.json",
+          "docs/us-stockboard-parity-validation-20261026.md"
+        ]
+      }
+    },
+    {
+      "wave": "W0",
+      "feature": "Search performance governance",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "scripts/audit-browser-performance.ts",
+          "scripts/benchmark-search-performance.ts"
+        ],
+        "testPaths": [
+          "scripts/test-search-performance-regressions.ts",
+          "scripts/bench/scenarios/priority-search.ts",
+          "docs/us-stockboard-parity-validation-20261026.md"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Market dashboard",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-dashboard-pit.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Daily close market report",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/daily-close/page.tsx",
+          "lib/server/us-daily-close-report.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-daily-close-report.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Market momentum",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/market-momentum/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-market-momentum-sector-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Sector and industry analysis",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Current SEC SIC analysis is implemented; effective-dated historical classifications are unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: no approved effective-dated US sector/industry source.",
+      "nextAction": "Ingest an approved effective-dated taxonomy before enabling historical classification filters.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/sectors/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-market-momentum-sector-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Sector ETF comparison",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/sector-etfs/page.tsx",
+          "lib/server/us-sector-etf-read-model.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-sector-etfs.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Sector ETF detail analysis",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Adjusted price, Stage and SMA analysis are complete; constituent holdings and weights remain unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: no approved ETF holdings source with redistribution rights.",
+      "nextAction": "Connect an approved holdings source and preserve source date and weight lineage.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/sector-etfs/[ticker]/page.tsx",
+          "lib/server/us-sector-etf-detail-read-model.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-sector-etf-detail.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "Earnings calendar",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Fixture UI and current-reference semantics are implemented. Provider dates without actuals remain unverified schedules; historical schedules fail closed because append-only observations do not exist. Live rows require the approved Finnhub credential.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "API: machine-local Finnhub credential, live ingestion approval, and append-only schedule observations are absent.",
+      "nextAction": "Configure the credential outside Git, ingest a bounded current calendar, then design append-only observations before enabling historical filters.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/earnings/page.tsx",
+          "lib/queries/us-earnings.ts",
+          "app/us/screener/UsScreenerClient.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-earnings-calendar.ts",
+          "scripts/test-us-screener-pit.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W1",
+      "feature": "MTF close calendar",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/mtf-close-calendar/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-mtf-close-calendar.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Stock detail overview",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stock/[ticker]/page.tsx",
+          "app/us/stock/[ticker]/UsStockDetailClient.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-stock-detail-parity.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Candlestick chart workspace",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stock/[ticker]/UsStockDetailClient.tsx",
+          "components/charts/CandlestickChart.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-stock-detail-parity.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "SMA Dynamics Lab",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "components/stock/sma-dynamics/SmaDynamicsSection.tsx",
+          "lib/sma-dynamics-timeframes.ts"
+        ],
+        "testPaths": [
+          "scripts/test-sma-dynamics.ts",
+          "scripts/test-sma-dynamics-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Current six-stage structure",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stock/[ticker]/UsStockDetailClient.tsx",
+          "lib/us-hex-wire.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-stock-detail-parity.ts",
+          "scripts/test-us-hex-serving.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Stage history timeline",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stock/[ticker]/UsStockDetailClient.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-stage-history-range.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Physical Momentum and MA slope",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stock/[ticker]/UsStockDetailClient.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-physical-momentum.ts",
+          "scripts/test-us-stock-detail-parity.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Forward scenario and inverse analysis",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "components/stock/sma-dynamics/SmaScenarioPanel.tsx",
+          "components/stock/sma-dynamics/SmaSolverPanel.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-sma-dynamics-daily-scenario.ts",
+          "scripts/test-sma-dynamics-crossing.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Similar historical comparison",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "components/stock/HistoricalAnalogExplorer.tsx",
+          "app/api/ml/historical-analogs/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-historical-analogs.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Actual fundamentals summary",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "SEC normalization, immutable-fact conflict detection, section coverage, and five-view UI are implemented; live Companyfacts coverage is not activated in this branch.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "API: SEC operator contact and Production ingestion are separately controlled.",
+      "nextAction": "Configure the operator identity and audit live US-GAAP/IFRS concept coverage before activation.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "lib/server/us-fundamentals.ts",
+          "lib/us-fundamentals.ts",
+          "app/api/us/fundamentals/[ticker]/route.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-sec-companyfacts.ts",
+          "scripts/test-us-fundamentals.ts",
+          "scripts/test-us-stock-fundamentals-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Valuation",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Trailing PER, PBR, PSR and market capitalization use PIT-eligible SEC facts and adjusted price fixtures; peer distributions and live historical ranges remain unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: live historical shares/facts coverage and an approved peer taxonomy are incomplete.",
+      "nextAction": "Activate only after live effective-date coverage and split-basis parity pass.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "lib/us-fundamentals.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-fundamentals.ts",
+          "scripts/test-us-stock-fundamentals-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Shareholder return",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Trailing dividend, payout and buyback presentation distinguish observed zero, missing and not meaningful values; live Tiingo/SEC coverage remains unverified.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: Production provider coverage is outside this isolated run.",
+      "nextAction": "Validate full trailing dividend and repurchase coverage without substituting missing values.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "lib/us-fundamentals.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-us-fundamentals.ts",
+          "scripts/test-us-stock-fundamentals-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Forecast fundamentals",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "MISSING",
+      "visual": "MISSING",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "NOT_APPLICABLE",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "No approved US analyst-consensus source exists; estimates are not fabricated.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "API: an approved consensus/forecast provider or contract is required.",
+      "nextAction": "Select a source, define as-of revision semantics, then implement ingestion and UI.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "app/stock/[ticker]/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-us-fundamentals.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Institutional ownership equivalent",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "PARTIAL",
+      "visual": "MISSING",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "MISSING",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "SEC 13F and Schedule 13D/G are designed as separate products but have no approved complete ticker mapping pipeline.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: evidence-backed CUSIP mapping and SEC operator contact are missing.",
+      "nextAction": "Approve and implement separate 13F manager-position and 13D/G beneficial-owner lineages.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "app/large-holders/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-header-navigation.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W2",
+      "feature": "Short-interest equivalent",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "MISSING",
+      "visual": "MISSING",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "MISSING",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "Daily short-sale volume is not substituted for exchange-reported short interest.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "API: Nasdaq/NYSE listed-universe short-interest license and usage rights are absent.",
+      "nextAction": "Acquire an approved exchange product or retain the explicit unavailable state.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-us-runtime-capabilities.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Integrated screener",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Price, Stage, Physical and current classification filters are complete; historical classifications and forecast filters remain unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: effective-dated classifications and approved forecasts are missing.",
+      "nextAction": "Keep unsupported historical filters fail-closed until their sources exist.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/screener/UsScreenerClient.tsx",
+          "app/api/us/screener/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-screener-filters.ts",
+          "scripts/test-us-screener-pit.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Period explorer and rankings",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "US price, Stage, liquidity and exact-date rankings are implemented; historical classification filters and PIT share-count market cap remain unavailable.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: approved effective-dated US classifications and share-count history are absent.",
+      "nextAction": "Retain the explicit historical limitations until both source families are available.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/period-explorer/page.tsx",
+          "lib/server/period-explorer-read-model.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-period-explorer.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Stage screener",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/stage-screener/page.tsx",
+          "app/api/us/hex/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-stage-screener-transport.ts",
+          "scripts/test-us-hex-serving.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Stage transition scanner",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/analysis/transitions/page.tsx",
+          "app/api/us/hex/transitions/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-stage-transition-scanner.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Trigger discovery and saved settings",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Current and single-date searches and market-scoped persistence are implemented; period scans using historical classifications remain unavailable.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: effective-dated US classifications are absent.",
+      "nextAction": "Retain explicit limitations until classification history is approved.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "data",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/trigger-discovery/page.tsx",
+          "app/api/us/trigger-discovery/search/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-trigger-discovery.ts",
+          "scripts/test-us-trigger-persistence.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Backtest",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/analysis/backtest/page.tsx",
+          "app/api/us/backtest/query/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-backtest.ts",
+          "scripts/test-us-backtest-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "MA and physical similarity lens",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/analysis/ml-lens/page.tsx",
+          "app/api/us/ml-current-similars/route.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-shared-tools.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "AI research",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "US price, Stage, physical and similarity tools are isolated; forecasts, ownership and event history remain unavailable.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: the blocked source families are not passed through JP fallback.",
+      "nextAction": "Add only approved US-native tools as their source contracts become available.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/ai/research/page.tsx",
+          "lib/assistant/tools.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-shared-tools.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Trade workbench",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "PARTIAL",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "PARTIAL",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Long entry drafts and downside watch are implemented; executable short orders and broker-specific historical borrow evidence are unavailable.",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: broker borrow inventory, locate cost, and historical availability are not available.",
+      "nextAction": "Connect an approved broker source before presenting executable or historical short orders.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "visual",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/trade/workbench/page.tsx",
+          "lib/queries/us-trade-workbench.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-trade-workbench.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Monthly MA monitor 3M through 25M",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "PARTIAL",
+      "remaining": "Calculation, lineage attestation, generation-scoped single-flight cache, retry/loading UI, and source-change fail-closed checks are implemented; Production-scale p95, memory and concurrency remain unverified.",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "TECHNICAL: Production-equivalent full-universe load testing is prohibited in this isolated branch.",
+      "nextAction": "Run the approved read-only performance gate before Production release and retain the bounded generation contract.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive"
+        ],
+        "implementationPaths": [
+          "app/us/ma25m-monitor/page.tsx",
+          "app/api/us/ma25m-monitor/route.ts",
+          "app/api/us/ma25m-monitor/[ticker]/route.ts",
+          "lib/us-ma25m-monitor.ts",
+          "lib/server/us-monthly-ma-generation.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-ma25m-monitor.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W3",
+      "feature": "Search and symbol aliases",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/api/us/search/route.ts",
+          "lib/markets.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-symbol-aliases.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Watchlist",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/watchlist/page.tsx",
+          "lib/watchlist-store.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-shared-tools.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Custom and composite charts",
+      "jp": "IMPLEMENTED",
+      "us": "PARTIAL",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "PARTIAL",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "US-only formulas are implemented; mixed-market formulas require date-aligned USD/JPY.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: approved daily FX lineage is absent.",
+      "nextAction": "Import an approved PIT FX series before enabling mixed JP/US formulas.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "functional",
+          "visual",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/custom-charts/page.tsx",
+          "lib/custom-charts/formula.ts"
+        ],
+        "testPaths": [
+          "scripts/test-custom-charts.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Chart drill",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/chart-drill/page.tsx",
+          "lib/chart-drill/server.ts"
+        ],
+        "testPaths": [
+          "scripts/test-chart-drill.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Stock preview from discovery surfaces",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "IMPLEMENTED",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "visual",
+          "data",
+          "historical",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "components/stock-preview/StockPreviewTrigger.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-stock-preview.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Popular themes equivalent",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "MISSING",
+      "visual": "MISSING",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "MISSING",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "No approved US theme taxonomy with membership history exists; sector ETFs are not mislabeled as themes.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: theme membership, effective dates and redistribution terms are missing.",
+      "nextAction": "Approve a theme taxonomy or build a governed ETF-derived taxonomy with explicit effective dates.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "app/themes/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-header-navigation.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Materials and news equivalent",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "MISSING",
+      "visual": "MISSING",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "MISSING",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "No approved US news/materials feed with ticker links and redistribution terms exists.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "API: a licensed filing/news source and retention contract are required.",
+      "nextAction": "Approve a source, define ticker mapping and PIT retention, then implement.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "app/materials/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-header-navigation.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W4",
+      "feature": "Policy holdings",
+      "jp": "IMPLEMENTED",
+      "us": "NOT_APPLICABLE",
+      "functional": "NOT_APPLICABLE",
+      "visual": "NOT_APPLICABLE",
+      "data": "NOT_APPLICABLE",
+      "historical": "NOT_APPLICABLE",
+      "responsive": "NOT_APPLICABLE",
+      "performance": "NOT_APPLICABLE",
+      "remaining": "US has no direct policy-shareholding analogue; institutional ownership is tracked separately.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "REGULATORY: the JP concept is market-specific.",
+      "nextAction": "None; use the separate 13F and 13D/G product definitions.",
+      "evidence": {
+        "claims": [
+          "jp"
+        ],
+        "implementationPaths": [
+          "app/large-holders/page.tsx"
+        ],
+        "testPaths": [
+          "scripts/test-header-navigation.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W5",
+      "feature": "Daily US price and analytics jobs",
+      "jp": "IMPLEMENTED",
+      "us": "IMPLEMENTED",
+      "functional": "IMPLEMENTED",
+      "visual": "NOT_APPLICABLE",
+      "data": "IMPLEMENTED",
+      "historical": "IMPLEMENTED",
+      "responsive": "NOT_APPLICABLE",
+      "performance": "IMPLEMENTED",
+      "remaining": "None within the implemented contract.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "TARGETED_PASS",
+      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "evidence": {
+        "claims": [
+          "jp",
+          "us",
+          "functional",
+          "data",
+          "historical",
+          "performance"
+        ],
+        "implementationPaths": [
+          "scripts/update-us-latest.ts",
+          "scripts/build-us-analytics-db.ts"
+        ],
+        "testPaths": [
+          "scripts/test-us-market-data-quality.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W5",
+      "feature": "Historical classification",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "PARTIAL",
+      "visual": "PARTIAL",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "Current-reference SEC SIC is retained and labeled; historical classification-dependent views fail closed.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: no effective-dated classification history is approved.",
+      "nextAction": "Ingest classification change history before enabling historical aggregates.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/sectors/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-us-market-momentum-sector-ui.ts"
+        ]
+      }
+    },
+    {
+      "wave": "W5",
+      "feature": "Sector ETF holdings and weights",
+      "jp": "IMPLEMENTED",
+      "us": "BLOCKED",
+      "functional": "PARTIAL",
+      "visual": "PARTIAL",
+      "data": "BLOCKED",
+      "historical": "BLOCKED",
+      "responsive": "IMPLEMENTED",
+      "performance": "IMPLEMENTED",
+      "remaining": "ETF price, Stage and SMA detail is complete; holdings remain visibly unavailable.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
+      "git": "10af8c141021eb88643c109bf750bde110c1dfe8",
+      "production": "NOT_DEPLOYED_THIS_BRANCH",
+      "blocker": "DATA: an approved holdings feed with as-of dates is absent.",
+      "nextAction": "Connect an approved issuer or licensed holdings source.",
+      "evidence": {
+        "claims": [
+          "jp",
+          "responsive",
+          "performance"
+        ],
+        "implementationPaths": [
+          "app/us/sector-etfs/[ticker]/page.tsx",
+          "docs/us-stockboard-parity-residual-audit.md"
+        ],
+        "testPaths": [
+          "scripts/test-us-sector-etf-detail.ts"
+        ]
+      }
+    }
   ]
 }

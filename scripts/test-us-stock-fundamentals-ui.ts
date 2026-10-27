@@ -81,6 +81,14 @@ async function main() {
   assert.match(workspace, /0は観測値/)
   assert.match(workspace, /model\.coverage\.sourceFacts === 0/)
 
+  // ---- EPS labels and FCF explanation ----
+  assert.match(workspace, /label: '基本EPS'/)
+  assert.match(workspace, /label="希薄化後EPS"/)
+  assert.doesNotMatch(workspace, /EPS\(基本\)|'希薄化EPS'/, 'basic/diluted EPS labels must stay consistent')
+  assert.match(workspace, /営業CF \+ 正規化後の設備投資\(負値\)/)
+  assert.match(workspace, /営業CF − 設備投資の現金流出額/)
+  assert.match(workspace, /未報告または未取得/)
+
   // ---- Summary: neutral observed facts, no unsupported value judgment ----
   assert.match(workspace, /title="観測事実"/)
   assert.match(workspace, /title="確認事項"/)
@@ -108,6 +116,33 @@ async function main() {
   assert.doesNotMatch(workspace, /history\.length === 0\) \{\s*return <EmptyLine>/, 'empty history must branch on coverage before claiming no dividends')
   // React は契約値を再計算しない(描画スケール以外の算術を .value に掛けない)
   assert.doesNotMatch(workspace, /\.value\s*[*/+-]\s/, 'no arithmetic on contract values')
+
+  // ---- Section coverage: neutral, never read as whole-board READY ----
+  assert.match(workspace, /model\.coverage\.sections\[key\]/)
+  for (const key of ['performance', 'financialPosition', 'cashFlow', 'capital', 'shareholderReturn']) {
+    assert.match(workspace, new RegExp(`key: '${key}'`), `section coverage row ${key}`)
+  }
+  assert.match(workspace, /区分別の取得状況/)
+  assert.match(workspace, /section\.available\}\/\{section\.expected/)
+  assert.match(workspace, /欠損 \$\{missingLabels\.length\}/)
+  assert.match(workspace, /READY: '取得済み'[\s\S]*?PARTIAL: '一部欠損'[\s\S]*?UNAVAILABLE: '未取得'/)
+  assert.doesNotMatch(workspace, /主要fact取得済み/, 'overall READY must not read as a blanket completeness claim')
+  assert.match(workspace, /READY: \{ text: '全区分取得済み'/)
+
+  // ---- Financial view: extended balance sheet / cash flow / capital, computed values only ----
+  for (const field of [
+    'totalLiabilities', 'currentAssets', 'currentLiabilities', 'totalDebt', 'currentRatio', 'debtToEquity',
+    'investingCashFlow', 'financingCashFlow', 'capitalExpenditure',
+  ]) {
+    assert.match(workspace, new RegExp(`financials\\.${field}\\b`), `financial view must render ${field}`)
+  }
+  for (const field of ['sharesOutstanding', 'weightedAverageShares', 'dilutedEps']) {
+    assert.match(workspace, new RegExp(`capital\\.${field}\\b`), `capital block must render ${field}`)
+  }
+  assert.match(workspace, /id="us-fundamental-capital"/)
+  assert.match(workspace, /title="株式・資本"/)
+  assert.doesNotMatch(workspace, /financials\.currentAssets\.value|financials\.currentLiabilities\.value|financials\.totalDebt\.value/, 'ratios come from the contract, not recomputed in React')
+  assert.doesNotMatch(workspace, /GICS|コンセンサス予想|業界平均/, 'no GICS or forecast/peer implication')
 
   // ---- Responsive guards / visual constraints ----
   assert.ok((workspace.match(/min-w-0/g) ?? []).length >= 15, 'min-w-0 guards on flex/grid children')

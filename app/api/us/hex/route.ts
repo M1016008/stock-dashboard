@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import {
+  US_HEX_HISTORICAL_ROWS_SQL,
   US_HEX_ROWS_SQL,
   buildUsHexRow,
   compactUsHexRow,
@@ -16,10 +17,12 @@ import {
   US_HEX_WIRE_REQUEST,
   encodeUsHexColumnar,
   type UsHexColumnarBody,
+  type UsHexAttributeBasis,
   type UsHexCoverage,
   type UsHexTimeframe,
   type UsHexUniverse,
 } from '@/lib/us-hex-wire'
+import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { usInvestableSymbolSql, usTestSymbolExclusionSql } from '@/lib/us-symbol-quality'
 
 export const dynamic = 'force-dynamic'
@@ -29,24 +32,18 @@ export const maxDuration = 60
 
 type Timeframe = UsHexTimeframe
 
-// legacy-v1: 既定 / compact-v1: ?compact=1 / columnar-v1: ?wire=us-hex-columnar.v1 (US Stage Screener 専用)
+// legacy-v1: 既定 / compact-v1: ?compact=1 / columnar-v1: versioned wire (US Stage Screener 専用)
 type ResponseFormat = 'legacy-v1' | 'compact-v1' | 'columnar-v1'
 
 type CacheValue = {
   expiresAt: number
-  hitResponse?: SerializedJson
-  payload: {
-    success: true
-    count: number
-    date: string
-    timeframe: Timeframe
-    source: 'tiingo'
-    universe: UsHexUniverse
-    coverage: UsHexCoverage
-  } & ({ data: UsHexRow[] } | UsHexColumnarBody)
+  hitResponse: SerializedJson
+  weightBytes: number
 }
 
 const CACHE_TTL_MS = 15 * 60 * 1_000
+const CACHE_MAX_ENTRIES = 4
+const CACHE_MAX_BYTES = 64 * 1024 * 1024
 const globalForUsHex = globalThis as typeof globalThis & {
   usHexCache?: Map<string, CacheValue>
 }
@@ -76,8 +73,77 @@ function serializedJsonResponse(request: NextRequest, serialized: SerializedJson
   return new NextResponse(serialized.plain, { headers })
 }
 
-function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
-  return serializedJsonResponse(request, serializeJson(payload))
+type UsHexGeneration = {
+  snapshotGeneration: number | null
+  snapshotRows: number
+  priceGeneration: number | null
+  universeGeneration: number | null
+  classificationGeneration: number | null
+  momentumDate: string | null
+  momentumGeneration: number | null
+}
+
+function sameGeneration(left: UsHexGeneration, right: UsHexGeneration): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function generationKey(generation: UsHexGeneration): string {
+  return [
+    generation.snapshotGeneration,
+    generation.snapshotRows,
+    generation.priceGeneration,
+    generation.universeGeneration,
+    generation.classificationGeneration,
+    generation.momentumDate,
+    generation.momentumGeneration,
+  ].map((value) => value ?? 'null').join(':')
+}
+
+async function readGeneration(date: string, historical: boolean): Promise<UsHexGeneration> {
+  const [primary, momentum] = await Promise.all([
+    execGet<Omit<UsHexGeneration, 'momentumDate' | 'momentumGeneration'>>(
+      `SELECT
+         (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US' AND date = ?) AS snapshotGeneration,
+         (SELECT COUNT(*) FROM market_daily_snapshots WHERE market = 'US' AND date = ?) AS snapshotRows,
+         (SELECT MAX(imported_at) FROM market_ohlcv_daily WHERE market = 'US' AND date <= ?) AS priceGeneration,
+         (SELECT MAX(updated_at) FROM market_universe WHERE market = 'US') AS universeGeneration,
+         ${historical
+           ? 'NULL AS classificationGeneration'
+           : `(SELECT MAX(updated_at) FROM market_classifications
+                WHERE market = 'US' AND taxonomy = ?) AS classificationGeneration`}`,
+      historical ? [date, date, date] : [date, date, date, US_SEC_SIC_TAXONOMY],
+    ),
+    hasUsAnalyticsDb()
+      ? execUsAnalyticsAll<{ momentumDate: string | null; momentumGeneration: number | null }>(
+          `SELECT MAX(date) AS momentumDate, MAX(updated_at) AS momentumGeneration
+           FROM physical_momentum_metrics
+           WHERE market = 'US' AND date <= ?`,
+          [date],
+        ).then((rows) => rows[0] ?? null).catch(() => null)
+      : Promise.resolve(null),
+  ])
+  return {
+    snapshotGeneration: primary?.snapshotGeneration ?? null,
+    snapshotRows: Number(primary?.snapshotRows ?? 0),
+    priceGeneration: primary?.priceGeneration ?? null,
+    universeGeneration: primary?.universeGeneration ?? null,
+    classificationGeneration: primary?.classificationGeneration ?? null,
+    momentumDate: momentum?.momentumDate ?? null,
+    momentumGeneration: momentum?.momentumGeneration ?? null,
+  }
+}
+
+function setBoundedCache(key: string, value: CacheValue): void {
+  cache.delete(key)
+  cache.set(key, value)
+  let totalBytes = [...cache.values()].reduce((sum, entry) => sum + entry.weightBytes, 0)
+  while (cache.size > CACHE_MAX_ENTRIES || totalBytes > CACHE_MAX_BYTES) {
+    const oldest = cache.keys().next().value as string | undefined
+    if (oldest == null) break
+    const removed = cache.get(oldest)
+    cache.delete(oldest)
+    totalBytes -= removed?.weightBytes ?? 0
+  }
 }
 
 async function resolveDate(requested: string | null): Promise<string | null> {
@@ -94,6 +160,15 @@ async function resolveDate(requested: string | null): Promise<string | null> {
     `SELECT MAX(date) AS date FROM market_daily_snapshots WHERE market = 'US'`,
   )
   return row?.date ?? null
+}
+
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
 }
 
 async function loadPhysicalMomentum(date: string): Promise<Map<string, number | null>> {
@@ -118,7 +193,11 @@ async function loadPhysicalMomentum(date: string): Promise<Map<string, number | 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const requestedDate = searchParams.get('date')
+    const requestedDates = searchParams.getAll('date')
+    if (requestedDates.length > 1 || (requestedDates[0] != null && !isCalendarDate(requestedDates[0]))) {
+      return NextResponse.json({ error: 'invalid_date' }, { status: 400 })
+    }
+    const requestedDate = requestedDates[0] ?? null
     const compact = searchParams.get('compact') === '1'
     const wire = searchParams.get(US_HEX_WIRE_PARAM)
     if (wire != null && wire !== US_HEX_WIRE_REQUEST) {
@@ -136,30 +215,40 @@ export async function GET(request: NextRequest) {
         : 'daily'
     const date = await resolveDate(requestedDate)
     if (!date) {
-      return jsonResponse(request, {
-        success: true,
-        ...(format === 'columnar-v1' ? encodeUsHexColumnar([]) : { data: [] }),
-        count: 0,
-        date: null,
-        timeframe,
-        source: 'tiingo',
-        notice: requestedDate
-          ? 'No US market data is available on or before the requested date.'
-          : 'USステージスナップショットが未生成です。',
-      })
+      return NextResponse.json(
+        {
+          error: requestedDate ? 'unavailable_date' : 'snapshot_unavailable',
+          notice: requestedDate
+            ? 'No US market data is available on or before the requested date.'
+            : 'USステージスナップショットが未生成です。',
+        },
+        { status: 404 },
+      )
     }
 
-    const cacheKey = `all-investable-v3:${date}:${timeframe}:${format}`
-    const cached = cache.get(cacheKey)
+    const latest = await execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date FROM market_daily_snapshots WHERE market = 'US'`,
+    )
+    const historical = latest?.date != null && date !== latest.date
+
+    const startingGeneration = await readGeneration(date, historical)
+    const cacheKey = `all-investable-v5:current:${date}:${timeframe}:${format}:${generationKey(startingGeneration)}`
+    const cached = historical ? null : cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
-      cached.hitResponse ??= serializeJson({ ...cached.payload, cache: 'hit' })
+      const completedGeneration = await readGeneration(date, historical)
+      if (!sameGeneration(startingGeneration, completedGeneration)) {
+        return NextResponse.json({ error: 'us_hex_generation_changed' }, { status: 503 })
+      }
       return serializedJsonResponse(request, cached.hitResponse)
     }
 
-    const [rows, physicalMomentum, universe] = await Promise.all([
-      execAll<UsHexRawRow>(US_HEX_ROWS_SQL, usHexRowsParams(date)),
+    const [rows, physicalMomentum, currentUniverse] = await Promise.all([
+      execAll<UsHexRawRow>(
+        historical ? US_HEX_HISTORICAL_ROWS_SQL : US_HEX_ROWS_SQL,
+        usHexRowsParams(date, historical),
+      ),
       loadPhysicalMomentum(date),
-      execGet<UsHexUniverse>(
+      historical ? Promise.resolve(null) : execGet<UsHexUniverse>(
         `SELECT
            SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS activeAll,
            SUM(CASE WHEN active = 1 AND ${usInvestableSymbolSql('ticker')} THEN 1 ELSE 0 END) AS productionActive,
@@ -174,8 +263,31 @@ export async function GET(request: NextRequest) {
     ])
 
     const data: UsHexRow[] = rows.map((row) => buildUsHexRow(row, timeframe, physicalMomentum))
+    const attributeBasis: UsHexAttributeBasis = historical
+      ? {
+          membership: 'SNAPSHOT_DATE',
+          profiles: 'CURRENT_REFERENCE',
+          classifications: 'UNAVAILABLE',
+          shares: 'UNAVAILABLE',
+        }
+      : {
+          membership: 'CURRENT_UNIVERSE',
+          profiles: 'CURRENT_REFERENCE',
+          classifications: 'CURRENT_REFERENCE',
+          shares: 'CURRENT_REFERENCE',
+        }
 
-    const payload: CacheValue['payload'] = {
+    const payload: {
+      success: true
+      count: number
+      date: string
+      timeframe: Timeframe
+      source: 'tiingo'
+      universe: UsHexUniverse | null
+      coverage: UsHexCoverage
+      attributeBasis: UsHexAttributeBasis
+      notice?: string
+    } & ({ data: UsHexRow[] } | UsHexColumnarBody) = {
       success: true,
       ...(format === 'columnar-v1'
         ? encodeUsHexColumnar(data)
@@ -184,15 +296,19 @@ export async function GET(request: NextRequest) {
       date,
       timeframe,
       source: 'tiingo',
-      universe: {
-        activeAll: Number(universe?.activeAll ?? 0),
-        productionActive: Number(universe?.productionActive ?? 0),
-        stocks: Number(universe?.stocks ?? 0),
-        etfs: Number(universe?.etfs ?? 0),
-        mutualFunds: Number(universe?.mutualFunds ?? 0),
-        testSymbols: Number(universe?.testSymbols ?? 0),
-        excludedArtifacts: Number(universe?.excludedArtifacts ?? 0),
+      universe: currentUniverse == null ? null : {
+        activeAll: Number(currentUniverse.activeAll ?? 0),
+        productionActive: Number(currentUniverse.productionActive ?? 0),
+        stocks: Number(currentUniverse.stocks ?? 0),
+        etfs: Number(currentUniverse.etfs ?? 0),
+        mutualFunds: Number(currentUniverse.mutualFunds ?? 0),
+        testSymbols: Number(currentUniverse.testSymbols ?? 0),
+        excludedArtifacts: Number(currentUniverse.excludedArtifacts ?? 0),
       },
+      attributeBasis,
+      ...(historical
+        ? { notice: 'Historical membership uses the requested Stage snapshot. Historical classifications and shares are unavailable.' }
+        : {}),
       coverage: {
         prices: data.filter((row) => row.price != null).length,
         snapshots: data.filter((row) => row.data_status !== 'price_pending' && row.data_status !== 'snapshot_pending').length,
@@ -202,12 +318,24 @@ export async function GET(request: NextRequest) {
         monthlyStage: data.filter((row) => row.monthly_a_stage != null && row.monthly_b_stage != null).length,
       },
     }
-    cache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, payload })
-    return jsonResponse(request, { ...payload, cache: 'miss' })
+    const completedGeneration = await readGeneration(date, historical)
+    if (!sameGeneration(startingGeneration, completedGeneration)) {
+      return NextResponse.json({ error: 'us_hex_generation_changed' }, { status: 503 })
+    }
+    const missResponse = serializeJson({ ...payload, cache: 'miss' })
+    if (!historical) {
+      const hitResponse = serializeJson({ ...payload, cache: 'hit' })
+      setBoundedCache(cacheKey, {
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        hitResponse,
+        weightBytes: Buffer.byteLength(hitResponse.plain) + (hitResponse.gzip?.byteLength ?? 0),
+      })
+    }
+    return serializedJsonResponse(request, missResponse)
   } catch (error) {
     console.error('US HEX API error:', error)
     return NextResponse.json(
-      { error: 'US HEX map fetch failed', message: error instanceof Error ? error.message : String(error) },
+      { error: 'us_hex_failed' },
       { status: 500 },
     )
   }

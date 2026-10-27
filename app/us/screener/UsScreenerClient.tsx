@@ -128,6 +128,8 @@ type ScreenerFacets = {
 
 type EarningsMeta = {
   source: 'finnhub'
+  available?: boolean
+  reason?: 'ready' | 'no_successful_run' | 'range_uncovered' | 'stale' | 'historical_unavailable'
   updatedAt: string | null
   latestRun: {
     status: string
@@ -148,15 +150,20 @@ type ScreenerPit = {
 type InitialScreenerAsOf = {
   requestedDate: string | null
   resolvedDate: string | null
+  earliestDate: string | null
   latestDate: string | null
+  availability: 'available' | 'before_coverage' | 'invalid' | 'no_data'
   mode: ScreenerPit['mode'] | null
 }
+
+type UnavailableDateReason = Exclude<InitialScreenerAsOf['availability'], 'available'>
 
 /**
  * 過去日では当時の値がない並び替え。取引所・時価総額は API が 422 で拒否し、
  * セクター・詳細産業は全行が空になるため、確定的なコード順へ切り替える。
  */
 const HISTORICAL_BLOCKED_SORTS = new Set(['exchange', 'marketCap', 'sector', 'industry'])
+const HISTORICAL_EARNINGS_SORTS = new Set(['earningsNextDate', 'earningsDays'])
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 /** 日付入力の途中 (年を 1 桁ずつ打っている間など) に古すぎる日付で検索しないための下限 */
 const MIN_INPUT_DATE = '1990-01-01'
@@ -263,16 +270,20 @@ function physicalStatusClass(label: string | null | undefined) {
 }
 
 /** 取得に失敗した理由。空結果 (0 件・未生成) とは別の状態として持つ */
-type ScreenerErrorKind = 'pit' | 'failed'
+type ScreenerErrorKind = 'pit' | 'earnings' | 'failed'
 
 // API の message は内部情報を含みうるため画面に出さない。理由ごとに決まった文言だけを使う
 const SCREENER_ERROR_COPY: Record<ScreenerErrorKind, string> = {
   pit: '過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。条件を外して再検索してください。',
+  earnings: '決算予定の同期範囲または鮮度を確認できないため、決算条件を解除しました。通常の検索結果を再取得します。',
   failed: 'USスクリーナーの結果を取得できませんでした。時間をおいて再試行してください。',
 }
 
 class ScreenerRequestError extends Error {
-  constructor(readonly kind: ScreenerErrorKind) {
+  constructor(
+    readonly kind: ScreenerErrorKind,
+    readonly earningsReason?: EarningsMeta['reason'],
+  ) {
     super(kind)
   }
 }
@@ -402,7 +413,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const [columnMode, setColumnMode] = useState<ColumnMode>('core')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // 基準日。null は最新。API の date 契約 (YYYY-MM-DD、休場日は直前の取引日へ解決) をそのまま使う
-  const [requestedDate, setRequestedDate] = useState<string | null>(() => parseUrlDate(searchParams.get('date')))
+  const [requestedDate, setRequestedDate] = useState<string | null>(() => (
+    initialAsOf.availability === 'invalid' ? null : parseUrlDate(searchParams.get('date'))
+  ))
+  const [unavailableDateReason, setUnavailableDateReason] = useState<UnavailableDateReason | null>(() => (
+    initialAsOf.requestedDate && initialAsOf.mode === null && initialAsOf.availability !== 'available'
+      ? initialAsOf.availability
+      : null
+  ))
   const [pit, setPit] = useState<ScreenerPit | null>(() => (
     initialAsOf.mode && initialAsOf.resolvedDate && initialAsOf.latestDate
       ? {
@@ -415,6 +433,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   ))
   const [latestDate, setLatestDate] = useState<string | null>(initialAsOf.latestDate)
   const [clearedForHistorical, setClearedForHistorical] = useState<string[]>([])
+  // 最新日で決算予定が利用不可になり解除した条件。再取得でエラー表示が消えても確認できるよう保持する
+  const [clearedForEarnings, setClearedForEarnings] = useState<string[]>([])
   // いま指定している日付に対する応答だけを採用する (別の日付の結果を新しい日付のラベルで見せない)
   const confirmedPit = pit && pit.requestedDate === requestedDate ? pit : null
   const historical = confirmedPit?.mode === 'HISTORICAL'
@@ -426,7 +446,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     && (latestDate == null ? confirmedPit?.mode !== 'LATEST' : requestedDate !== latestDate)
   // 銘柄リンク・クイックプレビューへ引き継ぐ日付 (過去日のときだけ、解決後の取引日)
   const linkDate = confirmedPit?.mode === 'HISTORICAL' ? confirmedPit.resolvedDate : null
-  const effectiveSort = historicalLocked && HISTORICAL_BLOCKED_SORTS.has(sort) ? 'ticker' : sort
+  // 最新日でも決算予定が明示的に利用不可なら、決算条件・並び替えを過去日と同様に使えなくする
+  const earningsUnavailable = !historicalLocked && earningsMeta?.available === false
+  const earningsLocked = historicalLocked || earningsUnavailable
+  const effectiveSort = (historicalLocked && HISTORICAL_BLOCKED_SORTS.has(sort)) || (earningsLocked && HISTORICAL_EARNINGS_SORTS.has(sort)) ? 'ticker' : sort
   const sicClassificationEnabled = supportsUsSicClassification(assetType) && !historicalLocked
   const params = useMemo(() => {
     const sp = new URLSearchParams({ limit: String(resultLimit), sort: effectiveSort, dir })
@@ -456,8 +479,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (stage23Candidate) sp.set('stage23Candidate', '1')
     if (shortTermCheck) sp.set('shortTermCheck', shortTermCheck)
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
-    if (earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
-    if (earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
+    if (!earningsLocked && earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
+    if (!earningsLocked && earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
     if (twoYearLine !== 'none') {
       sp.set('twoYearLine', twoYearLine)
       if (twoYearPattern !== 'either') sp.set('twoYearPattern', twoYearPattern)
@@ -468,7 +491,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (capBin?.min != null) sp.set('marketCapMin', String(capBin.min))
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
-  }, [requestedDate, historicalLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, effectiveSort, dir, resultLimit])
+  }, [requestedDate, historicalLocked, earningsLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, effectiveSort, dir, resultLimit])
 
   // 過去日では使えない条件は、送らないだけでなく画面の状態からも外し、外したことを表示する
   useEffect(() => {
@@ -487,7 +510,15 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       cleared.push('時価総額')
       setMarketCapBin('')
     }
-    if (HISTORICAL_BLOCKED_SORTS.has(sort)) {
+    if (earningsWindowDays) {
+      cleared.push('次回決算までの期間')
+      setEarningsWindowDays('')
+    }
+    if (earningsTimeBucket) {
+      cleared.push('決算の発表時間')
+      setEarningsTimeBucket('')
+    }
+    if (HISTORICAL_BLOCKED_SORTS.has(sort) || HISTORICAL_EARNINGS_SORTS.has(sort)) {
       cleared.push('並び順（コード順に変更）')
       setSort('ticker')
       setDir('asc')
@@ -495,15 +526,47 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (cleared.length > 0) {
       setClearedForHistorical((current) => Array.from(new Set([...current, ...cleared])))
     }
-  }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, sort])
+  }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, earningsWindowDays, earningsTimeBucket, sort])
+
+  // 保存済み条件の読込み後に同期不備が判明した場合も、503の再試行ループにせず決算条件だけを外す。
+  useEffect(() => {
+    if (!earningsUnavailable) return
+    const cleared: string[] = []
+    if (earningsWindowDays) {
+      cleared.push('次回決算までの期間')
+      setEarningsWindowDays('')
+    }
+    if (earningsTimeBucket) {
+      cleared.push('決算の発表時間')
+      setEarningsTimeBucket('')
+    }
+    if (HISTORICAL_EARNINGS_SORTS.has(sort)) {
+      cleared.push('並び順（コード順に変更）')
+      setSort('ticker')
+      setDir('asc')
+    }
+    if (cleared.length > 0) {
+      setClearedForEarnings((current) => Array.from(new Set([...current, ...cleared])))
+    }
+  }, [earningsUnavailable, earningsWindowDays, earningsTimeBucket, sort])
 
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
+    setClearedForEarnings([])
+    setEarningsMeta(null)
     setSelected(new Set())
+    setUnavailableDateReason(
+      next && initialAsOf.earliestDate && next < initialAsOf.earliestDate
+        ? 'before_coverage'
+        : next && !initialAsOf.earliestDate
+          ? 'no_data'
+          : null,
+    )
     setRequestedDate(next)
   }
 
   useEffect(() => {
+    if (unavailableDateReason) return
     const apiParams = new URLSearchParams(params)
     const updates: Record<string, string | null> = {}
     const ownedKeys = [
@@ -517,7 +580,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     for (const key of ownedKeys) updates[key] = apiParams.get(key)
     updates.marketCapBin = marketCapBin || null
     replaceCurrentUrlFilters(updates)
-  }, [params, marketCapBin])
+  }, [params, marketCapBin, unavailableDateReason])
 
   useEffect(() => {
     if (sicClassificationEnabled || (!sector && !industryGroup && !industry)) return
@@ -527,6 +590,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }, [sicClassificationEnabled, sector, industryGroup, industry])
 
   useEffect(() => {
+    if (unavailableDateReason) {
+      setLoading(false)
+      setRows([])
+      setHasMore(false)
+      setMessage(null)
+      setFetchError(null)
+      return
+    }
     let cancelled = false
     const controller = new AbortController()
     setLoading(true)
@@ -538,7 +609,12 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       fetch(`/api/us/screener?${params}`, { cache: 'no-store', signal: controller.signal })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}))
-          if (!res.ok) throw new ScreenerRequestError(res.status === 422 ? 'pit' : 'failed')
+          if (!res.ok) {
+            if (res.status === 503 && data.error === 'us_earnings_unavailable') {
+              throw new ScreenerRequestError('earnings', data.reason)
+            }
+            throw new ScreenerRequestError(res.status === 422 ? 'pit' : 'failed')
+          }
           return data
         })
         .then((data) => {
@@ -571,6 +647,15 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
           setRows([])
           setHasMore(false)
+          if (error instanceof ScreenerRequestError && error.kind === 'earnings') {
+            setEarningsMeta({
+              source: 'finnhub',
+              available: false,
+              reason: error.earningsReason,
+              updatedAt: null,
+              latestRun: null,
+            })
+          }
           setFetchError(error instanceof ScreenerRequestError ? error.kind : 'failed')
         })
         .finally(() => { if (!cancelled) setLoading(false) })
@@ -580,7 +665,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [params, retryVersion])
+  }, [params, retryVersion, unavailableDateReason])
 
   useEffect(() => {
     const saved = window.localStorage.getItem(COLUMN_MODE_KEY)
@@ -650,6 +735,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, sort, dir])
 
   const applyView = (next: UsScreenerView) => {
+    setClearedForEarnings([])
     const normalizedClassification = normalizeUsClassificationFilters({
       assetType: next.assetType ?? '',
       sector: next.sector ?? '',
@@ -690,6 +776,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }
 
   const resetFilters = () => {
+    setClearedForEarnings([])
     setQuery('')
     setExchange('')
     setSector('')
@@ -744,8 +831,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     ma200Trend === 'above' ? '200日線より上' : ma200Trend === 'below' ? '200日線より下' : '',
     ma200Direction ? `200日線: ${ma200Direction === 'up' ? '上向き' : ma200Direction === 'down' ? '下向き' : '横ばい'}` : '',
     marketCapBin ? `時価総額: ${MCAP_BINS.find((bin) => bin.key === marketCapBin)?.label}` : '',
-    earningsWindowDays ? `次回決算: ${earningsWindowDays}日以内` : '',
-    earningsTimeBucket
+    !historicalLocked && earningsWindowDays ? `次回決算: ${earningsWindowDays}日以内` : '',
+    !historicalLocked && earningsTimeBucket
       ? `決算時間: ${
           earningsTimeBucket === 'before_open' ? '寄付前'
             : earningsTimeBucket === 'market_hours' ? '取引時間中'
@@ -796,10 +883,21 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   )).sort()
   const hasAnyStage = AXES.some((axis) => Boolean(stages[axis.key]?.length))
   const hasMarketCapData = rows.some((row) => row.market_cap != null)
+  const unavailableRequestedDate = unavailableDateReason
+    ? requestedDate ?? initialAsOf.requestedDate
+    : null
   const asOfDate = confirmedPit?.resolvedDate ?? (requestedDate ? null : date)
   const adjustedToPriorSession = confirmedPit?.requestedDate != null && confirmedPit.requestedDate !== confirmedPit.resolvedDate
   // 取得失敗は「データなし」と言わない (日付にデータが無いのか確認できていないため)
-  const dateUnavailable = requestedDate != null && !loading && !fetchError && confirmedPit == null
+  const dateUnavailable = unavailableDateReason != null
+    || (requestedDate != null && !loading && !fetchError && confirmedPit == null)
+  const unavailableDateCopy = unavailableDateReason === 'invalid'
+    ? `「${(unavailableRequestedDate ?? '').slice(0, 32)}」は有効な日付ではありません。YYYY-MM-DD の形式で1つだけ指定してください。最新データは代わりに表示していません。`
+    : unavailableDateReason === 'before_coverage'
+      ? `${unavailableRequestedDate ?? '指定日'} のデータはありません。表示できる最初の日は ${initialAsOf.earliestDate ?? '未取得'} です。最新データは代わりに表示していません。`
+      : unavailableDateReason === 'no_data'
+        ? '表示できる米国株データがありません。最新データは代わりに表示していません。'
+        : null
   // 取得失敗を最優先にする。AS OF の日付は文脈として残すが、「最新データ」等の成功表示とは並べない
   const modeLabel = fetchError
     ? '取得失敗'
@@ -808,7 +906,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       : confirmedPit?.mode === 'LATEST' || (!requestedDate && date)
         ? '最新データ'
         : dateUnavailable
-          ? 'データなし'
+          ? '表示不可'
           : '確認中'
   const modeClass = fetchError
     ? 'border-red-200 bg-red-50 text-[var(--color-market-red-dark)]'
@@ -816,7 +914,9 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       ? 'border-amber-300 bg-amber-50 text-[#92400e]'
       : modeLabel === '最新データ'
         ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-        : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+        : dateUnavailable
+          ? 'border-red-200 bg-red-50 text-[var(--color-market-red-dark)]'
+          : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
   const lockReason = historical ? '過去日は使えません · 当時の値がないため' : '基準日を確認中'
 
   return (
@@ -827,7 +927,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
         subtitle="Tiingo由来の株価と日次スナップショットを、HEXステージ(複数系統は AND)・業種・流動性・物理指標で絞り込みます。価格基準の移行状況はデータ鮮度で確認できます。"
         badge={historical ? '過去日表示' : undefined}
         badgeTone="warning"
-        meta={<span>AS OF {asOfDate ?? '-'} 米国終値</span>}
+        meta={<span>AS OF {asOfDate ?? unavailableRequestedDate ?? '-'} 米国終値</span>}
       >
         <UsAnalysisNav current="/us/screener" />
       </PageTitle>
@@ -853,7 +953,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
         <button
           type="button"
           onClick={() => changeRequestedDate(null)}
-          disabled={!requestedDate}
+          disabled={!requestedDate && !unavailableDateReason}
           className="btn"
           data-size="sm"
         >
@@ -866,7 +966,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]"
         >
           <span>
-            AS OF <span className="font-mono font-bold tabular-nums text-[var(--color-text-primary)]">{asOfDate ?? '---'}</span> 米国終値
+            AS OF <span className="font-mono font-bold tabular-nums text-[var(--color-text-primary)]">{asOfDate ?? unavailableRequestedDate ?? '---'}</span> 米国終値
           </span>
           <span className={`inline-flex items-center border px-1.5 py-px text-[10px] font-bold ${modeClass}`}>{modeLabel}</span>
           {adjustedToPriorSession && confirmedPit && (
@@ -879,19 +979,30 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           )}
         </div>
       </div>
+      {unavailableDateCopy && (
+        <div role="alert" className="border-b border-red-200 bg-red-50 px-4 py-3 text-[12px] font-bold leading-relaxed text-[var(--color-market-red-dark)]">
+          {unavailableDateCopy}
+        </div>
+      )}
       {historical && (
         <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
-          株価・6ステージ・物理指標は {linkDate} 終値時点、次回決算はその日までに取り込まれた予定です。
-          取引所・資産種別・業種分類・時価総額は当時の値がないため、絞り込み・並び替えに使えません（銘柄名・取引所の表示は現在の登録値）。
+          株価・6ステージ・物理指標は {linkDate} 終値時点の値です。
+          取引所・資産種別・業種分類・時価総額・次回決算は当時の値を保存していないため、絞り込み・並び替えに使えません（銘柄名・取引所の表示は現在の登録値）。
           {clearedForHistorical.length > 0 && (
             <span className="font-bold"> 解除した条件: {clearedForHistorical.join('・')}</span>
           )}
         </div>
       )}
+      {!historical && clearedForEarnings.length > 0 && (
+        <div role="note" data-testid="earnings-cleared-note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
+          決算予定を利用できないため、決算に関する条件を解除しました。現在の結果は元の条件では絞り込まれていません。
+          <span className="font-bold"> 解除した条件: {clearedForEarnings.join('・')}</span>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
         <div className="min-w-0" role="status" aria-live="polite">
           <div className="text-[14px] font-bold text-[var(--color-text-primary)]">
-            {loading ? '検索中…' : fetchError ? '取得失敗' : `${rows.length.toLocaleString('ja-JP')}件`}
+            {loading ? '検索中…' : fetchError ? '取得失敗' : dateUnavailable ? '表示不可' : `${rows.length.toLocaleString('ja-JP')}件`}
             {!loading && hasMore && <span className="ml-1.5 text-[12px] font-medium text-[var(--color-text-tertiary)]">続きあり</span>}
           </div>
           <div className="mt-0.5 text-[12px] text-[var(--color-text-tertiary)]">
@@ -1001,7 +1112,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               <option value="ma200Angle">200日線の角度</option>
               <option value="volume">出来高</option>
               <option value="avgVolume20">20日平均出来高</option>
-              <option value="earningsNextDate">次回決算日</option>
+              <option value="earningsNextDate" disabled={earningsLocked}>次回決算日{historicalLocked ? '（過去日は不可）' : earningsUnavailable ? '（決算予定が利用不可）' : ''}</option>
               <option value="shortTermCheckScore">短期チェック</option>
               <option value="pms">PMS</option>
               <option value="pfs">PFS</option>
@@ -1151,7 +1262,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
             </div>
           </Section>
 
-          <Section step={5} label="次回決算までで絞り込み・並び替え">
+          <Section step={5} label="次回決算までで絞り込み・並び替え" locked={historicalLocked ? '過去日は使えません · 当時の決算予定を保存していないため' : earningsUnavailable ? '現在は使えません · 決算予定を利用できないため' : undefined}>
             <div className="flex flex-wrap gap-1.5">
               {[
                 ['', '全て'],
@@ -1163,6 +1274,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsWindowDays === value}
+                  disabled={earningsLocked}
                   onClick={() => setEarningsWindowDays(value)}
                 >
                   {label}
@@ -1170,12 +1282,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'asc'}
+                disabled={earningsLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('asc') }}
               >
                 決算が近い順
               </Chip>
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'desc'}
+                disabled={earningsLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('desc') }}
               >
                 決算が遠い順
@@ -1192,6 +1306,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsTimeBucket === value}
+                  disabled={earningsLocked}
                   onClick={() => setEarningsTimeBucket(value)}
                 >
                   {label}
@@ -1199,14 +1314,17 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
             </div>
             <div className={`mt-2 border px-3 py-2 text-[10px] font-bold leading-5 ${
-              earningsMeta?.updatedAt
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-amber-200 bg-amber-50 text-amber-900'
+              historicalLocked || earningsMeta?.available === false || !earningsMeta?.updatedAt
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
             }`}>
-              {earningsMeta?.updatedAt
-                ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
-                : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
-              {historical && ` 過去日では ${linkDate} までに取り込まれた予定だけを使い、日数はその日から数えます。`}
+              {historicalLocked
+                ? '過去日の決算予定は保存していないため、表示・絞り込み・並び替えに使用しません。'
+                : earningsMeta?.available === false
+                  ? 'Finnhub決算予定は現在利用できないか、同期が古い状態です（未取得・期間未カバー・更新遅延）。決算条件と並び替えは使えません。推定日は表示しません。'
+                  : earningsMeta?.updatedAt
+                  ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
+                  : 'Finnhub決算予定の最終同期時刻を確認できません。決算条件と並び替えは選べますが、予定が古い可能性があります。推定日は表示しません。'}
             </div>
           </Section>
 
@@ -1431,7 +1549,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                     )}
                   </td>
                   <td className="px-3 py-3">
-                    {row.next_earnings_date ? (
+                    {!historicalLocked && row.next_earnings_date ? (
                       <>
                         <div className="font-mono text-[11px] font-black text-[var(--color-brand-900)]">
                           {row.next_earnings_date}
@@ -1457,7 +1575,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                       </>
                     ) : (
                       <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
-                        予定未取得
+                        {historicalLocked ? '過去値なし' : '予定を確認できません'}
                       </span>
                     )}
                   </td>
@@ -1570,7 +1688,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <td colSpan={columnMode === 'all' ? 14 : 11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   {loading
                     ? 'USデータを確認しています...'
-                    : displayMessage(message, hasScreeningConditions)}
+                    : unavailableDateCopy ?? displayMessage(message, hasScreeningConditions)}
                 </td>
               </tr>
             )}

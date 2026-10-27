@@ -65,7 +65,7 @@ export function createUsScreenerPitContract(input: {
       stages: 'POINT_IN_TIME',
       physicalMetrics: 'POINT_IN_TIME',
       universe: 'POINT_IN_TIME',
-      earnings: historical ? 'AS_OF_IMPORT_CUTOFF' : 'CURRENT_REFERENCE',
+      earnings: historical ? 'UNAVAILABLE' : 'CURRENT_REFERENCE',
       classification: historical ? 'UNAVAILABLE' : 'CURRENT_REFERENCE',
       marketCap: historical ? 'UNAVAILABLE' : 'CURRENT_REFERENCE',
       referenceMetadata: 'CURRENT_REFERENCE',
@@ -74,6 +74,7 @@ export function createUsScreenerPitContract(input: {
       ? [
           'Historical classifications are unavailable until effective-dated coverage exists.',
           'Historical market cap is unavailable until point-in-time shares outstanding exists.',
+          'Historical earnings schedules are unavailable until append-only schedule observations exist.',
           'Names, exchanges, and asset types are current reference metadata and are not analytical signals.',
         ]
       : [],
@@ -90,6 +91,8 @@ export function assertUsScreenerHistoricalFilters(
     assetType?: string | null
     marketCapMin?: number | null
     marketCapMax?: number | null
+    earningsWindowDays?: number | null
+    earningsTimeBucket?: string | null
     sort?: string | null
   },
 ): void {
@@ -109,6 +112,17 @@ export function assertUsScreenerHistoricalFilters(
   if (input.marketCapMin != null || input.marketCapMax != null || input.sort === 'marketCap') {
     throw new UsScreenerPitError(
       'Historical US market-cap filters require point-in-time shares outstanding coverage.',
+      422,
+    )
+  }
+  if (
+    input.earningsWindowDays != null
+    || input.earningsTimeBucket
+    || input.sort === 'earningsNextDate'
+    || input.sort === 'earningsDays'
+  ) {
+    throw new UsScreenerPitError(
+      'Historical US earnings filters require append-only schedule observation coverage.',
       422,
     )
   }

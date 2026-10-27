@@ -66,7 +66,7 @@ import {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-const CACHE_NAMESPACE = 'historical_analogs_period_v12'
+export const HISTORICAL_ANALOG_CACHE_NAMESPACE = 'historical_analogs_period_v13'
 const CACHE_TTL_MS = boundedEnv(
   'HISTORICAL_ANALOG_CACHE_TTL_MS',
   24 * 60 * 60 * 1_000,
@@ -112,6 +112,23 @@ type UniverseRow = {
   sector33_name: string | null
   margin_type: string | null
 }
+
+const CURRENT_REFERENCE_METADATA_CONTRACT = {
+  basis: 'CURRENT_REFERENCE',
+  source: 'ticker_universe',
+  asOf: null,
+  asOfStatus: 'NOT_VERSIONED',
+  fields: [
+    'name',
+    'marketSegment',
+    'sector17Name',
+    'sector33Name',
+    'marginType',
+  ],
+  usage: 'DISPLAY_AND_LOADED_PAGE_FILTER_ONLY',
+  affectsSimilarityRanking: false,
+  affectsMatchCount: false,
+} as const
 
 type VectorRow = {
   candidate_key: string
@@ -666,7 +683,7 @@ export async function GET(request: NextRequest) {
       })
     }
     const stored = await readServingCache<Record<string, unknown>>(
-      CACHE_NAMESPACE,
+      HISTORICAL_ANALOG_CACHE_NAMESPACE,
       cacheKey,
       CACHE_TTL_MS,
     )
@@ -1205,6 +1222,9 @@ export async function GET(request: NextRequest) {
         ticker,
         latestMarketDate,
         featureSet: `ma_period_sequence_score_v${MA_SEQUENCE_SCORE_VERSION}_index_v${MA_SEQUENCE_VERSION}`,
+        metadataBasis: {
+          tickerUniverse: CURRENT_REFERENCE_METADATA_CONTRACT,
+        },
         base: {
           ticker,
           name: metadata.get(ticker)?.name ?? null,
@@ -1242,7 +1262,7 @@ export async function GET(request: NextRequest) {
         const oldestKey = responseCache.keys().next().value
         if (oldestKey) responseCache.delete(oldestKey)
       }
-      writeServingCache(CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      writeServingCache(HISTORICAL_ANALOG_CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
         console.warn('historical analog period cache write failed:', error)
       })
     return NextResponse.json(payload)

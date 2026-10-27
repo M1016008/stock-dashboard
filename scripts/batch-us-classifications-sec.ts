@@ -4,12 +4,13 @@
 import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { marketClassifications, marketUniverse } from '@/lib/db/schema'
 import { US_SEC_SIC_TAXONOMY, sectorFromSic, usClassificationTickerAliases } from '@/lib/us-classification'
+import { requiredSecUserAgent, secRequestIntervalMs } from '@/lib/sec-edgar'
 import { and, eq, sql } from 'drizzle-orm'
 
 const MARKET = 'US'
 const SEC_COMPANY_TICKERS_URL = 'https://www.sec.gov/files/company_tickers_exchange.json'
 const SEC_SUBMISSIONS_BASE = 'https://data.sec.gov/submissions/'
-const RATE_LIMIT_MS = Number(process.env.SEC_RATE_LIMIT_MS ?? 150)
+const RATE_LIMIT_MS = secRequestIntervalMs()
 const LIMIT = Number(process.env.US_CLASSIFICATION_LIMIT ?? 0)
 const REFRESH = process.env.US_CLASSIFICATION_REFRESH === '1'
 const INCLUDE_INACTIVE = process.env.US_INCLUDE_INACTIVE === '1'
@@ -39,15 +40,11 @@ type Target = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function secUserAgent(): string {
-  return process.env.SEC_USER_AGENT?.trim() || `StockBoard/1.0 (${process.env.USER ?? 'local'}; set SEC_USER_AGENT for contact)`
-}
-
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, userAgent: string): Promise<T> {
   const res = await fetch(url, {
     headers: {
       accept: 'application/json',
-      'user-agent': secUserAgent(),
+      'user-agent': userAgent,
     },
   })
   if (!res.ok) {
@@ -57,8 +54,8 @@ async function fetchJson<T>(url: string): Promise<T> {
   return await res.json() as T
 }
 
-async function loadSecTickerMap(): Promise<Map<string, { cik: string; name: string; exchange: string }>> {
-  const payload = await fetchJson<SecCompanyTickersExchange>(SEC_COMPANY_TICKERS_URL)
+async function loadSecTickerMap(userAgent: string): Promise<Map<string, { cik: string; name: string; exchange: string }>> {
+  const payload = await fetchJson<SecCompanyTickersExchange>(SEC_COMPANY_TICKERS_URL, userAgent)
   const cikIndex = payload.fields.indexOf('cik')
   const nameIndex = payload.fields.indexOf('name')
   const tickerIndex = payload.fields.indexOf('ticker')
@@ -80,9 +77,9 @@ async function loadSecTickerMap(): Promise<Map<string, { cik: string; name: stri
   return map
 }
 
-async function fetchSubmission(cik: string): Promise<SecSubmission> {
+async function fetchSubmission(cik: string, userAgent: string): Promise<SecSubmission> {
   await sleep(RATE_LIMIT_MS)
-  return await fetchJson<SecSubmission>(`${SEC_SUBMISSIONS_BASE}CIK${cik}.json`)
+  return await fetchJson<SecSubmission>(`${SEC_SUBMISSIONS_BASE}CIK${cik}.json`, userAgent)
 }
 
 async function loadTargets(): Promise<Target[]> {
@@ -136,9 +133,10 @@ function buildRawJson(target: Target, secMatch: { cik: string; name: string; exc
 }
 
 async function main() {
+  const userAgent = requiredSecUserAgent()
   await ensureReady()
   const targets = await loadTargets()
-  const secTickers = await loadSecTickerMap()
+  const secTickers = await loadSecTickerMap(userAgent)
   let matched = 0
   let classified = 0
   let unknown = 0
@@ -160,7 +158,7 @@ async function main() {
 
     matched += 1
     try {
-      const submission = await fetchSubmission(secMatch.cik)
+      const submission = await fetchSubmission(secMatch.cik, userAgent)
       const industryCode = submission.sic?.trim() || null
       const industryName = submission.sicDescription?.trim() || null
       const sector = sectorFromSic(industryCode)

@@ -120,6 +120,18 @@ type AnalogResponse = {
   ticker: string
   latestMarketDate: string
   featureSet: string
+  metadataBasis: {
+    tickerUniverse: {
+      basis: 'CURRENT_REFERENCE'
+      source: 'ticker_universe'
+      asOf: null
+      asOfStatus: 'NOT_VERSIONED'
+      fields: string[]
+      usage: 'DISPLAY_AND_LOADED_PAGE_FILTER_ONLY'
+      affectsSimilarityRanking: false
+      affectsMatchCount: false
+    }
+  }
   base: {
     ticker: string
     name: string | null
@@ -260,10 +272,10 @@ const TABLE_SORT_OPTIONS: Array<{ value: AnalogTableSortKey; label: string }> = 
   { value: 'avgVolume30', label: '30日平均出来高' },
   { value: 'volumeRatio30', label: '出来高の平均比' },
   { value: 'ticker', label: '銘柄コード' },
-  { value: 'market', label: '市場' },
-  { value: 'sector17', label: '17業種' },
-  { value: 'sector33', label: '33業種' },
-  { value: 'margin', label: '貸借・信用区分' },
+  { value: 'market', label: '市場（現在参照）' },
+  { value: 'sector17', label: '17業種（現在参照）' },
+  { value: 'sector33', label: '33業種（現在参照）' },
+  { value: 'margin', label: '貸借・信用区分（現在参照）' },
 ]
 
 const ANALOG_MA_DEFAULTS: Record<
@@ -939,6 +951,15 @@ export function HistoricalAnalogExplorer({
             {data.search.truncated && <span className="font-black text-amber-700">候補上限到達</span>}
           </div>
 
+          <div
+            role="note"
+            className="mx-3 mt-2 border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold leading-relaxed text-amber-900 sm:mx-4"
+          >
+            市場・業種・貸借/信用区分は現在の銘柄台帳を参照しています（CURRENT_REFERENCE）。
+            過去時点の分類ではなく、類似順位・類似度・該当件数の計算には使用しません。
+            これらの絞り込みと並べ替えは、読み込み済み候補の表示だけに適用されます。
+          </div>
+
           <div className="mx-3 mt-3 grid grid-cols-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] sm:mx-4 sm:grid-cols-5">
             {[
               {
@@ -1200,7 +1221,7 @@ export function HistoricalAnalogExplorer({
               </div>
               <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
                 <label className="min-w-0">
-                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">市場</span>
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">市場（現在参照）</span>
                   <select
                     value={marketFilter}
                     onChange={(event) => setMarketFilter(event.target.value)}
@@ -1213,7 +1234,7 @@ export function HistoricalAnalogExplorer({
                   </select>
                 </label>
                 <label className="min-w-0">
-                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">17業種</span>
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">17業種（現在参照）</span>
                   <select
                     value={sector17Filter}
                     onChange={(event) => setSector17Filter(event.target.value)}
@@ -1226,7 +1247,7 @@ export function HistoricalAnalogExplorer({
                   </select>
                 </label>
                 <label className="min-w-0">
-                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">33業種</span>
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">33業種（現在参照）</span>
                   <select
                     value={sector33Filter}
                     onChange={(event) => setSector33Filter(event.target.value)}
@@ -1239,7 +1260,7 @@ export function HistoricalAnalogExplorer({
                   </select>
                 </label>
                 <label className="min-w-0">
-                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">貸借・信用</span>
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">貸借・信用（現在参照）</span>
                   <select
                     value={marginFilter}
                     onChange={(event) => setMarginFilter(event.target.value)}
@@ -1318,8 +1339,8 @@ export function HistoricalAnalogExplorer({
                   <tr>
                     <th className="w-10 px-2 py-2 text-center">類似順位</th>
                     <th className="px-2 py-2">銘柄・類似期間</th>
-                    <th className="px-2 py-2">市場・取引区分</th>
-                    <th className="px-2 py-2">17・33業種</th>
+                    <th className="px-2 py-2">市場・取引区分（現在参照）</th>
+                    <th className="px-2 py-2">17・33業種（現在参照）</th>
                     <th className="px-2 py-2">発生日</th>
                     <th className="px-2 py-2 text-center">ステージ</th>
                     <th className="px-2 py-2 text-right">総合</th>

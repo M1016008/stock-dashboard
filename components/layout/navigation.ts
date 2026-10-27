@@ -103,6 +103,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'イベント',
     searchTerms: '業績 発表',
   },
+  dailyClose: {
+    href: '/reports/daily-close',
+    label: '大引け概況',
+    description: '市場の騰落・売買代金・決算予定を日次確認',
+    icon: BarChart3,
+    commandVerb: '確認',
+    commandBadge: '市場',
+    searchTerms: '大引け 日次 市況 値上がり 値下がり 売買代金',
+  },
   mtfCloseCalendar: {
     href: '/mtf-close-calendar',
     label: 'MTF確定日',
@@ -283,6 +292,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'US市場',
     searchTerms: '米国株 SEC SIC sector industry 業種',
   },
+  usSectorEtfs: {
+    href: '/us/sector-etfs',
+    label: 'USセクターETF分析',
+    description: '主要11セクターETFの値動きと6ステージを比較',
+    icon: ChartCandlestick,
+    commandVerb: '業種',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 Select Sector SPDR ETF セクター',
+  },
   usMtfCloseCalendar: {
     href: '/us/mtf-close-calendar',
     label: 'US MTF確定日',
@@ -292,6 +310,24 @@ export const PAGE_CATALOG = {
     commandBadge: 'US市場',
     searchTerms: '米国株 MTF Close Calendar ローソク足 確定日 NYSE Nasdaq',
   },
+  usEarnings: {
+    href: '/us/earnings',
+    label: 'US決算カレンダー',
+    description: '正式同期済みの米国株決算予定を確認',
+    icon: CalendarDays,
+    commandVerb: '確認',
+    commandBadge: 'USイベント',
+    searchTerms: '米国株 earnings calendar Finnhub 決算 発表',
+  },
+  usDailyClose: {
+    href: '/us/daily-close',
+    label: 'US大引け概況',
+    description: '米国市場の騰落・売買代金・決算予定を日次確認',
+    icon: BarChart3,
+    commandVerb: '確認',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 大引け 日次 市況 breadth movers volume earnings',
+  },
   usScreener: {
     href: '/us/screener',
     label: 'USスクリーナー',
@@ -300,6 +336,15 @@ export const PAGE_CATALOG = {
     commandVerb: '探す',
     commandBadge: 'US探索',
     searchTerms: '米国株 条件検索 24か月足 2年足 上昇終値ライン',
+  },
+  usPeriodExplorer: {
+    href: '/us/period-explorer',
+    label: 'US期間ランキング',
+    description: '任意期間の値動き・Stage・流動性から米国株を探索',
+    icon: CalendarRange,
+    commandVerb: '探す',
+    commandBadge: 'US探索',
+    searchTerms: '米国株 期間分析 騰落率 出来高 SEC 業種ランキング',
   },
   usStageScreener: {
     href: '/us/stage-screener',
@@ -355,6 +400,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'US分析',
     searchTerms: '米国株 バックテスト',
   },
+  usTradeWorkbench: {
+    href: '/us/trade/workbench',
+    label: 'US売買候補',
+    description: 'Serving候補・6ステージ・SMAから注文案を確認',
+    icon: FlaskConical,
+    commandVerb: '計画',
+    commandBadge: 'US分析',
+    searchTerms: '米国株 trade workbench 売買 候補 注文 下書き',
+  },
   usChartDrill: {
     href: '/chart-drill?market=US',
     label: 'USチャートドリル',
@@ -363,6 +417,15 @@ export const PAGE_CATALOG = {
     commandVerb: '練習',
     commandBadge: 'US分析',
     searchTerms: '米国株 トレーニング',
+  },
+  usMa25mMonitor: {
+    href: '/us/ma25m-monitor',
+    label: 'US月足MA監視',
+    description: '3〜25か月線への接近・接触・クロスを監視',
+    icon: Radar,
+    commandVerb: '監視',
+    commandBadge: 'US監視',
+    searchTerms: '米国株 monthly MA 月足 移動平均 接触 クロス',
   },
   commoditiesDashboard: {
     href: '/commodities',
@@ -422,7 +485,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'market-overview', label: '市場全体', pageIds: ['marketMomentum'], column: 1 },
         { id: 'industries', label: '業種・テーマ', pageIds: ['sectors', 'sectorEtfs', 'themes'], column: 2 },
-        { id: 'events', label: 'イベント', pageIds: ['earnings', 'mtfCloseCalendar', 'materials'], column: 1 },
+        { id: 'events', label: 'イベント', pageIds: ['dailyClose', 'earnings', 'mtfCloseCalendar', 'materials'], column: 1 },
       ],
     },
     {
@@ -470,8 +533,8 @@ export const NAVIGATION_BY_AREA = {
       icon: BarChart3,
       sections: [
         { id: 'us-market-pulse', label: '市場を読む', pageIds: ['usMarketMomentum'], column: 1 },
-        { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors'], column: 2 },
-        { id: 'us-events', label: 'イベント', pageIds: ['usMtfCloseCalendar'], column: 1 },
+        { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors', 'usSectorEtfs'], column: 2 },
+        { id: 'us-events', label: 'イベント', pageIds: ['usDailyClose', 'usEarnings', 'usMtfCloseCalendar'], column: 1 },
       ],
     },
     {
@@ -481,7 +544,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '探索',
       icon: Search,
       sections: [
-        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usStageScreener', 'usTriggerDiscovery'], column: 1 },
+        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usPeriodExplorer', 'usStageScreener'], column: 1 },
         { id: 'us-conversation', label: '対話で探す', pageIds: ['usAiResearch'], column: 2 },
       ],
     },
@@ -493,7 +556,7 @@ export const NAVIGATION_BY_AREA = {
       icon: Activity,
       sections: [
         { id: 'us-models', label: '構造・AI', pageIds: ['usMlLens', 'usTransitions'], column: 1 },
-        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usChartDrill', 'customCharts'], column: 2 },
+        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usChartDrill', 'usTradeWorkbench', 'customCharts'], column: 2 },
       ],
     },
     {
@@ -503,7 +566,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '監視',
       icon: Star,
       sections: [
-        { id: 'us-continuous-monitoring', label: '継続監視', pageIds: ['watchlist'], column: 1 },
+        { id: 'us-continuous-monitoring', label: '継続監視', pageIds: ['watchlist', 'usMa25mMonitor', 'usTriggerDiscovery'], column: 1 },
       ],
     },
   ],

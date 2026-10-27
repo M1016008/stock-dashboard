@@ -34,7 +34,7 @@ assert.equal(historical.fields.price, 'POINT_IN_TIME')
 assert.equal(historical.fields.stages, 'POINT_IN_TIME')
 assert.equal(historical.fields.marketCap, 'UNAVAILABLE')
 assert.equal(historical.fields.classification, 'UNAVAILABLE')
-assert.equal(historical.fields.earnings, 'AS_OF_IMPORT_CUTOFF')
+assert.equal(historical.fields.earnings, 'UNAVAILABLE')
 assert.throws(
   () => assertUsScreenerHistoricalFilters(historical, { sector: 'Technology' }),
   (error) => error instanceof UsScreenerPitError && error.status === 422,
@@ -55,12 +55,21 @@ assert.throws(
   () => assertUsScreenerHistoricalFilters(historical, { sort: 'exchange' }),
   (error) => error instanceof UsScreenerPitError && error.status === 422,
 )
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { earningsWindowDays: 30 }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { sort: 'earningsNextDate' }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
 assert.doesNotThrow(() => assertUsScreenerHistoricalFilters(historical, { sort: 'ticker' }))
 
 const route = fs.readFileSync('app/api/us/screener/route.ts', 'utf8')
-assert.doesNotMatch(route, /todayInNewYork/)
+assert.match(route, /const earningsAnchorDate = pit\.mode === 'LATEST' \? todayInNewYork\(\) : date/)
 assert.match(route, /earningsImportCutoff/)
-assert.match(route, /imported_at < CAST\(strftime/)
+assert.match(route, /const earningsImportCutoff = earningsCoverage\.ok \? '' : 'AND 1 = 0'/)
+assert.match(route, /pit\.mode === 'LATEST'[\s\S]*historical_unavailable/)
 assert.match(route, /pit\.mode === 'HISTORICAL'/)
 assert.match(route, /WHEN '\$\{pit\.mode\}' = 'LATEST'/)
 assert.doesNotMatch(route, /AND u\.active = 1/)
@@ -76,8 +85,25 @@ assert.match(
 )
 assert.match(
   page,
+  /Array\.isArray\(params\.date\) \? params\.date\.join\(','\)/,
+  'Duplicate date parameters must remain invalid instead of collapsing to latest',
+)
+assert.match(
+  page,
   /initialAsOf=\{\{/,
   'US screener must pass the resolved initial PIT contract to its client',
+)
+assert.match(page, /availability: asOf\.availability/)
+assert.match(page, /earliestDate: asOf\.earliestDate/)
+assert.match(
+  client,
+  /if \(unavailableDateReason\) \{[\s\S]*?setLoading\(false\)[\s\S]*?return[\s\S]*?let cancelled = false/,
+  'Malformed and out-of-coverage dates must stop the screener request instead of fetching latest',
+)
+assert.match(
+  client,
+  /最新データは代わりに表示していません/,
+  'Unavailable date states must explicitly disclose that latest data was not substituted',
 )
 assert.match(
   client,

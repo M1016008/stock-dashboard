@@ -16,7 +16,7 @@ export default async function UsScreenerPage({
   searchParams?: Promise<{ date?: string | string[] }>
 }) {
   const params = searchParams ? await searchParams : {}
-  const requestedDate = typeof params.date === 'string' ? params.date : null
+  const requestedDate = Array.isArray(params.date) ? params.date.join(',') : params.date ?? null
   const asOf = await getUsDashboardAsOfState(requestedDate)
 
   return (
@@ -25,7 +25,9 @@ export default async function UsScreenerPage({
         initialAsOf={{
           requestedDate: asOf.requestedDate,
           resolvedDate: asOf.resolvedDate,
+          earliestDate: asOf.earliestDate,
           latestDate: asOf.latestDate,
+          availability: asOf.availability,
           mode: asOf.mode === 'latest' ? 'LATEST' : asOf.mode === 'historical' ? 'HISTORICAL' : null,
         }}
       />

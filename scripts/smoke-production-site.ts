@@ -73,12 +73,19 @@ const pages: Check[] = [
   '/us/analysis/backtest',
   '/us/analysis/ml-lens',
   '/us/analysis/transitions',
+  '/us/daily-close',
+  '/us/earnings',
+  '/us/ma25m-monitor',
   '/us/market-momentum',
   '/us/mtf-close-calendar',
+  '/us/period-explorer',
+  '/us/sector-etfs',
+  '/us/sector-etfs/XLK',
   '/us/screener',
   '/us/sectors',
   '/us/stage-screener',
   '/us/stock/AAPL',
+  '/us/trade/workbench',
   '/us/trigger-discovery',
   '/watchlist',
 ].map((pagePath) => ({ name: `page ${pagePath}`, path: pagePath, kind: 'html' }))
@@ -676,6 +683,11 @@ const apiChecks: Check[] = [
   { name: 'US quote', path: '/api/us/quote/AAPL', kind: 'json' },
   { name: 'US history', path: '/api/us/history/AAPL?period=1y&meta=1', kind: 'json' },
   { name: 'US search', path: '/api/us/search?q=AAPL', kind: 'json' },
+  { name: 'US daily close', path: '/api/us/daily-close', kind: 'json', requiredPaths: ['success', 'data.status'] },
+  { name: 'US monthly MA monitor', path: '/api/us/ma25m-monitor?period=all&status=all&limit=5', kind: 'json', requiredPaths: ['market', 'date', 'periods'] },
+  { name: 'US sector ETFs', path: '/api/us/sector-etfs', kind: 'json', requiredPaths: ['success', 'data.status'] },
+  { name: 'US sector ETF detail', path: '/api/us/sector-etfs/XLK', kind: 'json', requiredPaths: ['success', 'data.status', 'data.catalog.ticker'] },
+  { name: 'US trade candidates', path: '/api/us/trade-workbench-candidates?horizon=20&limit=5', kind: 'json' },
   {
     name: 'US screener',
     path: '/api/us/screener?limit=5&quality=all',
@@ -698,7 +710,7 @@ const apiChecks: Check[] = [
   { name: 'US ML status', path: '/api/us/ml-status/AAPL', kind: 'json' },
   { name: 'US hex dates', path: '/api/us/hex/available-dates?limit=5', kind: 'json', nonEmptyPaths: ['dates'] },
   { name: 'US hex', path: '/api/us/hex?timeframe=daily', kind: 'json' },
-  { name: 'US hex columnar wire', path: '/api/us/hex?timeframe=daily&wire=us-hex-columnar.v1', kind: 'json' },
+  { name: 'US hex columnar wire', path: '/api/us/hex?timeframe=daily&wire=us-hex-columnar.v2', kind: 'json' },
 ]
 
 function getPath(value: unknown, dottedPath: string): unknown {

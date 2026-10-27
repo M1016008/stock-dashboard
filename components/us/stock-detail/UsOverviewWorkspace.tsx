@@ -373,14 +373,22 @@ export function UsOverviewWorkspace({
                   {nextEarnings.hour === 'bmo' ? '寄付前'
                     : nextEarnings.hour === 'dmh' ? '取引時間中'
                       : nextEarnings.hour === 'amc' ? '引け後'
-                        : '時刻未定'}
+                        : '時刻不明'}
                   {nextEarnings.fiscalYear && nextEarnings.fiscalQuarter ? (
                     <span className="font-mono tabular-nums"> ・ {nextEarnings.fiscalYear} Q{nextEarnings.fiscalQuarter}</span>
                   ) : null}
                 </span>
+                <p
+                  className="m-0 mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]"
+                  data-earnings-schedule-status={nextEarnings.scheduleStatus}
+                >
+                  {nextEarnings.scheduleStatus === 'reported'
+                    ? '提供元に実績報告あり'
+                    : '提供元の予定日（企業発表による確認状態は不明・実績未報告）'}
+                </p>
               </div>
             ) : (
-              <p className="m-0 text-[12px] font-medium text-[var(--color-text-tertiary)]">予定未取得</p>
+              <p className="m-0 text-[12px] font-medium text-[var(--color-text-tertiary)]">次回決算日は確認できません（予定がないとは限りません）</p>
             )}
           </SheetRow>
 

@@ -460,9 +460,63 @@ function FundamentalViewTabs({ active, onSelect }: { active: UsFundamentalView; 
 /* ------------------------------------------------------------------ */
 
 const COVERAGE_LABEL: Record<UsFundamentalsModel['coverage']['status'], { text: string; tone: 'brand' | 'warning' }> = {
-  READY: { text: '主要fact取得済み', tone: 'brand' },
-  PARTIAL: { text: '一部欠損', tone: 'warning' },
+  READY: { text: '全区分取得済み', tone: 'brand' },
+  PARTIAL: { text: '一部区分に欠損', tone: 'warning' },
   UNAVAILABLE: { text: '財務fact未取得', tone: 'warning' },
+}
+
+type SectionCoverage = UsFundamentalsModel['coverage']['sections'][keyof UsFundamentalsModel['coverage']['sections']]
+
+const SECTION_COVERAGE_ROWS: Array<{ key: keyof UsFundamentalsModel['coverage']['sections']; label: string }> = [
+  { key: 'performance', label: '業績' },
+  { key: 'financialPosition', label: '財政状態' },
+  { key: 'cashFlow', label: 'キャッシュフロー' },
+  { key: 'capital', label: '株式・資本' },
+  { key: 'shareholderReturn', label: '株主還元' },
+]
+
+const SECTION_STATUS_TEXT: Record<SectionCoverage['status'], string> = {
+  READY: '取得済み',
+  PARTIAL: '一部欠損',
+  UNAVAILABLE: '未取得',
+}
+
+const MISSING_METRIC_LABEL: Record<string, string> = {
+  revenue: '売上高',
+  operating_profit: '営業利益',
+  net_income: '純利益',
+  eps: '基本EPS',
+  assets: '総資産',
+  liabilities: '負債合計',
+  equity: '純資産',
+  cash: '現金同等物',
+  current_assets: '流動資産',
+  current_liabilities: '流動負債',
+  current_debt: '短期有利子負債',
+  noncurrent_debt: '長期有利子負債',
+  operating_cash_flow: '営業CF',
+  investing_cash_flow: '投資CF',
+  financing_cash_flow: '財務CF',
+  capital_expenditure: '設備投資',
+  shares_outstanding: '発行済株式数',
+  weighted_average_shares: '加重平均株式数',
+  diluted_eps: '希薄化後EPS',
+  cash_dividends_paid: '現金配当支払',
+  share_repurchases: '自社株買い',
+}
+
+/** 区分別の取得状況。全体READYと混同しないよう、色で良否を示さず罫線の形だけで分ける。 */
+function SectionStatusTag({ status }: { status: SectionCoverage['status'] }) {
+  const style = status === 'READY'
+    ? 'border-solid border-[var(--color-border-strong)] text-[var(--color-text-secondary)]'
+    : status === 'PARTIAL'
+      ? 'border-dashed border-[var(--color-border-strong)] text-[var(--color-text-secondary)]'
+      : 'border-dotted border-[var(--color-border-strong)] text-[var(--color-text-tertiary)]'
+  return (
+    <span className={`inline-flex shrink-0 items-center whitespace-nowrap border bg-white px-1.5 py-px text-[11px] font-bold leading-4 ${style}`} style={{ borderRadius: 'var(--radius-tag)' }}>
+      {SECTION_STATUS_TEXT[status]}
+    </span>
+  )
 }
 
 function CoverageStrip({ model }: { model: UsFundamentalsModel }) {
@@ -510,13 +564,36 @@ function CoverageStrip({ model }: { model: UsFundamentalsModel }) {
           </div>
         ))}
       </MetricGrid>
+      {model.coverage.sections && (
+        <div className="border-t border-[var(--color-border-soft)]">
+          <h3 className="px-3 pt-2 text-[11px] font-bold leading-4 text-[var(--color-text-secondary)] sm:px-4">区分別の取得状況</h3>
+          <MetricGrid columns="md:grid-cols-3 xl:grid-cols-5">
+            {SECTION_COVERAGE_ROWS.map(({ key, label }) => {
+              const section = model.coverage.sections[key]
+              const missingLabels = section.missingMetrics.map((metric) => MISSING_METRIC_LABEL[metric] ?? metric)
+              return (
+                <div key={key} className={`${CELL} py-2`}>
+                  <div className="min-w-0 break-words text-[11px] font-bold leading-4 text-[var(--color-text-secondary)]">{label}</div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <SectionStatusTag status={section.status} />
+                    <span className="font-mono text-[12px] font-bold tabular-nums leading-4 text-[var(--color-text-primary)]">{section.available}/{section.expected}</span>
+                  </div>
+                  <div className="break-words text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+                    {missingLabels.length > 0 ? `欠損 ${missingLabels.length}: ${missingLabels.join('、')}` : '欠損なし'}
+                  </div>
+                </div>
+              )
+            })}
+          </MetricGrid>
+        </div>
+      )}
       {model.coverage.sourceFacts === 0 ? (
         <Notice tone="warning" className="m-3 sm:mx-4">
-          基準日時点で使える SEC Companyfacts の財務factがありません。業績・財務・倍率は「データなし」とし、Tiingo EOD の株価・配当由来の値だけを表示します。
+          基準日時点で使える SEC Companyfacts の財務factがありません（未報告または未取得で、0や取得エラーとは区別します）。業績・財務・倍率は「データなし」とし、Tiingo EOD の株価・配当由来の値だけを表示します。
         </Notice>
       ) : model.coverage.status === 'PARTIAL' ? (
         <Notice tone="info" className="m-3 sm:mx-4">
-          LTM売上高・総資産・発行済株式数のいずれかが未取得です。依存する指標は「データなし」になります。
+          一部の区分でSEC factが未報告または未取得です。0の値ではなく、取得エラーとも限りません。区分別の取得状況で欠損項目を確認してください。依存する指標は「データなし」になります。
         </Notice>
       ) : null}
     </section>
@@ -766,7 +843,7 @@ const PERFORMANCE_ROWS: Array<{ key: PerformanceMetric; label: string; signed?: 
   { key: 'operatingProfit', label: '営業利益' },
   { key: 'operatingMargin', label: '営業利益率' },
   { key: 'netIncome', label: '純利益' },
-  { key: 'eps', label: 'EPS(基本)' },
+  { key: 'eps', label: '基本EPS' },
 ]
 
 function PerformanceView({ model }: { model: UsFundamentalsModel }) {
@@ -880,56 +957,86 @@ function FinancialView({ model }: { model: UsFundamentalsModel }) {
     const word = sign === 1 ? 'プラス' : sign === -1 ? 'マイナス' : sign === 0 ? 'ゼロ' : null
     return [value.periodEnd ? `期間末 ${value.periodEnd}` : null, word].filter(Boolean).join(' · ') || null
   }
+  const { capital } = model
   return (
-    <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-      <PanelSection icon={Landmark} id="us-fundamental-balance" title="財政状態" lead="直近期末の貸借対照表(SEC)。同じ尺度で並べています。">
-        <BarRows
-          label="財政状態"
-          mode="value"
-          items={[
-            { key: 'assets', label: '総資産', sub: periodSub(financials.totalAssets), value: financials.totalAssets },
-            { key: 'equity', label: '純資産', sub: periodSub(financials.equity), value: financials.equity },
-            { key: 'cash', label: '現金同等物', sub: periodSub(financials.cash), value: financials.cash },
-          ]}
-        />
-        <div className="-mx-4 -mb-3.5 mt-3 border-t border-[var(--color-border-soft)] sm:-mx-5">
-          <MetricGrid columns="">
-            <MetricCell label="自己資本比率" basis="純資産 ÷ 総資産" value={summary.equityRatio} />
-            <MetricCell
-              label="ROE"
-              basis="LTM純利益 ÷ 期首・期末平均純資産"
-              value={summary.roe}
-              tip={(
-                <DefinitionTip term="ROE(自己資本利益率)">
-                  LTM純利益 ÷ LTM期間の期首と期末の純資産の平均。どちらかの純資産がなければデータなし、平均が0以下ならN/M。
-                </DefinitionTip>
-              )}
-            />
-          </MetricGrid>
-        </div>
-      </PanelSection>
+    <>
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <PanelSection icon={Landmark} id="us-fundamental-balance" title="財政状態" lead="直近期末の貸借対照表(SEC)。同じ尺度で並べています。">
+          <BarRows
+            label="財政状態"
+            mode="value"
+            items={[
+              { key: 'assets', label: '総資産', sub: periodSub(financials.totalAssets), value: financials.totalAssets },
+              { key: 'liabilities', label: '負債合計', sub: periodSub(financials.totalLiabilities), value: financials.totalLiabilities },
+              { key: 'equity', label: '純資産', sub: periodSub(financials.equity), value: financials.equity },
+              { key: 'cash', label: '現金同等物', sub: periodSub(financials.cash), value: financials.cash },
+              { key: 'current-assets', label: '流動資産', sub: periodSub(financials.currentAssets), value: financials.currentAssets },
+              { key: 'current-liabilities', label: '流動負債', sub: periodSub(financials.currentLiabilities), value: financials.currentLiabilities },
+              { key: 'total-debt', label: '有利子負債', sub: periodSub(financials.totalDebt), value: financials.totalDebt },
+            ]}
+          />
+          <div className="-mx-4 -mb-3.5 mt-3 border-t border-[var(--color-border-soft)] sm:-mx-5">
+            <MetricGrid columns="">
+              <MetricCell label="自己資本比率" basis="純資産 ÷ 総資産" value={summary.equityRatio} />
+              <MetricCell
+                label="ROE"
+                basis="LTM純利益 ÷ 期首・期末平均純資産"
+                value={summary.roe}
+                tip={(
+                  <DefinitionTip term="ROE(自己資本利益率)">
+                    LTM純利益 ÷ LTM期間の期首と期末の純資産の平均。どちらかの純資産がなければデータなし、平均が0以下ならN/M。
+                  </DefinitionTip>
+                )}
+              />
+              <MetricCell label="流動比率" basis="流動資産 ÷ 流動負債" value={financials.currentRatio} />
+              <MetricCell label="有利子負債比率" basis="有利子負債 ÷ 純資産" value={financials.debtToEquity} />
+            </MetricGrid>
+          </div>
+        </PanelSection>
 
-      <PanelSection icon={Banknote} id="us-fundamental-cashflow" title="キャッシュフロー" lead="LTM、なければ直近FY。0線の右がプラス、左がマイナス。">
-        <BarRows
-          label="キャッシュフロー"
-          mode="signed"
-          items={[
-            { key: 'ocf', label: '営業CF', sub: flowSub(financials.operatingCashFlow), value: financials.operatingCashFlow },
-            {
-              key: 'fcf',
-              label: 'FCF',
-              sub: flowSub(financials.freeCashFlow),
-              value: financials.freeCashFlow,
-              tip: (
-                <DefinitionTip term="FCF(フリーキャッシュフロー)">
-                  営業CF − 設備投資(有形固定資産の取得支出)。どちらかのSEC factがなければデータなし。
-                </DefinitionTip>
-              ),
-            },
-          ]}
-        />
+        <PanelSection icon={Banknote} id="us-fundamental-cashflow" title="キャッシュフロー" lead="LTM、なければ直近FY。0線の右がプラス、左がマイナス。FCF = 営業CF + 正規化後の設備投資(負値)、つまり営業CF − 設備投資の現金流出額。">
+          <BarRows
+            label="キャッシュフロー"
+            mode="signed"
+            items={[
+              { key: 'ocf', label: '営業CF', sub: flowSub(financials.operatingCashFlow), value: financials.operatingCashFlow },
+              {
+                key: 'fcf',
+                label: 'FCF',
+                sub: flowSub(financials.freeCashFlow),
+                value: financials.freeCashFlow,
+                tip: (
+                  <DefinitionTip term="FCF(フリーキャッシュフロー)">
+                    営業CF + 正規化後の設備投資(負値)。同じ値は営業CF − 設備投資の現金流出額(正の額)とも表せます。設備投資はSECの有形固定資産の取得支出を負のキャッシュフロー値に正規化したものです。どちらかのSEC factが未報告・未取得ならデータなし(0ではありません)。
+                  </DefinitionTip>
+                ),
+              },
+              { key: 'icf', label: '投資CF', sub: flowSub(financials.investingCashFlow), value: financials.investingCashFlow },
+              { key: 'fincf', label: '財務CF', sub: flowSub(financials.financingCashFlow), value: financials.financingCashFlow },
+              {
+                key: 'capex',
+                label: '設備投資',
+                sub: flowSub(financials.capitalExpenditure),
+                value: financials.capitalExpenditure,
+                tip: (
+                  <DefinitionTip term="設備投資(正規化後の符号)">
+                    SECの有形固定資産の取得支出(流出)を、キャッシュフローとして負の値に正規化して表示します。FCFは営業CFにこの負の値を足して求めます(営業CFから流出額を引くのと同じです)。
+                  </DefinitionTip>
+                ),
+              },
+            ]}
+          />
+        </PanelSection>
+      </div>
+
+      <PanelSection icon={FileText} id="us-fundamental-capital" title="株式・資本" lead="SEC開示の株式数と希薄化後EPS(業績タブの基本EPSとは別の値)。基準日までの最新値です。" bleed>
+        <MetricGrid columns="md:grid-cols-3">
+          <MetricCell label="発行済株式数" basis="直近開示(株)" value={capital.sharesOutstanding} />
+          <MetricCell label="加重平均株式数" basis="直近開示(株)" value={capital.weightedAverageShares} />
+          <MetricCell label="希薄化後EPS" basis="LTM、なければFY(SEC)" value={capital.dilutedEps} />
+        </MetricGrid>
       </PanelSection>
-    </div>
+    </>
   )
 }
 

@@ -79,6 +79,12 @@ async function request(query: string) {
   return { response, data: await response.json() as Record<string, any> }
 }
 
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
 const latest = await request('limit=10&quality=all')
 assert.equal(latest.response.status, 200)
 assert.equal(latest.data.date, '2026-01-02')
@@ -87,6 +93,38 @@ assert.equal(latest.data.rows.length, 1)
 assert.equal(latest.data.rows[0].ticker, 'AAPL')
 assert.equal(latest.data.rows[0].market_cap, 120_000)
 assert.equal(latest.data.rows[0].sector, 'Technology')
+assert.equal(latest.data.earnings.available, false)
+assert.equal(latest.data.rows[0].next_earnings_date, null)
+
+const unavailableCurrentEarningsFilter = await request('limit=10&quality=all&earningsWindowDays=30')
+assert.equal(unavailableCurrentEarningsFilter.response.status, 503)
+assert.equal(unavailableCurrentEarningsFilter.data.error, 'us_earnings_unavailable')
+
+const today = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date())
+const nextReportDate = addDays(today, 14)
+const coverageTo = addDays(today, 200)
+const nowEpoch = Math.floor(Date.now() / 1000)
+await execRun(
+  `INSERT INTO market_earnings_calendar (
+     market, ticker, report_date, hour, time_bucket, source, imported_at
+   ) VALUES ('US', 'AAPL', ?, 'amc', 'after_close', 'finnhub', ?)`,
+  [nextReportDate, nowEpoch],
+)
+await execRun(
+  `INSERT INTO market_data_runs (
+     market, job_type, status, started_at, finished_at, rows_inserted, payload_json
+   ) VALUES ('US', 'finnhub_earnings', 'success', ?, ?, 1, ?)`,
+  [nowEpoch - 10, nowEpoch, JSON.stringify({ from: today, to: coverageTo })],
+)
+const availableCurrentEarningsFilter = await request('limit=10&quality=all&earningsWindowDays=30')
+assert.equal(availableCurrentEarningsFilter.response.status, 200)
+assert.equal(availableCurrentEarningsFilter.data.earnings.available, true)
+assert.equal(availableCurrentEarningsFilter.data.rows[0].next_earnings_date, nextReportDate)
 
 const historical = await request('date=2025-01-04&limit=10&quality=all')
 assert.equal(historical.response.status, 200)
@@ -99,7 +137,7 @@ for (const row of historical.data.rows) {
   assert.equal(row.industry, null)
 }
 assert.deepEqual(historical.data.facets.exchanges, [])
-assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'AAPL').next_earnings_date, '2025-02-01')
+assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'AAPL').next_earnings_date, null)
 assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'MSFT').next_earnings_date, null)
 
 const blockedMarketCap = await request('date=2025-01-03&marketCapMin=1')
@@ -112,6 +150,8 @@ const blockedAssetType = await request('date=2025-01-03&assetType=Stock')
 assert.equal(blockedAssetType.response.status, 422)
 const blockedExchangeSort = await request('date=2025-01-03&sort=exchange')
 assert.equal(blockedExchangeSort.response.status, 422)
+const blockedEarnings = await request('date=2025-01-03&earningsWindowDays=30')
+assert.equal(blockedEarnings.response.status, 422)
 const invalidDate = await request('date=2025%2F01%2F03')
 assert.equal(invalidDate.response.status, 400)
 const impossibleDate = await request('date=2025-02-30')

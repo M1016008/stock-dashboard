@@ -35,7 +35,7 @@ export interface HexMapStock {
   code: string
   name: string
   sector_large: string
-  market_cap: number
+  market_cap: number | null
   stage: number | null
   sector_small?: string | null
   sector17_name?: string | null
@@ -131,7 +131,11 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
   const [sortKey, setSortKey] = useState<SortKey>(() => parseSortKey(searchParams.get('sort')))
   const [sortOrder, setSortOrder] = useState<SortOrder>(() => parseOrder(searchParams.get('order')))
   const [rowLimit, setRowLimit] = useState(ROW_STEP)
-  const hasMarketCapData = data.some((stock) => stock.market_cap > 0)
+  const hasMarketCapData = data.some((stock) => (stock.market_cap ?? 0) > 0)
+
+  useEffect(() => {
+    if (!hasMarketCapData && selectedMarketCapRange !== 'all') setSelectedMarketCapRange('all')
+  }, [hasMarketCapData, selectedMarketCapRange])
 
   useEffect(() => {
     replaceCurrentUrlFilters({
@@ -183,7 +187,7 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
   }, [data, selections, hasSelection])
   const filterByMarketCap = (stock: HexMapStock) => {
     if (isUs) {
-      const val = stock.market_cap
+      const val = stock.market_cap ?? 0
       switch (selectedMarketCapRange) {
         case '-300m': return val > 0 && val < 300e6
         case '300m-2b': return val >= 300e6 && val < 2e9
@@ -193,7 +197,7 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
         default: return true
       }
     }
-    const val = stock.market_cap / 100000000
+    const val = (stock.market_cap ?? 0) / 100000000
     switch (selectedMarketCapRange) {
       case '-50': return val < 50
       case '50-100': return val >= 50 && val < 100

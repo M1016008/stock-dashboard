@@ -8,6 +8,7 @@ import { buildShortTermCheck } from '@/lib/short-term-check'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
 import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { evaluateUsEarningsCoverage, todayInNewYork, type UsEarningsCoverageRun } from '@/lib/queries/us-earnings'
 import {
   assertUsScreenerHistoricalFilters,
   createUsScreenerPitContract,
@@ -85,6 +86,8 @@ type UsScreenerPayload = {
   twoYearLineRegistry?: TwoYearLineSearchMetadata | null
   earnings: {
     source: 'finnhub'
+    available: boolean
+    reason: 'ready' | 'no_successful_run' | 'range_uncovered' | 'stale' | 'historical_unavailable'
     updatedAt: string | null
     latestRun: {
       status: string
@@ -108,6 +111,12 @@ function numeric(value: unknown): number | null {
   if (value == null || value === '') return null
   const n = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(n) ? n : null
+}
+
+function addIsoDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
 }
 
 function numericParam(searchParams: URLSearchParams, key: string): number | null {
@@ -342,7 +351,7 @@ export async function GET(request: NextRequest) {
     const earningsTimeBucket = EARNINGS_TIME_BUCKETS.has(earningsTimeBucketValue)
       ? earningsTimeBucketValue
       : ''
-    const earningsAnchorDate = date
+    const earningsAnchorDate = pit.mode === 'LATEST' ? todayInNewYork() : date
     const avgVolumeMinParam = searchParams.get('avgVolumeMin')?.trim()
     const priceMinParam = searchParams.get('priceMin')?.trim()
     const priceMaxParam = searchParams.get('priceMax')?.trim()
@@ -358,8 +367,37 @@ export async function GET(request: NextRequest) {
       assetType,
       marketCapMin,
       marketCapMax,
+      earningsWindowDays,
+      earningsTimeBucket,
       sort,
     })
+    const earningsCoverageRun = pit.mode === 'LATEST'
+      ? await execGet<UsEarningsCoverageRun>(`
+          SELECT
+            json_extract(payload_json, '$.from') AS fromDate,
+            json_extract(payload_json, '$.to') AS toDate,
+            finished_at AS finishedAt
+          FROM market_data_runs
+          WHERE market = 'US' AND job_type = 'finnhub_earnings' AND status = 'success'
+          ORDER BY id DESC LIMIT 1
+        `).catch(() => undefined)
+      : undefined
+    const earningsCoverage = pit.mode === 'LATEST'
+      ? evaluateUsEarningsCoverage(earningsCoverageRun, {
+          from: earningsAnchorDate,
+          to: addIsoDays(earningsAnchorDate, 180),
+        })
+      : { ok: false as const, reason: 'historical_unavailable' as const }
+    const earningsRequested = earningsWindowDays != null
+      || Boolean(earningsTimeBucket)
+      || sort === 'earningsNextDate'
+      || sort === 'earningsDays'
+    if (!earningsCoverage.ok && earningsRequested) {
+      return NextResponse.json({
+        error: 'us_earnings_unavailable',
+        reason: earningsCoverage.reason,
+      }, { status: 503 })
+    }
     const cacheTtlMs = screenerCacheTtlMs()
     const cacheKey = stableCacheKey({
       requestedDate,
@@ -396,6 +434,8 @@ export async function GET(request: NextRequest) {
       earningsWindowDays,
       earningsTimeBucket,
       earningsAnchorDate,
+      earningsCoverageFinishedAt: earningsCoverageRun?.finishedAt ?? null,
+      earningsCoverageReason: earningsCoverage.reason,
       pitMode: pit.mode,
       avgVolumeMin: avgVolumeMin != null && Number.isFinite(avgVolumeMin) ? avgVolumeMin : null,
       priceMin: priceMin != null && Number.isFinite(priceMin) ? priceMin : null,
@@ -635,9 +675,9 @@ export async function GET(request: NextRequest) {
        AND c.ticker = s.ticker
        AND c.taxonomy = ?
        AND c.effective_from = '0000-01-01'`
-    const earningsImportCutoff = pit.mode === 'HISTORICAL'
-      ? `AND imported_at < CAST(strftime('%s', date((SELECT today FROM earnings_clock), '+1 day')) AS INTEGER)`
-      : ''
+    // The current projection is mutable. Until append-only schedule observations exist,
+    // historical queries must not treat imported_at as proof of the provider state at that date.
+    const earningsImportCutoff = earningsCoverage.ok ? '' : 'AND 1 = 0'
     const args: Array<string | number> = [earningsAnchorDate]
     if (pit.mode === 'LATEST') args.push(taxonomy)
     args.push(date, date)
@@ -700,6 +740,7 @@ export async function GET(request: NextRequest) {
         SELECT ticker, MIN(report_date) AS report_date
         FROM market_earnings_calendar INDEXED BY market_earnings_market_date_idx
         WHERE market = 'US'
+          AND source = 'finnhub'
           AND report_date >= (SELECT today FROM earnings_clock)
           ${earningsImportCutoff}
         GROUP BY ticker
@@ -769,6 +810,7 @@ export async function GET(request: NextRequest) {
         ON earnings.market = 'US'
        AND earnings.ticker = s.ticker
        AND earnings.report_date = next_earnings.report_date
+       AND earnings.source = 'finnhub'
       ${physicalMetricJoin}
       WHERE s.market = 'US' AND s.date = ?
         AND (${pit.mode === 'LATEST' ? 'COALESCE(u.active, 1) = 1' : '1 = 1'})
@@ -1015,7 +1057,9 @@ export async function GET(request: NextRequest) {
       twoYearLineRegistry: twoYearLineMetadata,
       earnings: {
         source: 'finnhub',
-        updatedAt: earningsSync?.value
+        available: earningsCoverage.ok,
+        reason: earningsCoverage.reason,
+        updatedAt: earningsCoverage.ok && earningsSync?.value
           ? new Date(earningsSync.value * 1000).toISOString()
           : null,
         latestRun: earningsRun ? {

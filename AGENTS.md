@@ -10,16 +10,17 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## データソース方針 (Phase 3.5 以降)
 
-このプロジェクトは**すべての株式データを J-Quants API から取得する**。
+このプロジェクトは市場ごとに承認済みの一次ソースを固定する。
 
-- **第一参照**: J-Quants API (Premium プラン契約)
-- **補完**: J-Quants で取得できないデータに限り別ソースを使う。**ただし都度判断・相談**
+- **日本株の第一参照**: J-Quants API (Premium プラン契約)
+- **米国株の第一参照**: Tiingo EOD。企業開示・SIC分類は SEC EDGAR / Companyfacts
+- **補完**: 各市場の一次ソースで取得できないデータに限り別ソースを使う。**ただし都度判断・相談**
   (勝手に Yahoo Finance 等にフォールバックしない)
 - **Yahoo Finance は使用しない** (Phase 3.5 で完全廃止、lib/yahoo-finance.ts も削除済み)
 
 ## 認証
 
-J-Quants v2 の **API キー方式** (`x-api-key` ヘッダ) を使う。
+日本株は J-Quants v2 の **API キー方式** (`x-api-key` ヘッダ) を使う。
 
 - 環境変数: `JQUANTS_API_KEY` のみ
 - API キーは**有効期限なし** (再発行・削除はダッシュボードで可能)
