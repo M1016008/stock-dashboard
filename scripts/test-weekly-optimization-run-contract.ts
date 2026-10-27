@@ -728,9 +728,14 @@ try {
   assert.match(afterStartMessage, /generation=unknown/)
   assert.match(afterStartMessage, /promotion-journal/)
   assert.match(afterStartMessage, /weekly-ml\.building/)
+  assert.match(afterStartMessage, /analog-sequence-us-/)
+  assert.match(afterStartMessage, /\.db-wal/)
+  assert.match(afterStartMessage, /\.db-shm/)
+  assert.match(afterStartMessage, /pre-fixture-basis-\*/)
   assert.match(afterStartMessage, /pre-weekly-ml-\*/)
   assert.match(afterStartMessage, /restore may already have completed/i)
   assert.match(afterStartMessage, /publication is not confirmed/i)
+  assert.match(afterStartMessage, /Do not modify, restore, republish, promote, delete, or adopt/)
 
   await assert.rejects(
     () => withWeeklyModelRecoveryGuard({

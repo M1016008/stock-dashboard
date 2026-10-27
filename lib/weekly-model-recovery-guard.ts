@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { OperatorActionRequiredError } from '@/lib/operational-exit'
 import {
   assertNoIncompleteSqlitePromotion,
@@ -40,6 +41,12 @@ export function weeklyModelRecoveryProtectedState(
   const foundationShadowPath = env.US_ADJUSTED_FOUNDATION_SHADOW_PATH?.trim()
     ? path.resolve(env.US_ADJUSTED_FOUNDATION_SHADOW_PATH)
     : `${primaryPath}.${priceBasis}.building`
+  const analogPrimaryPath = env.ANALOG_US_DB_PATH?.trim()
+    ? path.resolve(env.ANALOG_US_DB_PATH)
+    : path.join(path.dirname(primaryPath), `analog-sequence-us-v${MA_SEQUENCE_VERSION}.db`)
+  const analogShadowPath = env.US_ADJUSTED_FOUNDATION_ANALOG_SHADOW_PATH?.trim()
+    ? path.resolve(env.US_ADJUSTED_FOUNDATION_ANALOG_SHADOW_PATH)
+    : `${analogPrimaryPath}.${priceBasis}.building`
   const weeklyShadowPath = `${primaryPath}.weekly-ml.building`
   const foundationJournalPath = resolveSqlitePromotionJournalPath(primaryPath, priceBasis, env)
   const weeklyJournalPath = resolveWeeklyMlPromotionJournalPath(primaryPath)
@@ -49,7 +56,11 @@ export function weeklyModelRecoveryProtectedState(
     artifacts: [
       ...sqliteFamily(primaryPath),
       ...sqliteFamily(foundationShadowPath),
+      ...sqliteFamily(analogPrimaryPath),
+      ...sqliteFamily(analogShadowPath),
       ...sqliteFamily(weeklyShadowPath),
+      `${primaryPath}.pre-${priceBasis}-*`,
+      `${analogPrimaryPath}.pre-${priceBasis}-*`,
       `${primaryPath}.pre-weekly-ml-*`,
       foundationJournalPath,
       weeklyJournalPath,
