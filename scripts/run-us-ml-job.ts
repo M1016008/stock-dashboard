@@ -948,6 +948,7 @@ async function promoteWeeklyShadow(args: {
   let lock: UpdateLockHandle | null = null
   let heartbeat: ReturnType<typeof setInterval> | null = null
   let heartbeatError: unknown = null
+  let promotionAttempted = false
   let journal: SqlitePromotionJournal = {
     version: 1,
     transactionId: `weekly-ml-${process.pid}-${timestamp}`,
@@ -988,7 +989,10 @@ async function promoteWeeklyShadow(args: {
         ...plan,
         checkpoint: checkpointDb,
         clone: cloneFile,
-        beforeReplace: assertLockOwned,
+        beforeReplace: async () => {
+          await assertLockOwned()
+          promotionAttempted = true
+        },
       })
       journal = {
         ...journal,
@@ -998,6 +1002,18 @@ async function promoteWeeklyShadow(args: {
       writeSqlitePromotionJournal(journalPath, journal)
       removeSqlitePromotionJournal(journalPath)
     } catch (error) {
+      if (!promotionAttempted) {
+        try {
+          removeSqlitePromotionJournal(journalPath)
+        } catch (journalError) {
+          throw new OperatorActionRequiredError(
+            `US weekly/full promotion did not begin, but its prepared journal could not be removed. `
+            + `${promotionRecoveryMessage(journalPath, journal)}`,
+            { cause: journalError },
+          )
+        }
+        throw error
+      }
       journal = {
         ...journal,
         updatedAt: new Date().toISOString(),

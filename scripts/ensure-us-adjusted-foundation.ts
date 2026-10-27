@@ -1445,12 +1445,12 @@ async function main(): Promise<void> {
           let analyticsPromoted = false
           try {
             if (analogPlan) {
-              analogPromotionAttempted = true
               analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, async () => {
                 await assertPromotionLockOwned()
                 if (deferredPromotionSignal) {
                   throw new Error(`Analog promotion cancelled by ${deferredPromotionSignal}`)
                 }
+                analogPromotionAttempted = true
               })
               updatePromotionJournal('analog-promoted')
               console.log(
@@ -1467,12 +1467,12 @@ async function main(): Promise<void> {
                 throw new Error(`Analytics promotion cancelled by ${deferredPromotionSignal}`)
               }
             }
-            analyticsPromotionAttempted = true
             const analyticsPromotion = await promoteAdjustedShadow(analyticsPlan.backupPath, async () => {
               await assertPromotionLockOwned()
               if (deferredPromotionSignal) {
                 throw new Error(`Analytics promotion cancelled by ${deferredPromotionSignal}`)
               }
+              analyticsPromotionAttempted = true
             })
             analyticsPromoted = true
             updatePromotionJournal('analytics-promoted')

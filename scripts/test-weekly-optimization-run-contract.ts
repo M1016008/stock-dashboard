@@ -436,6 +436,32 @@ try {
   )
   assert.equal(fs.existsSync(shadow), false)
 
+  const deferredPrimary = path.join(fixtureRoot, 'deferred-primary.db')
+  const deferredShadow = path.join(fixtureRoot, 'deferred-shadow.db')
+  const deferredBackup = path.join(fixtureRoot, 'deferred-backup.db')
+  fs.writeFileSync(deferredPrimary, 'deferred-old')
+  fs.writeFileSync(deferredShadow, 'deferred-new')
+  let deferredBeforeReplace = false
+  await assert.rejects(
+    () => promoteSqliteGeneration({
+      primaryPath: deferredPrimary,
+      shadowPath: deferredShadow,
+      backupPath: deferredBackup,
+      checkpoint: async () => {
+        throw new DeferredExecutionError('fixture checkpoint busy')
+      },
+      clone: (source, target) => fs.copyFileSync(source, target),
+      beforeReplace: () => {
+        deferredBeforeReplace = true
+      },
+    }),
+    (error: unknown) => error instanceof DeferredExecutionError,
+  )
+  assert.equal(deferredBeforeReplace, false, 'a busy checkpoint must stop before replacement starts')
+  assert.equal(fs.readFileSync(deferredPrimary, 'utf8'), 'deferred-old')
+  assert.equal(fs.readFileSync(deferredShadow, 'utf8'), 'deferred-new')
+  assert.equal(fs.existsSync(deferredBackup), false)
+
   const stale = path.join(fixtureRoot, 'analytics.db.building')
   const quarantine = `${stale}.stale-lineage-fixture`
   fs.writeFileSync(stale, 'stale-db')
@@ -826,6 +852,8 @@ assert.match(runner, /assertServingOutputsCompatible\(contract, paths\)/)
 assert.match(runner, /JSON\.stringify\(first\) !== JSON\.stringify\(second\)/)
 assert.match(foundation, /acquireUsMlProcessLock\('adjusted-foundation-promotion'\)/)
 assert.match(foundation, /rollbackSqliteGeneration\(analogPromotion, checkpointDb\)/)
+assert.match(foundation, /before file replacement[\s\S]*analogPromotionAttempted = true/)
+assert.match(foundation, /before file replacement[\s\S]*analyticsPromotionAttempted = true/)
 assert.match(foundation, /writeAnalogMetadata\(adjustedAnalogShadowDbPath, 'price_basis'/)
 assert.match(foundation, /FOUNDATION_SOURCE_LINEAGE_KEY/)
 assert.match(foundation, /resumableAdjustedShadowExists\(expectedSourceLineageSha256\)/)
@@ -858,6 +886,7 @@ assert.match(generationManager, /assessWeeklyUsSourceBoundary\(boundary!, source
 assert.match(generationManager, /parseWeeklyOptimizationRunContract[\s\S]*expectedTradingDate/)
 assert.match(weeklyWrapper, /captureWeeklyUsSourceBoundary/)
 assert.match(usMlJob, /captureWeeklyUsSourceBoundary/)
+assert.match(usMlJob, /if \(!promotionAttempted\)[\s\S]*removeSqlitePromotionJournal\(journalPath\)[\s\S]*throw error/)
 assert.match(generationManager, /US generation promotion requires a weekly run contract or pinned source boundary/)
 assert.match(analogReader, /analogSequenceIdentities/)
 assert.match(analogReader, /assertAnalogClientGenerationCurrent\(market, client, identity\)/)
@@ -914,7 +943,10 @@ assert.match(usMlJob, /seedWeeklyShadow\(usAnalyticsDbPath, weeklyShadowPath\)/)
 assert.match(usMlJob, /promoteWeeklyShadow\(/)
 assert.match(usMlJob, /assertPinnedSourceCurrent\(sourcePin!\)/)
 assert.match(usMlJob, /acquireUsStockboardUpdateLock\('us_model_generation_promotion'/)
-assert.match(usMlJob, /beforeReplace: assertLockOwned/)
+assert.match(
+  usMlJob,
+  /beforeReplace: async \(\) => \{[\s\S]*await assertLockOwned\(\)[\s\S]*promotionAttempted = true/,
+)
 assert.ok(
   usMlJob.indexOf('await runFullHistory(env') < usMlJob.indexOf('await promoteWeeklyShadow({'),
   'full-history work must finish in the shadow before promotion',
