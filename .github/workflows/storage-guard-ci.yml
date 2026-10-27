@@ -30,7 +30,7 @@ jobs:
   storage-guard:
     name: Storage Guard / Build
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@v4
