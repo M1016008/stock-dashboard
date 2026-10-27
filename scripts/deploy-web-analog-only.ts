@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { artifactTreeIdentity, verifySmaReleaseManifest } from '@/lib/release/artifact-manifest'
+import { activeArtifactTreeIdentity, artifactTreeIdentity, verifySmaReleaseManifest } from '@/lib/release/artifact-manifest'
 import {
   sha256File,
   verifySmaReleasePreflightProof,
@@ -312,7 +312,7 @@ function verifyRollbackGeneration(): void {
   if (readBuildId(live) !== proof.rollback.buildId || path.resolve(proof.rollback.artifactRoot) !== live) {
     throw new Error('rollback_artifact_identity_mismatch')
   }
-  const rollbackTree = artifactTreeIdentity(live)
+  const rollbackTree = activeArtifactTreeIdentity(live)
   if (rollbackTree.treeSha256 !== proof.rollback.artifactTreeSha256) throw new Error('rollback_artifact_tree_mismatch')
   if (!fs.lstatSync(nodeModules).isSymbolicLink()) throw new Error('production_runtime_link_required')
   const currentRuntimeTarget = path.resolve(releaseRoot, fs.readlinkSync(nodeModules))
@@ -417,7 +417,7 @@ const adapter: WebAnalogReleaseAdapter = {
       },
       rollback: () => {
         return transaction.rollback(() => {
-          if (artifactTreeIdentity(live).treeSha256 !== proof.rollback.artifactTreeSha256) {
+          if (activeArtifactTreeIdentity(live).treeSha256 !== proof.rollback.artifactTreeSha256) {
             throw new Error('restored_artifact_tree_mismatch')
           }
           verifyRuntime(path.dirname(proof.rollback.runtimeNodeModulesTarget), proof.rollback.runtimeIdentitySha256)
@@ -441,8 +441,8 @@ const adapter: WebAnalogReleaseAdapter = {
     }
   },
   commit: () => {
-    if (artifactTreeIdentity(live).treeSha256 !== releaseManifest.treeSha256) throw new Error('active_artifact_tree_mismatch')
-    if (artifactTreeIdentity(previous).treeSha256 !== proof.rollback.artifactTreeSha256) throw new Error('rollback_artifact_tree_changed')
+    if (activeArtifactTreeIdentity(live).treeSha256 !== releaseManifest.treeSha256) throw new Error('active_artifact_tree_mismatch')
+    if (activeArtifactTreeIdentity(previous).treeSha256 !== proof.rollback.artifactTreeSha256) throw new Error('rollback_artifact_tree_changed')
     verifyRuntime(releaseRuntime, expectedRuntimeIdentity, proof.runtime.manifestSha256, proof.runtime.lockSha256)
     verifyRuntime(path.dirname(proof.rollback.runtimeNodeModulesTarget), proof.rollback.runtimeIdentitySha256)
     transaction.commit()

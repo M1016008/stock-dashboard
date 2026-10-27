@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs, { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { artifactTreeIdentity, SMA_RELEASE_MANIFEST, verifySmaReleaseManifest } from '@/lib/release/artifact-manifest'
+import { activeArtifactTreeIdentity, artifactTreeIdentity, SMA_RELEASE_MANIFEST, verifySmaReleaseManifest } from '@/lib/release/artifact-manifest'
 import {
   PRODUCTION_AGENT_INVENTORY,
   WEB_ANALOG_TARGETS,
@@ -268,6 +268,13 @@ async function main(): Promise<void> {
     ...identity,
   }))
   assert.equal(verifySmaReleaseManifest(root, 'a'.repeat(40)).treeSha256, identity.treeSha256)
+  fs.mkdirSync(path.join(root, 'server', 'route-cache'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'server', 'route-cache', 'runtime-cache.body'), 'runtime-cache')
+  assert.equal(activeArtifactTreeIdentity(root).treeSha256, identity.treeSha256,
+    'known Next.js runtime cache must not change the active generation identity')
+  assert.notEqual(artifactTreeIdentity(root).treeSha256, identity.treeSha256,
+    'the immutable artifact manifest must still reject runtime cache in a source artifact')
+  fs.rmSync(path.join(root, 'server', 'route-cache'), { recursive: true })
   fs.writeFileSync(path.join(root, 'server', 'fixture.js'), 'tampered')
   assert.throws(() => verifySmaReleaseManifest(root, 'a'.repeat(40)), /candidate_manifest_content_mismatch/)
   fs.rmSync(root, { recursive: true })
