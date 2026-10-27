@@ -1287,11 +1287,13 @@ export async function GET(request: NextRequest) {
     const generationChanged = message.includes(ANALOG_GENERATION_CHANGED)
       || message.includes('analog_sequence_generation_changed')
     const promotionPending = /promotion (?:journal|requires operator review)/i.test(message)
-    const retryable = generationChanged || promotionPending
+    const retryable = generationChanged
     return NextResponse.json({
       error: indexMissing
         ? message
-        : retryable
+        : promotionPending
+          ? '分析データの更新が未完了です。運用者の確認が必要です。'
+          : retryable
           ? '分析データが更新されたため、最新世代で検索をやり直してください。'
           : '本質類似局面の検索に失敗しました。',
       code: indexMissing
@@ -1303,7 +1305,7 @@ export async function GET(request: NextRequest) {
           : 'ANALOG_SEQUENCE_SEARCH_FAILED',
       retryable,
     }, {
-      status: indexMissing || retryable ? 503 : 500,
+      status: indexMissing || generationChanged || promotionPending ? 503 : 500,
       headers: retryable ? { 'Retry-After': '2' } : undefined,
     })
   }

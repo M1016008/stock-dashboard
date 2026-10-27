@@ -34,6 +34,10 @@ export function resolveSqlitePromotionJournalPath(
   return `${shadowPath}.promotion-journal.json`
 }
 
+export function resolveWeeklyMlPromotionJournalPath(analyticsDbPath: string): string {
+  return `${path.resolve(analyticsDbPath)}.weekly-ml.building.promotion-journal.json`
+}
+
 export function writeSqlitePromotionJournal(
   journalPath: string,
   journal: SqlitePromotionJournal,
@@ -50,7 +54,7 @@ export function promotionRecoveryMessage(
   journal: SqlitePromotionJournal,
 ): string {
   const phaseMeaning: Record<SqlitePromotionJournal['phase'], string> = {
-    prepared: 'no replacement is attested as complete',
+    prepared: 'replacement may or may not have occurred; inspect primary and shadow before recovery',
     'analog-promoted': 'Analog may be new while analytics remains old',
     'analytics-promoted': 'both rename steps were journaled but final journal removal is unconfirmed',
     'compensation-failed': 'the live Analog/analytics pair is uncertain after failed compensation',

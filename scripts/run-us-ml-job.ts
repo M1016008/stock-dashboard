@@ -24,6 +24,7 @@ import {
   promotionRecoveryMessage,
   removeSqlitePromotionJournal,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
   type SqlitePromotionJournal,
   type SqlitePromotionPlan,
   writeSqlitePromotionJournal,
@@ -938,7 +939,7 @@ async function promoteWeeklyShadow(args: {
     shadowPath,
     backupPath: `${primaryPath}.pre-weekly-ml-${timestamp}`,
   }
-  const journalPath = `${shadowPath}.promotion-journal.json`
+  const journalPath = resolveWeeklyMlPromotionJournalPath(primaryPath)
   assertNoIncompleteSqlitePromotion(journalPath)
   let lock: UpdateLockHandle | null = null
   let heartbeat: ReturnType<typeof setInterval> | null = null
@@ -1029,7 +1030,7 @@ async function main(): Promise<void> {
   )
   assertNoIncompleteSqlitePromotion(promotionJournalPath)
   const weeklyShadowPath = `${usAnalyticsDbPath}.weekly-ml.building`
-  const weeklyPromotionJournalPath = `${weeklyShadowPath}.promotion-journal.json`
+  const weeklyPromotionJournalPath = resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath)
   if (mode !== 'daily') assertNoIncompleteSqlitePromotion(weeklyPromotionJournalPath)
   const usMlLock = acquireUsMlProcessLock(mode)
   if (!usMlLock) {

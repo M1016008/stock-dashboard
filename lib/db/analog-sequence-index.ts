@@ -8,6 +8,7 @@ import { resolveUsAnalyticsDbPath } from '@/lib/db/us-analytics'
 import {
   assertNoIncompleteSqlitePromotion,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
 } from '@/lib/sqlite-promotion-journal'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import {
@@ -117,6 +118,9 @@ export function assertAnalogSequenceGenerationReadable(market: AnalogSequenceMar
     US_ADJUSTED_PRICE_BASIS,
   )
   assertNoIncompleteSqlitePromotion(journalPath)
+  assertNoIncompleteSqlitePromotion(
+    resolveWeeklyMlPromotionJournalPath(resolveUsAnalyticsDbPath()),
+  )
 }
 
 export function hasAnalogSequenceIndex(market: AnalogSequenceMarket): boolean {

@@ -18,6 +18,7 @@ import {
   assertNoIncompleteSqlitePromotion,
   removeSqlitePromotionJournal,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
   writeSqlitePromotionJournal,
 } from '@/lib/sqlite-promotion-journal'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
@@ -527,6 +528,27 @@ try {
   try {
     createAnalogReadFixture('2026-10-23')
     assert.equal((await readAnalogSequenceIndexMeta('US'))?.sourceDate, '2026-10-23')
+    const weeklyJournalPath = resolveWeeklyMlPromotionJournalPath(process.env.US_ANALYTICS_DB_PATH)
+    writeSqlitePromotionJournal(weeklyJournalPath, {
+      version: 1,
+      transactionId: 'weekly-fixture-transaction',
+      phase: 'prepared',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      analog: null,
+      analytics: {
+        primaryPath: process.env.US_ANALYTICS_DB_PATH,
+        shadowPath: `${process.env.US_ANALYTICS_DB_PATH}.weekly-ml.building`,
+        backupPath: `${process.env.US_ANALYTICS_DB_PATH}.pre-weekly-fixture`,
+      },
+      error: 'fixture interrupted promotion',
+    })
+    assert.throws(
+      () => assertAnalogSequenceGenerationReadable('US'),
+      /requires operator review.*phase=prepared/,
+      'US public analog reads must fail closed while a weekly promotion journal exists',
+    )
+    removeSqlitePromotionJournal(weeklyJournalPath)
     const firstAnalogGeneration = analogSequenceGenerationIdentity('US')
     fs.renameSync(analogReadPath, analogReadBackup)
     createAnalogReadFixture('2026-10-26')
@@ -795,6 +817,8 @@ assert.match(historicalAnalogRoute, /assertHistoricalAnalogGeneration\(market, s
 assert.match(historicalAnalogRoute, /ANALOG_GENERATION_CHANGED/)
 assert.match(historicalAnalogRoute, /analog_sequence_generation_changed/)
 assert.match(historicalAnalogRoute, /ANALOG_GENERATION_PROMOTION_PENDING/)
+assert.match(historicalAnalogRoute, /const retryable = generationChanged/)
+assert.doesNotMatch(historicalAnalogRoute, /const retryable = generationChanged \|\| promotionPending/)
 assert.doesNotMatch(historicalAnalogRoute, /\n\s+message,\n/)
 assert.match(runner, /acquirePidProcessLock\(lockPath, 'Weekly optimization'\)/)
 assert.match(runner, /spawnLockedProcessGroup/)
