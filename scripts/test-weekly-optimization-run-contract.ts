@@ -695,7 +695,8 @@ try {
     () => assertTruncateCheckpointComplete({
       rows: [{ busy: 1, log: 12, checkpointed: 4 }],
     }, 'fixture.db'),
-    /checkpoint incomplete.*busy=1, log=12, checkpointed=4/,
+    (error: unknown) => error instanceof DeferredExecutionError
+      && /checkpoint incomplete.*busy=1, log=12, checkpointed=4/.test(error.message),
   )
 
   const legacyLiveLockPath = path.join(fixtureRoot, 'legacy-live.lock')

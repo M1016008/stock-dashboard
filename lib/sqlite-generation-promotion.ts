@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { DeferredExecutionError } from '@/lib/operational-exit'
 
 export type SqliteGenerationPromotion = {
   primaryPath: string
@@ -65,9 +66,10 @@ export function assertTruncateCheckpointComplete(result: CheckpointResult, dbPat
     throw new Error(`SQLite TRUNCATE checkpoint returned an invalid status for ${dbPath}`)
   }
   if (busy !== 0 || checkpointedFrames !== logFrames) {
-    throw new Error(
+    throw new DeferredExecutionError(
       `SQLite TRUNCATE checkpoint incomplete for ${dbPath}: `
-      + `busy=${busy}, log=${logFrames}, checkpointed=${checkpointedFrames}`,
+      + `busy=${busy}, log=${logFrames}, checkpointed=${checkpointedFrames}; `
+      + 'defer promotion until readers release the WAL',
     )
   }
 }
