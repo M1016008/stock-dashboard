@@ -241,8 +241,14 @@ async function main(): Promise<void> {
   assert.match(source, /\{ \.\.\.process\.env, NODE_ENV: 'production' \}/,
     'runtime dependency identity must use the same production npm environment as runtime construction')
   assert.ok(source.indexOf('const proof = verifySmaReleasePreflightProof') < source.indexOf('const transaction = new WebAnalogReleaseTransaction'))
-  assert.ok(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)!.length >= 3,
-    'proof must be checked initially, after staging, and immediately before activation')
+  assert.equal(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)?.length, 1,
+    'the initial proof check must require every attested path to be unchanged')
+  assert.match(source, /verifyProofDuringOwnedTransaction\('PREPARED'\)/,
+    'the staged recheck must distinguish the runner-owned lock and journal')
+  assert.match(source, /verifyProofDuringOwnedTransaction\('TARGETS_FROZEN'\)/,
+    'the activation recheck must verify runner ownership immediately before mutation')
+  assert.match(source, /transaction\.assertOwnedState\(expectedStage\)/)
+  assert.match(source, /errorEvidence\(error\)/, 'nested release failures must remain observable')
   assert.match(source, /WEB_ANALOG_TARGETS/)
   const contract = readFileSync('lib/release/web-analog-only.ts', 'utf8')
   for (const label of WEB_ANALOG_TARGETS) assert.match(contract, new RegExp(label.replaceAll('.', '\\.')))

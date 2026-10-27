@@ -85,6 +85,7 @@ export interface VerifyPreflightProofOptions {
   expectedBuildId: string
   expectedArtifactTreeSha256: string
   expectedRuntimeIdentitySha256: string
+  expectedOwnedAbsentPaths?: readonly string[]
   now?: Date
 }
 
@@ -191,15 +192,31 @@ function attestationObservation(attestation: PreflightAttestation): Record<strin
   return { purpose: attestation.purpose, path: absolute, kind: attestation.kind, sha256: actualHash }
 }
 
-export function currentPreflightStateSha256(attestations: PreflightAttestation[]): string {
+export function currentPreflightStateSha256(
+  attestations: PreflightAttestation[],
+  expectedOwnedAbsentPaths: readonly string[] = [],
+): string {
   const seenPaths = new Set<string>()
+  const ownedPaths = new Set(expectedOwnedAbsentPaths.map((entry) => path.resolve(entry)))
+  const observedOwnedPaths = new Set<string>()
   const observations = attestations.map((attestation) => {
     if (!REQUIRED_PURPOSES.includes(attestation.purpose)) throw new Error(`preflight_attestation_purpose_invalid:${attestation.purpose}`)
     const key = path.resolve(attestation.path)
     if (seenPaths.has(key)) throw new Error(`preflight_attestation_duplicate_path:${key}`)
     seenPaths.add(key)
+    if (ownedPaths.has(key)) {
+      if (attestation.kind !== 'absent'
+        || !['writer-lock', 'promotion-journal'].includes(attestation.purpose)) {
+        throw new Error(`preflight_owned_transition_invalid:${attestation.purpose}:${key}`)
+      }
+      observedOwnedPaths.add(key)
+      return { purpose: attestation.purpose, path: key, kind: attestation.kind }
+    }
     return attestationObservation(attestation)
   }).sort((left, right) => `${left.purpose}:${left.path}`.localeCompare(`${right.purpose}:${right.path}`))
+  for (const ownedPath of ownedPaths) {
+    if (!observedOwnedPaths.has(ownedPath)) throw new Error(`preflight_owned_transition_not_attested:${ownedPath}`)
+  }
   const purposes = new Set(observations.map((observation) => observation.purpose))
   for (const purpose of REQUIRED_PURPOSES) {
     if (!purposes.has(purpose)) throw new Error(`preflight_attestation_missing:${purpose}`)
@@ -229,7 +246,7 @@ export function verifySmaReleasePreflightProof(options: VerifyPreflightProofOpti
   if (proof.candidate.buildId !== options.expectedBuildId) throw new Error('preflight_build_mismatch')
   if (proof.candidate.artifactTreeSha256 !== options.expectedArtifactTreeSha256) throw new Error('preflight_artifact_mismatch')
   if (proof.runtime.identitySha256 !== options.expectedRuntimeIdentitySha256) throw new Error('preflight_runtime_mismatch')
-  const actualStateHash = currentPreflightStateSha256(proof.attestations)
+  const actualStateHash = currentPreflightStateSha256(proof.attestations, options.expectedOwnedAbsentPaths)
   if (actualStateHash !== proof.stateSha256) throw new Error('preflight_state_hash_mismatch')
   return proof
 }

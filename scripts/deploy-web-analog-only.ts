@@ -69,6 +69,18 @@ function waitForHealth(url: string, timeoutSeconds = 60): void {
   throw new Error(`health_timeout:${url}`)
 }
 
+function errorEvidence(error: unknown): unknown {
+  if (error instanceof AggregateError) {
+    return {
+      name: error.name,
+      message: error.message,
+      causes: error.errors.map(errorEvidence),
+    }
+  }
+  if (error instanceof Error) return { name: error.name, message: error.message }
+  return { name: 'NonError', message: String(error) }
+}
+
 function directoryBytes(root: string): number {
   let bytes = 0
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
@@ -343,6 +355,15 @@ const transaction = new WebAnalogReleaseTransaction({
     rollbackRuntimeNodeModulesTarget: proof.rollback.runtimeNodeModulesTarget,
   },
 })
+const ownedTransactionAttestationPaths = [transactionPaths.lock, transactionPaths.journal] as const
+
+function verifyProofDuringOwnedTransaction(expectedStage: 'PREPARED' | 'TARGETS_FROZEN'): void {
+  transaction.assertOwnedState(expectedStage)
+  verifySmaReleasePreflightProof({
+    ...proofOptions,
+    expectedOwnedAbsentPaths: ownedTransactionAttestationPaths,
+  })
+}
 
 let targetsFrozen = false
 let restartedTargets = 0
@@ -373,12 +394,12 @@ const adapter: WebAnalogReleaseAdapter = {
     verifyRollbackGeneration()
     verifyRuntime(releaseRuntime, expectedRuntimeIdentity, proof.runtime.manifestSha256, proof.runtime.lockSha256)
     verifyRuntime(path.dirname(proof.rollback.runtimeNodeModulesTarget), proof.rollback.runtimeIdentitySha256)
-    verifySmaReleasePreflightProof(proofOptions)
+    verifyProofDuringOwnedTransaction('PREPARED')
     const freeze = signalTargetsBestEffort('SIGSTOP')
     targetsFrozen = freeze.signaled > 0
     if (freeze.errors.length > 0) throw new AggregateError(freeze.errors, 'release_target_freeze_failed')
     transaction.markTargetsFrozen()
-    verifySmaReleasePreflightProof(proofOptions)
+    verifyProofDuringOwnedTransaction('TARGETS_FROZEN')
     transaction.activate()
     candidateRestartPhase = true
   },
@@ -441,7 +462,7 @@ runWebAnalogRelease(adapter).then((result) => {
   const unresolved = unresolvedPaths.length > 0
   console.error(JSON.stringify({
     status: unresolved ? 'HOLD' : recovery?.stage === 'ROLLED_BACK' ? 'ROLLED_BACK_UNHEALTHY' : 'PRECHECK_FAILED',
-    error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    error: errorEvidence(error),
     transaction: recovery,
     unresolvedPaths,
     servicesMayBeSigstopped: targetsFrozen,

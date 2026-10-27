@@ -166,6 +166,25 @@ export class WebAnalogReleaseTransaction {
 
   ownsMutableState(): boolean { return this.journal !== null }
 
+  assertOwnedState(expectedStage: ReleaseTransactionStage): void {
+    if (!this.journal || this.journal.stage !== expectedStage) {
+      throw new Error(`release_transaction_owned_stage_mismatch:${expectedStage}:${this.journal?.stage ?? 'missing'}`)
+    }
+    const diskJournal = JSON.parse(fs.readFileSync(this.paths.journal, 'utf8')) as ReleaseTransactionJournal
+    if (JSON.stringify(diskJournal) !== JSON.stringify(this.journal)) {
+      throw new Error('release_transaction_owned_journal_mismatch')
+    }
+    const lock = JSON.parse(fs.readFileSync(this.paths.lock, 'utf8')) as {
+      transactionId?: unknown
+      pid?: unknown
+      startedAt?: unknown
+    }
+    if (lock.transactionId !== this.transactionId || lock.pid !== process.pid
+      || typeof lock.startedAt !== 'string' || !Number.isFinite(Date.parse(lock.startedAt))) {
+      throw new Error('release_transaction_owned_lock_mismatch')
+    }
+  }
+
   generationMayHaveChanged(): boolean {
     const stage = this.currentStage()
     return stage !== null && !['PREPARING', 'PREPARED', 'COMMITTED'].includes(stage)

@@ -164,5 +164,49 @@ for (const blocked of [failedSafe, writerLock, journal]) {
   fs.unlinkSync(blocked)
 }
 
+{
+  const current = proof()
+  const hash = writeProof(current)
+  fs.writeFileSync(writerLock, JSON.stringify({ transactionId: 'owned', pid: process.pid }))
+  fs.writeFileSync(journal, JSON.stringify({ transactionId: 'owned', stage: 'PREPARED' }))
+  assert.equal(verifySmaReleasePreflightProof({
+    proofPath: proofFile,
+    expectedProofSha256: hash,
+    expectedBaselineCommit: BASELINE,
+    expectedCandidateCommit: CANDIDATE,
+    expectedBuildId: BUILD,
+    expectedArtifactTreeSha256: ARTIFACT,
+    expectedRuntimeIdentitySha256: RUNTIME,
+    expectedOwnedAbsentPaths: [writerLock, journal],
+    now: new Date('2026-10-28T00:05:00.000Z'),
+  }).candidate.commit, CANDIDATE)
+  fs.writeFileSync(files.jpSource, 'changed-during-owned-transaction')
+  assert.throws(() => verifySmaReleasePreflightProof({
+    proofPath: proofFile,
+    expectedProofSha256: hash,
+    expectedBaselineCommit: BASELINE,
+    expectedCandidateCommit: CANDIDATE,
+    expectedBuildId: BUILD,
+    expectedArtifactTreeSha256: ARTIFACT,
+    expectedRuntimeIdentitySha256: RUNTIME,
+    expectedOwnedAbsentPaths: [writerLock, journal],
+    now: new Date('2026-10-28T00:05:00.000Z'),
+  }), /attestation_changed:jp-source-generation/)
+  fs.writeFileSync(files.jpSource, 'jp-source.json')
+  assert.throws(() => verifySmaReleasePreflightProof({
+    proofPath: proofFile,
+    expectedProofSha256: hash,
+    expectedBaselineCommit: BASELINE,
+    expectedCandidateCommit: CANDIDATE,
+    expectedBuildId: BUILD,
+    expectedArtifactTreeSha256: ARTIFACT,
+    expectedRuntimeIdentitySha256: RUNTIME,
+    expectedOwnedAbsentPaths: [failedSafe],
+    now: new Date('2026-10-28T00:05:00.000Z'),
+  }), /owned_transition_invalid/)
+  fs.unlinkSync(writerLock)
+  fs.unlinkSync(journal)
+}
+
 fs.rmSync(root, { recursive: true })
 console.log('test-sma-release-preflight: ok')

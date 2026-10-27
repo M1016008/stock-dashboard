@@ -130,6 +130,18 @@ if (process.argv[2] === '--crash-child') {
   const run = fixture()
   const tx = transaction(run)
   tx.prepare()
+  tx.assertOwnedState('PREPARED')
+  assert.throws(() => tx.assertOwnedState('TARGETS_FROZEN'), /owned_stage_mismatch/)
+  fs.writeFileSync(run.paths.lock, `${JSON.stringify({ transactionId: 'foreign', pid: process.pid, startedAt: new Date().toISOString() })}\n`)
+  assert.throws(() => tx.assertOwnedState('PREPARED'), /owned_lock_mismatch/)
+  tx.rollback()
+  fs.rmSync(run.root, { recursive: true })
+}
+
+{
+  const run = fixture()
+  const tx = transaction(run)
+  tx.prepare()
   assert.equal(tx.rollback(), false)
   assert.equal(hashTree(run.paths.live), run.liveHash)
   assert.equal(path.resolve(run.root, fs.readlinkSync(run.paths.nodeModules)), run.oldRuntime)
