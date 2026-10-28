@@ -26,7 +26,7 @@ import {
   type SmaLabResult,
 } from '@/lib/sma-dynamics-lab'
 import { createTimeframeBucketContext, getTimeframeBucketKey } from '@/lib/timeframes'
-import { buildSmaLabChartModel, dateToChartTime, futureRegionPixelRange } from '@/lib/sma-dynamics-chart-model'
+import { buildSmaLabChartModel, dateToChartTime, futureRegionPixelRange, splitLineRuns } from '@/lib/sma-dynamics-chart-model'
 import { addCalendarDays, SMA_LAB_TIMEFRAMES, smaLabCalendar, type SmaLabTimeframeId } from '@/lib/sma-dynamics-timeframes'
 import { findSmaDynamicsFixture, fixtureSessionDates, SMA_DYNAMICS_FIXTURES } from '@/lib/sma-dynamics-fixtures'
 import { MOVING_AVERAGE_COLORS } from '@/lib/chart-colors'
@@ -164,6 +164,11 @@ assert.deepEqual(futureRegionPixelRange({
 assert.equal(futureRegionPixelRange({
   anchorX: 420, nextAnchorX: 430, lastX: 450, nextLastX: 460, previousLastX: 440, paneWidth: 400,
 }), null)
+
+// Nulls split a line into runs so the chart can never draw a segment across a missing value.
+assert.deepEqual(splitLineRuns([{ time: 1, value: 1 }, { time: 2, value: 2 }, { time: 3 }, { time: 4 }, { time: 5, value: 5 }, { time: 6 }]),
+  [[{ time: 1, value: 1 }, { time: 2, value: 2 }], [{ time: 5, value: 5 }]])
+assert.deepEqual(splitLineRuns([{ time: 1 }]), [])
 
 // ---------------------------------------------------------------------------
 // Independent reference: naive session numbering, grouping and SMA.
