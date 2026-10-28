@@ -79,7 +79,9 @@ export interface WebAnalogReleaseAdapter {
   snapshotAgents(): AgentSnapshot | Promise<AgentSnapshot>
   assertHealthy(): void | Promise<void>
   promote(): void | Promise<void>
-  restore(): void | Promise<void>
+  restore(): void | boolean | Promise<void | boolean>
+  needsRecovery?(): boolean | Promise<boolean>
+  commit?(): void | Promise<void>
   kickstart(label: (typeof WEB_ANALOG_TARGETS)[number]): void | Promise<void>
 }
 
@@ -117,6 +119,47 @@ export interface WebAnalogReleaseResult {
   rolledBack: false
 }
 
+export interface BestEffortSignalResult {
+  signaled: number
+  errors: string[]
+}
+
+export interface ReleaseRecoveryResult {
+  restartRequired: boolean
+  freeze: BestEffortSignalResult
+  resume: BestEffortSignalResult
+}
+
+/** Keep rollback independent from freeze failures; resume targets only after verified recovery. */
+export function recoverReleaseWithBestEffortSignals(options: {
+  freezeRequired: boolean
+  signal: (signal: 'SIGSTOP' | 'SIGCONT') => BestEffortSignalResult
+  rollback: () => boolean
+}): ReleaseRecoveryResult {
+  const empty = (): BestEffortSignalResult => ({ signaled: 0, errors: [] })
+  let freeze = empty()
+  let resume = empty()
+  let restartRequired = false
+  let rollbackError: unknown
+  try {
+    if (options.freezeRequired) freeze = options.signal('SIGSTOP')
+    restartRequired = options.rollback()
+  } catch (error) {
+    rollbackError = error
+  }
+  if (!rollbackError) {
+    if (options.freezeRequired || freeze.signaled > 0) resume = options.signal('SIGCONT')
+  }
+  if (rollbackError) {
+    throw new AggregateError([rollbackError, ...freeze.errors, ...resume.errors], 'release_rollback_failed_hold')
+  }
+  return {
+    restartRequired: restartRequired || freeze.errors.length > 0 || resume.errors.length > 0,
+    freeze,
+    resume,
+  }
+}
+
 /** Promote and restart exactly two existing services. Any post-promotion error restores the prior build. */
 export async function runWebAnalogRelease(adapter: WebAnalogReleaseAdapter): Promise<WebAnalogReleaseResult> {
   const before = await adapter.snapshotAgents()
@@ -131,22 +174,38 @@ export async function runWebAnalogRelease(adapter: WebAnalogReleaseAdapter): Pro
     await adapter.assertHealthy()
     const after = await adapter.snapshotAgents()
     assertAgentStatePreserved(before, after)
+    await adapter.commit?.()
     return { before, after, rolledBack: false }
   } catch (primaryError) {
     const rollbackErrors: unknown[] = []
-    if (promoted) {
-      try { await adapter.restore() } catch (error) { rollbackErrors.push(error) }
-      for (const label of WEB_ANALOG_TARGETS) {
-        try { await adapter.kickstart(label) } catch (error) { rollbackErrors.push(error) }
-      }
-      try { await adapter.assertHealthy() } catch (error) { rollbackErrors.push(error) }
+    const recoveryRequired = promoted || await adapter.needsRecovery?.() === true
+    if (recoveryRequired) {
+      let restored = false
+      let restartRequired = true
       try {
-        const restored = await adapter.snapshotAgents()
-        assertAgentStatePreserved(before, restored)
+        restartRequired = await adapter.restore() !== false
+        restored = true
       } catch (error) {
         rollbackErrors.push(error)
       }
+      if (restored) {
+        if (restartRequired) {
+          for (const label of WEB_ANALOG_TARGETS) {
+            try { await adapter.kickstart(label) } catch (error) { rollbackErrors.push(error) }
+          }
+        }
+        try { await adapter.assertHealthy() } catch (error) { rollbackErrors.push(error) }
+        try {
+          const restoredSnapshot = await adapter.snapshotAgents()
+          assertAgentStatePreserved(before, restoredSnapshot)
+        } catch (error) {
+          rollbackErrors.push(error)
+        }
+      }
     }
-    throw new AggregateError([primaryError, ...rollbackErrors], promoted ? 'web_analog_release_rolled_back' : 'web_analog_release_preflight_failed')
+    throw new AggregateError(
+      [primaryError, ...rollbackErrors],
+      recoveryRequired ? 'web_analog_release_rolled_back_or_held' : 'web_analog_release_preflight_failed',
+    )
   }
 }
