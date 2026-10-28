@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useId, useState, type FormEvent, type ReactNode } from 'react'
 import {
   addSmaLabPeriodsFromText,
   smaLabColor,
@@ -70,8 +70,20 @@ export function ControlRow({ label, children, aside }: { label: string; children
 
 export function periodStatusText(summary: SmaLabPeriodSummary, barNoun: string): string {
   if (summary.status === 'insufficient_history') return `履歴不足: ${barNoun}あと${summary.shortfall}本 (${summary.available}/${summary.required})`
-  if (summary.status === 'invalid_window') return `計算不可: 窓内に使用できない終値 ${summary.invalidBarsInWindow.length}本`
+  if (summary.status === 'invalid_window') {
+    const visibleDates = summary.invalidBarsInWindow.slice(0, 3)
+    const more = summary.invalidBarsInWindow.length - visibleDates.length
+    const dates = `${visibleDates.join(', ')}${more > 0 ? ` ほか${more}件` : ''}`
+    return `計算不可: 窓内に欠損または無効な終値 ${summary.invalidBarsInWindow.length}本 (${dates})`
+  }
   return ''
+}
+
+/** Status copy for display: each date stays on one line so a narrow note never splits `2026-07-17`. */
+export function keepDatesTogether(text: string): ReactNode {
+  return text.split(/(\d{4}-\d{2}-\d{2})/).map((part, index) => (
+    index % 2 === 1 ? <span key={index} className="whitespace-nowrap">{part}</span> : <Fragment key={index}>{part}</Fragment>
+  ))
 }
 
 /** SMA on/off chips. Unavailable periods stay toggleable so the reason stays visible next to the chart. */
@@ -104,7 +116,7 @@ export function SmaPeriodPicker({
             aria-pressed={on}
             disabled={disabled}
             onClick={() => onToggle(period)}
-            title={`SMA${period}${unavailable ? ' (現在の足では計算できません)' : ''}`}
+            title={`SMA${period}${unavailable && summary ? ` (${periodStatusText(summary, '足')})` : ''}`}
             className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-[var(--radius-sm)] border px-1.5 font-mono text-[11px] font-bold tabular-nums disabled:cursor-not-allowed disabled:opacity-45 sm:min-h-7 sm:min-w-0 ${
               on
                 ? 'border-[var(--color-border-strong)] bg-white text-[var(--color-text-primary)] shadow-[inset_0_-2px_0_var(--sma-color)]'

@@ -14,19 +14,21 @@ export interface SmaReleaseManifest {
   treeSha256: string
 }
 
-function files(root: string, current = root): string[] {
+function files(root: string, current = root, ignoreRuntimeCache = false): string[] {
   return fs.readdirSync(current, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(current, entry.name)
-    if (entry.isDirectory()) return files(root, full)
+    const relative = path.relative(root, full)
+    if (ignoreRuntimeCache && relative === path.join('server', 'route-cache')) return []
+    if (entry.isDirectory()) return files(root, full, ignoreRuntimeCache)
     if (entry.isFile() && path.relative(root, full) !== SMA_RELEASE_MANIFEST) return [full]
     return []
   })
 }
 
-export function artifactTreeIdentity(root: string) {
+function treeIdentity(root: string, ignoreRuntimeCache: boolean) {
   const digest = createHash('sha256')
   let contentBytes = 0
-  const entries = files(root).sort((left, right) => left.localeCompare(right))
+  const entries = files(root, root, ignoreRuntimeCache).sort((left, right) => left.localeCompare(right))
   for (const file of entries) {
     const relative = path.relative(root, file)
     const content = fs.readFileSync(file)
@@ -38,6 +40,20 @@ export function artifactTreeIdentity(root: string) {
     contentBytes += content.length
   }
   return { fileCount: entries.length, contentBytes, treeSha256: digest.digest('hex') }
+}
+
+/** Exact immutable artifact identity used to create and verify a release manifest. */
+export function artifactTreeIdentity(root: string) {
+  return treeIdentity(root, false)
+}
+
+/**
+ * Active Next.js generations may create server/route-cache after startup.
+ * Keep that documented runtime cache outside generation identity while every
+ * shipped artifact file remains covered by the release manifest hash.
+ */
+export function activeArtifactTreeIdentity(root: string) {
+  return treeIdentity(root, true)
 }
 
 export function verifySmaReleaseManifest(root: string, expectedCommit: string): SmaReleaseManifest {

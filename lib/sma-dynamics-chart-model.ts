@@ -54,8 +54,20 @@ export interface LinePoint {
   value: number
 }
 
-/** Whitespace keeps a visible gap where an assumed close is missing (lines never bridge it). */
+/** Whitespace marks a missing value. Lightweight Charts bridges whitespace, so lines go through splitLineRuns. */
 export type LineDatum = LinePoint | { time: ChartTime }
+
+/** Contiguous runs of valued points; each run is drawn as its own series so a null never gets a joining segment. */
+export function splitLineRuns(data: ReadonlyArray<LineDatum>): LinePoint[][] {
+  const runs: LinePoint[][] = []
+  let run: LinePoint[] = []
+  for (const point of data) {
+    if ('value' in point) run.push(point)
+    else if (run.length > 0) { runs.push(run); run = [] }
+  }
+  if (run.length > 0) runs.push(run)
+  return runs
+}
 
 export type SmaLabOverlayId = 'freeze' | 'scenario' | 'solver'
 export type SmaLabOverlayEmphasis = 'primary' | 'muted'
@@ -125,7 +137,8 @@ export interface SmaLabChartModel {
   lastConfirmedSlot: number | null
   /** One entry per slot; future and data-less slots are whitespace (time only). */
   candles: CandlePoint[]
-  actual: Map<SmaLabPeriod, LinePoint[]>
+  /** Whitespace entries preserve invalid windows so a solid SMA never bridges a gap. */
+  actual: Map<SmaLabPeriod, LineDatum[]>
   future: Map<SmaLabPeriod, LinePoint[]>
   /** Assumed close from the as-of bar to the last future bar. */
   frozenClose: LinePoint[]
@@ -133,6 +146,30 @@ export interface SmaLabChartModel {
   overlays: SmaLabOverlaySeries[]
   boundaries: SmaLabBoundary[]
   highlights: SmaLabHighlight[]
+}
+
+export interface FutureRegionPixelInput {
+  anchorX: number | null
+  nextAnchorX: number | null
+  lastX: number | null
+  nextLastX: number | null
+  previousLastX: number | null
+  paneWidth: number
+}
+
+/** Pixel bounds of the assumed interval, clipped to the visible chart pane. */
+export function futureRegionPixelRange(input: FutureRegionPixelInput): { left: number; right: number } | null {
+  const { anchorX, nextAnchorX, lastX, nextLastX, previousLastX, paneWidth } = input
+  if (anchorX == null || nextAnchorX == null || lastX == null || !Number.isFinite(paneWidth) || paneWidth <= 0) return null
+  const rawLeft = (anchorX + nextAnchorX) / 2
+  const rawRight = nextLastX != null
+    ? (lastX + nextLastX) / 2
+    : previousLastX != null
+      ? lastX + (lastX - previousLastX) / 2
+      : lastX
+  const left = Math.min(Math.max(rawLeft, 0), paneWidth)
+  const right = Math.min(Math.max(rawRight, 0), paneWidth)
+  return right > left ? { left, right } : null
 }
 
 function candleFor(bar: SmaLabBar, time: ChartTime): CandlePoint {
@@ -165,14 +202,15 @@ export function buildSmaLabChartModel(result: SmaLabAvailable, periods: readonly
   const candles = slots.map((slot) => (slot.kind === 'bar' ? candleFor(slot.bar, slot.time) : { time: slot.time }))
   const lastConfirmedSlot = result.lastConfirmedIndex
 
-  const actual = new Map<SmaLabPeriod, LinePoint[]>()
+  const actual = new Map<SmaLabPeriod, LineDatum[]>()
   const future = new Map<SmaLabPeriod, LinePoint[]>()
   for (const period of periods) {
     const values = result.sma[period]
-    const points: LinePoint[] = []
-    for (let index = 0; index < result.bars.length; index += 1) {
+    const points: LineDatum[] = []
+    const actualEnd = lastConfirmedSlot ?? -1
+    for (let index = 0; index <= actualEnd; index += 1) {
       const value = values[index]
-      if (value != null) points.push({ time: slots[index].time, value })
+      points.push(value == null ? { time: slots[index].time } : { time: slots[index].time, value })
     }
     actual.set(period, points)
 
