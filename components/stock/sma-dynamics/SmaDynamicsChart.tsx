@@ -19,6 +19,7 @@ import {
   SMA_LAB_MUTED_ALPHA,
   SMA_LAB_HIGHLIGHT_COLOR,
   SMA_LAB_OVERLAY_CLOSE_COLORS,
+  futureRegionPixelRange,
   withAlpha,
   type SmaLabChartModel,
 } from '@/lib/sma-dynamics-chart-model'
@@ -33,6 +34,8 @@ export interface SmaDynamicsChartHandle {
 
 export const ZOOM_IN_FACTOR = 0.6
 export const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR
+const FUTURE_TAG_INSET = 8
+const ACTUAL_TAG_MIN_WIDTH = 36
 
 interface ChartState {
   lwc: Lwc
@@ -76,6 +79,10 @@ export function SmaDynamicsChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const shadeRef = useRef<HTMLDivElement>(null)
   const boundaryRef = useRef<HTMLDivElement>(null)
+  const shadeLabelRef = useRef<HTMLSpanElement>(null)
+  const shadeLabelFullRef = useRef<HTMLSpanElement>(null)
+  const shadeLabelShortRef = useRef<HTMLSpanElement>(null)
+  const boundaryLabelRef = useRef<HTMLSpanElement>(null)
   const stateRef = useRef<ChartState | null>(null)
   const modelRef = useRef(model)
   const viewRangeRef = useRef(viewRange)
@@ -132,25 +139,45 @@ export function SmaDynamicsChart({
     const timeScale = state.chart.timeScale()
     const paneWidth = timeScale.width()
     const paneHeight = state.chart.paneSize(0).height
-    // logicalToCoordinate only resolves whole slots, so take the midpoint to the next slot.
+    // logicalToCoordinate only resolves whole slots, so use half-slot boundaries.
     const anchorX = timeScale.logicalToCoordinate(current.anchorSlot as Logical)
-    const nextX = timeScale.logicalToCoordinate((current.anchorSlot + 1) as Logical)
-    const x = anchorX == null || nextX == null ? null : (anchorX + nextX) / 2
+    const nextAnchorX = timeScale.logicalToCoordinate((current.anchorSlot + 1) as Logical)
+    const lastX = timeScale.logicalToCoordinate(current.lastSlot as Logical)
+    const nextLastX = timeScale.logicalToCoordinate((current.lastSlot + 1) as Logical)
+    const previousLastX = timeScale.logicalToCoordinate((current.lastSlot - 1) as Logical)
     const hasFuture = current.lastSlot > current.anchorSlot || current.frozenClose.length > 0
-    if (x == null || !hasFuture) {
+    const region = hasFuture ? futureRegionPixelRange({ anchorX, nextAnchorX, lastX, nextLastX, previousLastX, paneWidth }) : null
+    if (!region) {
       shade.style.display = 'none'
       boundary.style.display = 'none'
       return
     }
     paintMarker()
-    const left = Math.min(Math.max(x, 0), paneWidth)
-    shade.style.display = left < paneWidth ? 'block' : 'none'
-    shade.style.left = `${left}px`
-    shade.style.width = `${paneWidth - left}px`
+    shade.style.display = 'block'
+    shade.style.left = `${region.left}px`
+    shade.style.width = `${region.right - region.left}px`
     shade.style.height = `${paneHeight}px`
-    boundary.style.display = x >= 0 && x <= paneWidth ? 'block' : 'none'
-    boundary.style.left = `${x}px`
+    boundary.style.display = 'block'
+    boundary.style.left = `${region.left}px`
     boundary.style.height = `${paneHeight}px`
+    // Tags stay inside their own region: the future tag falls back from the full text to its first word
+    // and then hides as the zoomed-out region narrows (never spilling over the price axis); the actual
+    // tag needs room on the boundary's left.
+    const label = shadeLabelRef.current
+    const full = shadeLabelFullRef.current
+    const short = shadeLabelShortRef.current
+    if (label && full && short) {
+      const room = region.right - region.left - FUTURE_TAG_INSET
+      label.style.display = ''
+      full.style.display = ''
+      short.style.display = 'none'
+      if (full.offsetWidth > room) {
+        full.style.display = 'none'
+        short.style.display = 'inline'
+        if (short.offsetWidth > room) label.style.display = 'none'
+      }
+    }
+    if (boundaryLabelRef.current) boundaryLabelRef.current.style.display = region.left >= ACTUAL_TAG_MIN_WIDTH ? '' : 'none'
   }
 
   // LWC applies range/size changes on its next frame, so coordinates are read one frame later.
@@ -371,6 +398,12 @@ export function SmaDynamicsChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, model, periods, priceDigits])
 
+  // The tag text decides how much of it fits, so a new label re-measures.
+  useEffect(() => {
+    schedulePaint()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [futureLabel])
+
   // A new path / input means a new marker: close the old popover and re-measure.
   useEffect(() => {
     setMarkerPinned(false)
@@ -445,10 +478,13 @@ export function SmaDynamicsChart({
       <div
         ref={shadeRef}
         aria-hidden="true"
-        className="pointer-events-none absolute top-0 z-[2] hidden bg-[repeating-linear-gradient(135deg,rgba(100,116,139,0.07)_0_6px,rgba(100,116,139,0.02)_6px_12px)]"
+        className="pointer-events-none absolute top-0 z-[2] hidden overflow-hidden bg-[repeating-linear-gradient(135deg,rgba(100,116,139,0.07)_0_6px,rgba(100,116,139,0.02)_6px_12px)]"
         data-sma-dynamics-future-region
       >
-        <span className="absolute left-1.5 top-1 whitespace-nowrap rounded-[3px] bg-white/85 px-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">{futureLabel}</span>
+        <span ref={shadeLabelRef} className="absolute left-1.5 top-1 whitespace-nowrap rounded-[3px] bg-white/85 px-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+          <span ref={shadeLabelFullRef}>{futureLabel}</span>
+          <span ref={shadeLabelShortRef} className="hidden">{futureLabel.split(' ')[0]}</span>
+        </span>
       </div>
       <div
         ref={boundaryRef}
@@ -456,7 +492,7 @@ export function SmaDynamicsChart({
         className="pointer-events-none absolute top-0 z-[2] hidden w-0 border-l border-dashed border-[var(--color-text-secondary)]"
         data-sma-dynamics-boundary
       >
-        <span className="absolute right-1.5 top-1 whitespace-nowrap rounded-[3px] bg-white/85 px-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">実績</span>
+        <span ref={boundaryLabelRef} className="absolute right-1.5 top-1 whitespace-nowrap rounded-[3px] bg-white/85 px-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">実績</span>
       </div>
       {marker && markerPos && (
         <FirstHitMarkerView
