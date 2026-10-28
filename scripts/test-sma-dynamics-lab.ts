@@ -26,7 +26,7 @@ import {
   type SmaLabResult,
 } from '@/lib/sma-dynamics-lab'
 import { createTimeframeBucketContext, getTimeframeBucketKey } from '@/lib/timeframes'
-import { buildSmaLabChartModel } from '@/lib/sma-dynamics-chart-model'
+import { buildSmaLabChartModel, dateToChartTime, futureRegionPixelRange } from '@/lib/sma-dynamics-chart-model'
 import { addCalendarDays, SMA_LAB_TIMEFRAMES, smaLabCalendar, type SmaLabTimeframeId } from '@/lib/sma-dynamics-timeframes'
 import { findSmaDynamicsFixture, fixtureSessionDates, SMA_DYNAMICS_FIXTURES } from '@/lib/sma-dynamics-fixtures'
 import { MOVING_AVERAGE_COLORS } from '@/lib/chart-colors'
@@ -98,8 +98,9 @@ for (const item of SMA_DYNAMICS_FIXTURES) {
     if (lab.issues.some((issue) => issue.kind === 'missing_session')) {
       // Intended Phase 1.1 change: Phase 1 had no calendar and bridged a missing session;
       // the lab keeps the session slot and leaves every touching window empty.
-      assert.equal(item.id, 'jp-listing-gap', 'only the new gap fixture has calendar gaps')
-      const gapBar = lab.bars.find((bar) => bar.firstSession === '2026-07-08')!
+      assert.ok(['jp-listing-gap', 'jp-7003-gap'].includes(item.id), 'only explicit gap fixtures have calendar gaps')
+      const gapDate = item.id === 'jp-7003-gap' ? '2026-07-17' : '2026-07-08'
+      const gapBar = lab.bars.find((bar) => bar.firstSession === gapDate)!
       assert.equal(gapBar.close, null)
       assert.equal(lab.sma[5][gapBar.index + 1], null, 'lab: window touching the gap is empty')
       assert.notEqual(phase1.historical.length, 0)
@@ -123,6 +124,46 @@ for (const item of SMA_DYNAMICS_FIXTURES) {
     }
   }
 }
+
+// Production 7003 regression: the market session is retained, the strict SMA75 is
+// unavailable, and chart whitespace prevents a later valid segment from bridging it.
+{
+  const result = available(run('jp-7003-gap', '1D', 5), '7003 gap')
+  const summary = result.periods.find((item) => item.period === 75)!
+  assert.equal(result.asOf.date, '2026-10-28')
+  assert.equal(summary.status, 'invalid_window')
+  assert.deepEqual(summary.invalidBarsInWindow, ['2026-07-17'])
+  assert.ok(result.issues.some((issue) => issue.kind === 'missing_session' && issue.date === '2026-07-17'))
+  const lastValid = result.sma[75].findLastIndex((value) => value != null)
+  assert.equal(result.bars[lastValid].lastSession, '2026-07-16')
+  const model = buildSmaLabChartModel(result, [75])
+  const missing = model.actual.get(75)!.find((point) => point.time === dateToChartTime('2026-07-17'))!
+  assert.ok(!('value' in missing), 'the missing session is chart whitespace, not a bridged point')
+}
+
+// Once the missing session has rolled out of a 75-session window, SMA75 resumes.
+{
+  const dates = fixtureSessionDates('JP', '2026-12-18', 210)
+  const rows = dates.filter((date) => date !== '2026-07-17').map((date, index) => ({ date, close: 3000 + index }))
+  const result = available(computeSmaLab({ rows, market: 'JP', analysisDate: null, timeframe: '1D', horizon: 5 }), 'gap recovery')
+  const gapIndex = result.bars.findIndex((bar) => bar.lastSession === '2026-07-17')
+  assert.ok(gapIndex > 75)
+  assert.equal(result.sma[75][gapIndex + 74], null)
+  assert.notEqual(result.sma[75][gapIndex + 75], null, 'SMA resumes only after the gap leaves the strict window')
+  const line = buildSmaLabChartModel(result, [75]).actual.get(75)!
+  assert.ok(!('value' in line[gapIndex + 74]) && 'value' in line[gapIndex + 75])
+}
+
+// The future hatch is bounded by the actual forecast interval, not the pane edge.
+assert.deepEqual(futureRegionPixelRange({
+  anchorX: 100, nextAnchorX: 110, lastX: 150, nextLastX: 160, previousLastX: 140, paneWidth: 400,
+}), { left: 105, right: 155 })
+assert.deepEqual(futureRegionPixelRange({
+  anchorX: -20, nextAnchorX: -10, lastX: 390, nextLastX: null, previousLastX: 380, paneWidth: 400,
+}), { left: 0, right: 395 })
+assert.equal(futureRegionPixelRange({
+  anchorX: 420, nextAnchorX: 430, lastX: 450, nextLastX: 460, previousLastX: 440, paneWidth: 400,
+}), null)
 
 // ---------------------------------------------------------------------------
 // Independent reference: naive session numbering, grouping and SMA.
