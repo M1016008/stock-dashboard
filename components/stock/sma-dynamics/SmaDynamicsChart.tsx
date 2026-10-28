@@ -20,7 +20,9 @@ import {
   SMA_LAB_HIGHLIGHT_COLOR,
   SMA_LAB_OVERLAY_CLOSE_COLORS,
   futureRegionPixelRange,
+  splitLineRuns,
   withAlpha,
+  type LineDatum,
   type SmaLabChartModel,
 } from '@/lib/sma-dynamics-chart-model'
 import { smaLabColor, zoomSlotRange, type SlotRange, type SmaLabPeriod } from '@/lib/sma-dynamics-lab'
@@ -298,11 +300,26 @@ export function SmaDynamicsChart({
     state.boundaryLines = []
 
     const tint = (color: string, muted: boolean) => (muted ? withAlpha(color, SMA_LAB_MUTED_ALPHA) : color)
+    // A missing value must break the line (the chart library would bridge it), so each run is its own series.
+    // The axis value tag stays on the last run only; a single-point run needs a marker to be visible.
     const addLine = (data: ReadonlyArray<{ time: number; value?: number }>, options: Record<string, unknown>) => {
-      const series = chart.addSeries(lwc.LineSeries, { priceLineVisible: false, lastValueVisible: false, priceFormat, ...options })
-      series.setData(data.map((point) => ({ ...point, time: point.time as Time })))
-      state.lines.push(series)
-      return series
+      const runs = splitLineRuns(data as ReadonlyArray<LineDatum>)
+      if (runs.length === 0) runs.push([])
+      let first: ISeriesApi<SeriesType> | null = null
+      runs.forEach((run, index) => {
+        const single = run.length === 1 && options.pointMarkersVisible !== true && options.lineVisible !== false
+        const series = chart.addSeries(lwc.LineSeries, {
+          priceLineVisible: false,
+          priceFormat,
+          ...options,
+          ...(index < runs.length - 1 ? { lastValueVisible: false, title: '' } : {}),
+          ...(single ? { pointMarkersVisible: true, pointMarkersRadius: 2 } : {}),
+        })
+        series.setData(run.map((point) => ({ ...point, time: point.time as Time })))
+        state.lines.push(series)
+        first ??= series
+      })
+      return first as unknown as ISeriesApi<SeriesType>
     }
 
     const freezeMuted = model.freezeEmphasis === 'muted'

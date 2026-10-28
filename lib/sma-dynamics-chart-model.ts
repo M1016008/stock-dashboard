@@ -54,8 +54,20 @@ export interface LinePoint {
   value: number
 }
 
-/** Whitespace keeps a visible gap where an assumed close is missing (lines never bridge it). */
+/** Whitespace marks a missing value. Lightweight Charts bridges whitespace, so lines go through splitLineRuns. */
 export type LineDatum = LinePoint | { time: ChartTime }
+
+/** Contiguous runs of valued points; each run is drawn as its own series so a null never gets a joining segment. */
+export function splitLineRuns(data: ReadonlyArray<LineDatum>): LinePoint[][] {
+  const runs: LinePoint[][] = []
+  let run: LinePoint[] = []
+  for (const point of data) {
+    if ('value' in point) run.push(point)
+    else if (run.length > 0) { runs.push(run); run = [] }
+  }
+  if (run.length > 0) runs.push(run)
+  return runs
+}
 
 export type SmaLabOverlayId = 'freeze' | 'scenario' | 'solver'
 export type SmaLabOverlayEmphasis = 'primary' | 'muted'
