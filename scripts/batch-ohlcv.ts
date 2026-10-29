@@ -25,20 +25,39 @@ import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { ohlcvDaily, batchRuns, jquantsDailyCoverage, jquantsSyncRuns } from '@/lib/db/schema'
 import {
   fetchJQuantsDaily,
-  fetchJQuantsDailyByDate,
+  fetchJQuantsDailyByDateWithEvidence,
   hasJQuantsCorporateAction,
   isLikelyJQuantsCorporateActionBoundary,
   shouldApplyJQuantsLegacyAdjustment,
   type JQuantsDailyByDateRow,
 } from '@/lib/jquants'
+import {
+  buildJpOhlcvBackfillPlan,
+  classifyJpFetchFailure,
+  evaluateJpDailyCoverage,
+  findJpHistoricalCoverageGaps,
+  historicalCoverageDates,
+  type JpOhlcvValue,
+} from '@/lib/jp-ohlcv-data-quality'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
+import { getJpTradingDates } from '@/lib/server/jp-market-calendar'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
+function positiveIntegerSetting(value: string | undefined, fallback: number, minimum: number): number {
+  const parsed = Number(value ?? fallback)
+  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : fallback
+}
+
 const RATE_LIMIT_MS = Number(process.env.OHLCV_RATE_LIMIT_MS ?? 0)
-const CONCURRENCY = Math.max(1, Number(process.env.OHLCV_CONCURRENCY ?? 8))
-const MAX_RETRIES = Number(process.env.OHLCV_MAX_RETRIES ?? 4)
-const PROGRESS_EVERY = Number(process.env.OHLCV_PROGRESS_EVERY ?? 100)
+const CONCURRENCY = positiveIntegerSetting(process.env.OHLCV_CONCURRENCY, 8, 1)
+const MAX_RETRIES = positiveIntegerSetting(process.env.OHLCV_MAX_RETRIES, 4, 1)
+const PROGRESS_EVERY = positiveIntegerSetting(process.env.OHLCV_PROGRESS_EVERY, 100, 1)
+const HISTORICAL_COVERAGE_LOOKBACK = positiveIntegerSetting(
+  process.env.OHLCV_COVERAGE_LOOKBACK_TRADING_DAYS,
+  260,
+  20,
+)
 
 // 取得開始日: HISTORY_FROM があればそれ、なければ Standard プラン上限 (今日から 10 年前) を試行
 const DEFAULT_FROM_DATE: string =
@@ -101,6 +120,43 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw new Error('unreachable')
+}
+
+async function fetchDateWithRetry(date: string) {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      return await fetchJQuantsDailyByDateWithEvidence(date)
+    } catch (error) {
+      const classified = classifyJpFetchFailure(error)
+      console.warn(JSON.stringify({
+        event: 'jquants_date_fetch_failed',
+        date,
+        attempt,
+        maxAttempts: MAX_RETRIES,
+        category: classified.category,
+        httpStatus: classified.httpStatus,
+        retryable: classified.retryable,
+      }))
+      if (!classified.retryable || attempt === MAX_RETRIES) throw error
+      await sleep((classified.category === 'RATE_LIMIT' ? 5_000 : 1_000) * attempt)
+    }
+  }
+  throw new Error('jquants_date_fetch_retry_exhausted')
+}
+
+async function recentDateCounts(targetDate: string, limit = 10): Promise<number[]> {
+  const rows = await execAll<{ count: number }>(
+    `
+      SELECT COUNT(*) AS count
+      FROM ohlcv_daily
+      WHERE date < ?
+      GROUP BY date
+      ORDER BY date DESC
+      LIMIT ?
+    `,
+    [targetDate, limit],
+  )
+  return rows.map((row) => Number(row.count)).filter((count) => Number.isSafeInteger(count) && count > 0)
 }
 
 async function fetchAndStoreForTicker(
@@ -198,27 +254,68 @@ async function fetchAndStoreForTicker(
   return data.length
 }
 
-async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
+async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<{ inserted: number; stored: number }> {
+  if (rows.length === 0) return { inserted: 0, stored: 0 }
+  const date = rows[0].date
+  if (rows.some((row) => row.date !== date)) throw new Error('jquants_date_response_contains_multiple_dates')
+  const existingRows = await execAll<JpOhlcvValue>(
+    'SELECT ticker, date, open, high, low, close, volume FROM ohlcv_daily WHERE date = ? ORDER BY ticker',
+    [date],
+  )
+  const plan = buildJpOhlcvBackfillPlan({ date, officialRows: rows, existingRows })
+  if (plan.status !== 'READY') {
+    const reasons = Array.from(new Set(plan.conflicts.map((conflict) => conflict.reason)))
+    const samples = plan.conflicts.slice(0, 5).map((conflict) => ({
+      ticker: conflict.ticker,
+      reason: conflict.reason,
+      validationReason: conflict.validationReason ?? null,
+    }))
+    throw new Error(
+      `jquants_existing_rows_conflict:${date}:count=${plan.conflicts.length}:reasons=${reasons.join(',')}:samples=${JSON.stringify(samples)}:action=run_audit_jp_ohlcv_gap`,
+    )
+  }
   const CHUNK = 200
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK).map(({ adjustmentFactor: _adjustmentFactor, ...row }) => row)
+  for (let i = 0; i < plan.missingRows.length; i += CHUNK) {
+    const chunk = plan.missingRows.slice(i, i + CHUNK).map(({ adjustmentFactor: _adjustmentFactor, ...row }) => row)
     await withDbRetry(() =>
       db
         .insert(ohlcvDaily)
         .values(chunk)
-        .onConflictDoUpdate({
-          target: [ohlcvDaily.ticker, ohlcvDaily.date],
-          set: {
-            open:   sql`excluded.open`,
-            high:   sql`excluded.high`,
-            low:    sql`excluded.low`,
-            close:  sql`excluded.close`,
-            volume: sql`excluded.volume`,
-          },
-        }),
+        .onConflictDoNothing(),
     )
   }
-  return rows.length
+  const stored = await execGet<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM ohlcv_daily WHERE date = ?',
+    [date],
+  )
+  return { inserted: plan.missingRows.length, stored: Number(stored?.count ?? 0) }
+}
+
+async function historicalCoverageGaps(targetDate: string) {
+  const start = new Date(`${targetDate}T00:00:00Z`)
+  start.setUTCDate(start.getUTCDate() - Math.ceil(HISTORICAL_COVERAGE_LOOKBACK * 1.7))
+  const from = start.toISOString().slice(0, 10)
+  const tradingDates = historicalCoverageDates(
+    getJpTradingDates(from, targetDate).slice(-HISTORICAL_COVERAGE_LOOKBACK),
+    targetDate,
+  )
+  if (tradingDates.length === 0) return []
+  const rows = await execAll<{ date: string; count: number }>(
+    `
+      SELECT date, COUNT(*) AS count
+      FROM ohlcv_daily
+      WHERE date BETWEEN ? AND ?
+      GROUP BY date
+      ORDER BY date
+    `,
+    [tradingDates[0], tradingDates[tradingDates.length - 1]],
+  )
+  const rowsByDate = new Map(rows.map((row) => [row.date, Number(row.count)]))
+  const referenceRows = rows.map((row) => Number(row.count))
+    .filter((count) => Number.isSafeInteger(count) && count > 0)
+    .sort((left, right) => right - left)
+    .slice(0, Math.min(20, rows.length))
+  return findJpHistoricalCoverageGaps({ tradingDates, rowsByDate, referenceRows })
 }
 
 async function findCorporateActionBoundaryCandidates(targetDate: string): Promise<string[]> {
@@ -303,6 +400,7 @@ async function main() {
   let failed = 0
   let rowsInserted = 0
   const errors: string[] = []
+  let dateBulkFatalError: string | null = null
 
   console.log(`OHLCV fetch 開始: ${tickers.length} 銘柄`)
   const startTime = Date.now()
@@ -319,8 +417,26 @@ async function main() {
 
     try {
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
-      const rows = await fetchJQuantsDailyByDate(TARGET_DATE)
-      const inserted = await storeRows(rows)
+      const evidence = await fetchDateWithRetry(TARGET_DATE)
+      const rows = evidence.rows
+      const referenceRows = await recentDateCounts(TARGET_DATE)
+      const providerCoverage = evaluateJpDailyCoverage({
+        providerRows: evidence.acceptedRows,
+        storedRows: evidence.acceptedRows,
+        referenceRows,
+      })
+      if (providerCoverage.status !== 'PASS') {
+        throw new Error(`jquants_provider_coverage_hold:${JSON.stringify(providerCoverage)}`)
+      }
+      const stored = await storeRows(rows)
+      const storedCoverage = evaluateJpDailyCoverage({
+        providerRows: evidence.acceptedRows,
+        storedRows: stored.stored,
+        referenceRows,
+      })
+      if (storedCoverage.status !== 'PASS') {
+        throw new Error(`jquants_stored_coverage_hold:${JSON.stringify(storedCoverage)}`)
+      }
       const explicitCorporateActionTickers = Array.from(new Set(
         rows
           .filter(row => hasJQuantsCorporateAction(row.adjustmentFactor))
@@ -345,11 +461,11 @@ async function main() {
         .filter(t => !rowTickerSet.has(t.ticker))
         .map(t => t.ticker)
 
-      rowsInserted += inserted + adjustedHistoryRows
+      rowsInserted += stored.inserted + adjustedHistoryRows
       succeeded += Math.max(0, tickers.length - missingTickers.length)
       await db
         .insert(jquantsDailyCoverage)
-        .values({ date: TARGET_DATE, expectedRows: rows.length })
+        .values({ date: TARGET_DATE, expectedRows: storedCoverage.expectedRows })
         .onConflictDoUpdate({
           target: jquantsDailyCoverage.date,
           set: {
@@ -360,15 +476,15 @@ async function main() {
       await db
         .update(jquantsSyncRuns)
         .set({
-          expectedRows: rows.length,
-          importedRows: inserted,
+          expectedRows: storedCoverage.expectedRows,
+          importedRows: stored.stored,
           missingTickers: JSON.stringify(missingTickers),
           status: 'success',
           finishedAt: new Date(),
         })
         .where(eq(jquantsSyncRuns.id, syncRun.id))
       console.log(
-        `J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}, corporateActions=${explicitCorporateActionTickers.length}, boundaryCandidates=${boundaryCorporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
+        `J-Quants date bulk 完了: expected=${storedCoverage.expectedRows}, provider=${evidence.providerRows}, stored=${stored.stored}, inserted=${stored.inserted}, corporateActions=${explicitCorporateActionTickers.length}, boundaryCandidates=${boundaryCorporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
       )
       tickers = tickers.filter(t => !rowTickerSet.has(t.ticker))
       if (tickers.length > 0 && !ENABLE_MISSING_FALLBACK) {
@@ -376,15 +492,25 @@ async function main() {
         tickers = []
       }
     } catch (err) {
-      console.warn(`J-Quants date bulk をスキップ: ${err instanceof Error ? err.message : String(err)}`)
+      const message = err instanceof Error ? err.message : String(err)
+      const classified = classifyJpFetchFailure(err)
+      const failClosed = /jquants_provider_coverage_hold|jquants_stored_coverage_hold|jquants_existing_rows_conflict|jquants_date_response_contains_multiple_dates/.test(message)
+        || ['AUTH', 'HTTP_CLIENT', 'INVALID_RESPONSE'].includes(classified.category)
+      console.warn(`J-Quants date bulk をスキップ: ${message}`)
       await db
         .update(jquantsSyncRuns)
         .set({
           status: 'failed',
           finishedAt: new Date(),
-          errorSummary: err instanceof Error ? err.message : String(err),
+          errorSummary: message,
         })
         .where(eq(jquantsSyncRuns.id, syncRun.id))
+      if (failClosed) {
+        dateBulkFatalError = message
+        failed += tickers.length
+        errors.push(`date_bulk_fail_closed:${message}`)
+        tickers = []
+      }
     }
   }
   let nextIndex = 0
@@ -424,13 +550,27 @@ async function main() {
     Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
   )
 
+  let historicalCoverageError: string | null = null
+  try {
+    const gaps = await historicalCoverageGaps(TARGET_DATE)
+    if (gaps.length > 0) {
+      historicalCoverageError = `unresolved_historical_ohlcv_coverage:${JSON.stringify(gaps.slice(0, 20))}`
+      errors.push(historicalCoverageError)
+      console.error(historicalCoverageError)
+    }
+  } catch (error) {
+    historicalCoverageError = `historical_coverage_audit_failed:${error instanceof Error ? error.message : String(error)}`
+    errors.push(historicalCoverageError)
+    console.error(historicalCoverageError)
+  }
+
   let postRefreshError: string | null = null
   const fetchStatus =
     failed === 0 ? 'success' :
     succeeded === 0 ? 'failed' :
     'partial'
 
-  if (fetchStatus !== 'failed') {
+  if (fetchStatus !== 'failed' && !dateBulkFatalError && !historicalCoverageError) {
     try {
       await refreshAfterOhlcv()
     } catch (err) {
@@ -441,7 +581,9 @@ async function main() {
   }
 
   // 終了記録。後段更新が失敗した場合、OHLCV取得だけ成功しても success にはしない。
-  const finalStatus = postRefreshError && fetchStatus === 'success' ? 'partial' : fetchStatus
+  const finalStatus = (postRefreshError || dateBulkFatalError || historicalCoverageError) && fetchStatus === 'success'
+    ? 'partial'
+    : fetchStatus
 
   await db
     .update(batchRuns)
@@ -459,6 +601,15 @@ async function main() {
   console.log(`完了: ${succeeded} 成功 / ${failed} 失敗 / 計 ${rowsInserted} 行 / ステータス: ${finalStatus}`)
   if (postRefreshError) {
     throw new Error(`OHLCV fetched but post-refresh failed: ${postRefreshError}`)
+  }
+  if (dateBulkFatalError) {
+    throw new Error(`OHLCV date bulk failed closed: ${dateBulkFatalError}`)
+  }
+  if (historicalCoverageError) {
+    throw new Error(`OHLCV current date fetched but historical coverage remains unresolved: ${historicalCoverageError}`)
+  }
+  if (finalStatus !== 'success') {
+    throw new Error(`OHLCV update incomplete: status=${finalStatus}, succeeded=${succeeded}, failed=${failed}`)
   }
 }
 

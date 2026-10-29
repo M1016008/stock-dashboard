@@ -14,6 +14,8 @@
 import { db, client } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { acquireExclusiveUpdateLock, type UpdateLockHandle } from '@/lib/server/update-lock'
+import { jpOhlcvRepairBarrierDecision } from '@/lib/jp-ohlcv-repair-barrier'
+import { assertCurrentServingProjectionUpdateLock } from '@/lib/research/six-stage-current-serving-adapter'
 import { eq } from 'drizzle-orm'
 
 const LOCK_POLL_MS = Math.max(5_000, Number(process.env.STAGE_TRANSITIONS_LOCK_POLL_SECONDS ?? 15) * 1_000)
@@ -24,6 +26,28 @@ function wait(milliseconds: number): Promise<void> {
 }
 
 async function acquireLockOrWait(): Promise<UpdateLockHandle> {
+  if (process.env.STOCKBOARD_JP_OHLCV_REPAIR_OWNER === '1'
+    && process.env.STOCKBOARD_UPDATE_JOB_TYPE === 'jp_ohlcv_gap_repair') {
+    const decision = jpOhlcvRepairBarrierDecision({ jobType: 'jp_ohlcv_gap_repair' })
+    if (decision.blocked) throw new Error(`repair inherited writer lock rejected: ${decision.reason}`)
+    const owner = process.env.STOCKBOARD_JP_OHLCV_REPAIR_UPDATE_LOCK_OWNER
+    if (!owner) throw new Error('repair inherited writer lock owner missing')
+    const assertInheritedLock = () => assertCurrentServingProjectionUpdateLock({
+      market: 'JP',
+      owner,
+      query: async <T extends Record<string, unknown>>(sql: string, args: readonly (string | number | null)[] = []) => {
+        const result = await client.execute({ sql, args: [...args] })
+        return result.rows as unknown as T[]
+      },
+    })
+    await assertInheritedLock()
+    return {
+      jobType: 'jp_ohlcv_gap_repair',
+      owner,
+      heartbeat: assertInheritedLock,
+      release: async () => undefined,
+    }
+  }
   const startedAt = Date.now()
   let lastNoticeAt = 0
   while (Date.now() - startedAt < LOCK_WAIT_MS) {

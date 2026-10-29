@@ -23,6 +23,7 @@ import {
 } from '@/lib/trigger-daily-evaluation'
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const DATA_GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const DEFAULT_STALE_BATCH_SECONDS = 6 * 60 * 60
 
 type BatchRow = {
@@ -86,6 +87,7 @@ export interface TriggerDailyEvaluationDependencies {
     definitionId: string,
     requestedAsOf: string,
     expectedIdentity: TriggerEvaluationDefinitionIdentity,
+    sourceGeneration?: string,
   ) => Promise<TriggerEvaluationRunResponse>
   beforeDefinition?: (snapshot: DefinitionIdentitySnapshot, index: number) => Promise<void> | void
 }
@@ -94,6 +96,8 @@ export interface RunDailyTriggerEvaluationsInput {
   requestedAsOf?: string
   resolvedAsOf?: string
   dryRun?: boolean
+  sourceGeneration?: string
+  forceReevaluate?: boolean
 }
 
 function nowSeconds(now: () => number): number {
@@ -234,6 +238,7 @@ async function claimBatch(input: {
   definitions: DefinitionSnapshot[]
   ownerToken: string
   now: () => number
+  forceReevaluate: boolean
 }): Promise<{ row: BatchRow; reused: boolean }> {
   await ensureReady()
   const startedAt = nowSeconds(input.now)
@@ -258,9 +263,34 @@ async function claimBatch(input: {
       await tx.commit()
       return { row, reused: false }
     }
-    if (row.status === 'COMPLETED' || row.status === 'COMPLETED_WITH_ERRORS') {
+    if ((row.status === 'COMPLETED' || row.status === 'COMPLETED_WITH_ERRORS') && !input.forceReevaluate) {
       await tx.commit()
       return { row, reused: true }
+    }
+
+    if ((row.status === 'COMPLETED' || row.status === 'COMPLETED_WITH_ERRORS') && input.forceReevaluate) {
+      await tx.execute({
+        sql: `UPDATE trigger_evaluation_batches SET
+          requested_as_of=?, started_at=?, completed_at=NULL, status='RUNNING',
+          owner_token=?, heartbeat_at=?, definition_count=?, attempted_count=0,
+          completed_count=0, reused_count=0, failed_count=0, skipped_count=0,
+          evaluation_count=0, lifecycle_event_count=0, duration_ms=0, error_category=NULL
+          WHERE id=? AND status IN ('COMPLETED','COMPLETED_WITH_ERRORS')`,
+        args: [input.requestedAsOf, startedAt, input.ownerToken, startedAt,
+          input.definitions.length, row.id],
+      })
+      const reset = await txBatch(tx, row.id)
+      if (!reset || reset.owner_token !== input.ownerToken || reset.status !== 'RUNNING') {
+        await tx.commit()
+        throw new TriggerDailyEvaluationInProgressError(input.resolvedAsOf)
+      }
+      await tx.execute({
+        sql: 'DELETE FROM trigger_evaluation_batch_items WHERE batch_id=?',
+        args: [row.id],
+      })
+      await insertBatchItems(tx, row.id, input.definitions)
+      await tx.commit()
+      return { row: reset, reused: false }
     }
 
     const reclaimable = row.status === 'FAILED'
@@ -424,6 +454,12 @@ export async function runDailyTriggerEvaluations(
 ): Promise<TriggerDailyEvaluationResult> {
   const startedAt = performance.now()
   const now = dependencies.now ?? Date.now
+  if (input.sourceGeneration && !DATA_GENERATION_PATTERN.test(input.sourceGeneration)) {
+    throw new Error('source_generation_invalid')
+  }
+  if (input.forceReevaluate && !input.sourceGeneration) {
+    throw new Error('force_reevaluate_requires_source_generation')
+  }
   if (input.requestedAsOf) assertDate(input.requestedAsOf, 'requested_as_of')
   if (input.resolvedAsOf) assertDate(input.resolvedAsOf, 'resolved_as_of')
   const resolvedAsOf = input.resolvedAsOf
@@ -460,7 +496,14 @@ export async function runDailyTriggerEvaluations(
   const ownerToken = randomUUID()
   let batchId: string | null = null
   try {
-    const claimed = await claimBatch({ requestedAsOf, resolvedAsOf, definitions: snapshots, ownerToken, now })
+    const claimed = await claimBatch({
+      requestedAsOf,
+      resolvedAsOf,
+      definitions: snapshots,
+      ownerToken,
+      now,
+      forceReevaluate: input.forceReevaluate === true,
+    })
     batchId = claimed.row.id
     if (claimed.reused) {
       return {
@@ -476,7 +519,10 @@ export async function runDailyTriggerEvaluations(
     const storedItems = await loadBatchItems(batchId)
     const getDefinition = dependencies.getDefinitionForHistory ?? getSavedTriggerDefinitionForHistory
     const evaluate = dependencies.evaluateDefinition ?? ((definitionId, asOf, expectedIdentity) => (
-      evaluateSavedTriggerDefinition(definitionId, asOf, { expectedDefinitionIdentity: expectedIdentity })
+      evaluateSavedTriggerDefinition(definitionId, asOf, {
+        expectedDefinitionIdentity: expectedIdentity,
+        sourceGeneration: input.sourceGeneration,
+      })
     ))
     for (const [index, item] of storedItems.entries()) {
       const expected: DefinitionIdentitySnapshot = {
@@ -504,7 +550,7 @@ export async function runDailyTriggerEvaluations(
           )
           continue
         }
-        const result = await evaluate(item.definitionId, requestedAsOf, expected)
+        const result = await evaluate(item.definitionId, requestedAsOf, expected, input.sourceGeneration)
         if (result.evaluation.resolvedAsOf !== resolvedAsOf
           || result.evaluation.evaluationVersion !== expected.evaluationVersion
           || result.evaluation.evaluationConfigSignature !== expected.evaluationConfigSignature

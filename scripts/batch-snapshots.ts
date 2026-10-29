@@ -27,6 +27,10 @@ const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
 const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
 const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
 const FORCE_REBUILD = process.env.SNAPSHOT_FORCE_REBUILD === '1'
+const REBUILD_FROM_DATE = process.env.SNAPSHOT_REBUILD_FROM_DATE?.trim() || null
+if (REBUILD_FROM_DATE && !/^\d{4}-\d{2}-\d{2}$/.test(REBUILD_FROM_DATE)) {
+  throw new Error('SNAPSHOT_REBUILD_FROM_DATE must be YYYY-MM-DD')
+}
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -106,13 +110,18 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
       [ticker],
     ),
   ])
-  const lastSnapshotDate = FORCE_REBUILD
+  const forceRebuild = FORCE_REBUILD || REBUILD_FROM_DATE !== null
+  const lastSnapshotDate = forceRebuild
     ? null
     : [state?.lastProcessedDate, existing?.maxDate]
         .filter((date): date is string => Boolean(date))
         .sort()
         .at(-1) ?? null
-  const startDate = lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
+  const startDate = REBUILD_FROM_DATE
+    ? dateDaysBefore(REBUILD_FROM_DATE, LOOKBACK_DAYS)
+    : lastSnapshotDate
+      ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS)
+      : null
 
   const rows = await execAll<OHLCV>(
     `
@@ -136,7 +145,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
   const newSnapshots: SnapshotRow[] = []
   for (const calculation of buildSnapshotCalculations(rows)) {
     const { date, activeDays: _activeDays, segmentStartDate: _segmentStartDate, ...snapshotValues } = calculation
-    if (lastSnapshotDate && date <= lastSnapshotDate) continue
+    if (REBUILD_FROM_DATE ? date < REBUILD_FROM_DATE : lastSnapshotDate && date <= lastSnapshotDate) continue
 
     newSnapshots.push({
       ticker,
@@ -159,7 +168,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
     const chunk = newSnapshots.slice(i, i + CHUNK)
     await withDbRetry(() => {
       const insert = db.insert(dailySnapshots).values(chunk)
-      if (!FORCE_REBUILD) return insert.onConflictDoNothing()
+      if (!forceRebuild) return insert.onConflictDoNothing()
 
       return insert.onConflictDoUpdate({
         target: [dailySnapshots.ticker, dailySnapshots.date],
@@ -301,6 +310,9 @@ async function main() {
     .where(eq(batchRuns.id, runId))
 
   console.log(`完了: ${succeeded} 成功 / ${failed} 失敗 / 計 ${rowsInserted} スナップショット / ステータス: ${finalStatus}`)
+  if (process.env.STOCKBOARD_JP_OHLCV_REPAIR_OWNER === '1' && failed > 0) {
+    throw new Error(`JP OHLCV repair snapshot rebuild incomplete: ${failed}/${tickers.length} tickers failed`)
+  }
 }
 
 main().catch(err => {
