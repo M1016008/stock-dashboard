@@ -481,7 +481,7 @@ for (const [name, override, expectedStage] of [
   }
   const rollbackApprovalSha256 = repairRollbackApprovalSha256(rollbackApproval)
   const rollbackOrder: string[] = []
-  const rollback = await runJpOhlcvProductionRepairRollback({
+  await assert.rejects(runJpOhlcvProductionRepairRollback({
     approval,
     approvalSha256,
     rollbackApproval,
@@ -520,6 +520,54 @@ for (const [name, override, expectedStage] of [
           sourceGeneration: approval.sourceGenerationBefore,
         }
       },
+      rebuildOriginalDerivedServing: async () => { throw new Error('fixture_rollback_derived_failure') },
+      verifyOriginalServing: async () => ({
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+        health: 'PASS',
+      }),
+      resumeReadServices: async () => ({ web: 'PASS', analog: 'PASS', health: 'PASS' }),
+    },
+  }), /fixture_rollback_derived_failure/)
+  assert.deepEqual(rollbackOrder.slice(0, 3), ['recovery-check', 'restore', 'writer-lock'])
+  assert.equal(stableSha256(fs.readFileSync(database)), beforeHash)
+
+  const failedRollbackJournal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  assert.equal(failedRollbackJournal.stage, 'HOLD')
+  assert.equal(failedRollbackJournal.failure.originalStage, 'ROLLBACK_DATA_RESTORED')
+  const retryApproval: JpOhlcvRepairRollbackApproval = {
+    ...rollbackApproval,
+    journalSha256: stableSha256(failedRollbackJournal),
+    reason: 'fixture retry resumes after the durable data restore without replacing the restored database again',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+    staleStageProcessRecovery: undefined,
+  }
+  let retryRestoreCalls = 0
+  const retryRollback = await runJpOhlcvProductionRepairRollback({
+    approval,
+    approvalSha256,
+    rollbackApproval: retryApproval,
+    rollbackApprovalSha256: repairRollbackApprovalSha256(retryApproval),
+    paths: repairPaths,
+    adapter: {
+      acquireWriterLock: async () => ({ owner: 'fixture-retry-writer', release: async () => undefined }),
+      restoreRecoveryRequired: async () => false,
+      verifyBackupForRollback: async () => ({
+        backupRealpath: backup,
+        backupSha256: beforeHash,
+        quickCheck: 'PASS',
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+      }),
+      holdReadServices: async () => ({
+        web: 'HELD',
+        analog: 'HELD',
+        snapshotSha256: stableSha256({ web: 'retry-fixture', analog: 'retry-fixture' }),
+      }),
+      restoreBackupAtomically: async () => {
+        retryRestoreCalls += 1
+        throw new Error('must_not_restore_completed_backup')
+      },
       rebuildOriginalDerivedServing: async () => ({
         sourceGeneration: approval.sourceGenerationBefore,
         servingGeneration: approval.servingGenerationBefore,
@@ -533,8 +581,8 @@ for (const [name, override, expectedStage] of [
       resumeReadServices: async () => ({ web: 'PASS', analog: 'PASS', health: 'PASS' }),
     },
   })
-  assert.equal(rollback.status, 'ROLLED_BACK')
-  assert.deepEqual(rollbackOrder.slice(0, 3), ['recovery-check', 'restore', 'writer-lock'])
+  assert.equal(retryRollback.status, 'ROLLED_BACK')
+  assert.equal(retryRestoreCalls, 0)
   assert.equal(stableSha256(fs.readFileSync(database)), beforeHash)
   assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
 }

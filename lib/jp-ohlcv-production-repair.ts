@@ -286,7 +286,7 @@ function holdOperatorAction(input: {
     return 'The data, derived state, generations and read services were verified and committed, but final journal archival is incomplete. Do not retry or roll back: rollback is forbidden for this state. Preserve the committed journal and lock and verify generation pointers and services against this transaction. No automated finalization recovery is implemented; require a separately reviewed manual recovery procedure and approval.'
   }
   if (stage.startsWith('ROLLBACK_')) {
-    return `Rollback is incomplete and must not be restarted automatically. Preserve ${databaseRealpath}, ${databaseRealpath}.restore-${transactionId}, ${databaseRealpath}.failed-${transactionId}, their WAL/SHM sidecars, the verified backup, and ${path.join(stateDirectory, `rollback-restore-${transactionId}.json`)}. Keep Web/Analog and every writer held. Inspect the restore phase, hashes, Source/Serving generations and active process record; require exact stale-process evidence if present, then use an operator-approved recovery procedure for that phase.`
+    return `Rollback is incomplete and must not be retried without a new exact hash-bound rollback approval. Preserve ${databaseRealpath}, ${databaseRealpath}.restore-${transactionId}, ${databaseRealpath}.failed-${transactionId}, their WAL/SHM sidecars, the verified backup, and ${path.join(stateDirectory, `rollback-restore-${transactionId}.json`)}. Keep Web/Analog and every writer held. After read-only status and stale-process checks, the approved runner may resume from the durable restore/rollback phase; never delete or rewrite these artifacts manually.`
   }
   return 'Data or serving state may be partial and Web/Analog may be held. Preserve the database, verified backup, journal, lock and both generations; run the read-only status command and obtain an exact hash-bound rollback approval.'
 }
@@ -910,6 +910,36 @@ export class JpOhlcvProductionRepairTransaction {
   }
 
   currentStage(): JpOhlcvRepairStage | null { return this.journal?.stage ?? null }
+
+  rollbackResumeOriginalStage(): JpOhlcvRepairStage | null {
+    return this.journal?.stage === 'HOLD' && this.journal.failure?.originalStage.startsWith('ROLLBACK_')
+      ? this.journal.failure.originalStage
+      : null
+  }
+
+  rollbackDataRestoreEvidence(): {
+    databaseRealpath: string
+    databaseSha256: string
+    sourceGeneration: string
+  } {
+    const evidence = this.journal?.evidence.ROLLBACK_DATA_RESTORED as {
+      databaseRealpath?: unknown
+      databaseSha256?: unknown
+      sourceGeneration?: unknown
+    } | undefined
+    if (!evidence
+      || evidence.databaseRealpath !== this.approval.databaseRealpath
+      || typeof evidence.databaseSha256 !== 'string'
+      || !/^[a-f0-9]{64}$/.test(evidence.databaseSha256)
+      || evidence.sourceGeneration !== this.approval.sourceGenerationBefore) {
+      throw new Error('repair_rollback_prior_restore_evidence_invalid')
+    }
+    return {
+      databaseRealpath: evidence.databaseRealpath,
+      databaseSha256: evidence.databaseSha256,
+      sourceGeneration: evidence.sourceGeneration,
+    }
+  }
 
   recordStageProcessStarted(input: {
     pid: number

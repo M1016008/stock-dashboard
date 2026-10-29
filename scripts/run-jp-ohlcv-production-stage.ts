@@ -396,6 +396,7 @@ async function restoreBackupWithJournal(metadata: {
         }
         if (fs.existsSync(source)) fs.renameSync(source, destination)
       }
+      syncDirectory(path.dirname(expected.databaseRealpath))
       state = writeRestoreState(expected, 'PRIMARY_ARCHIVED')
       fixtureRestoreCrash('after-primary-archived')
     }
