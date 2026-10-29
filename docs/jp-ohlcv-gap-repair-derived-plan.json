@@ -1,4 +1,5 @@
 {
+  "status": "DESIGN_ONLY_NOT_EXECUTABLE",
   "version": 1,
   "targetDate": "2026-07-17",
   "mode": "missing-only-with-preserved-conflicts",

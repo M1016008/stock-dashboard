@@ -20,6 +20,7 @@ import fs from 'fs'
 import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '../storage/external-storage-guard'
 import { assertDatabaseOpenAllowed, assertIsolatedRuntimeEnvironment } from '../runtime/isolation'
 import { sqlStatementMayMutate } from './sql-mutation'
+import { assertJpOhlcvRepairMutationAllowed } from '../jp-ohlcv-repair-barrier'
 
 if (process.env.STOCKBOARD_RUNTIME_SCOPE) assertIsolatedRuntimeEnvironment()
 
@@ -44,6 +45,7 @@ function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean }
 }
 
 const cfg = buildClientUrl()
+export const isCloudDatabase = cfg.isCloud
 
 // シングルトン (Next.js のホットリロードで多重接続を防ぐ)
 const globalForDb = global as unknown as {
@@ -74,10 +76,19 @@ function statementMayMutate(value: unknown): boolean {
 
 function operationMayMutate(property: PropertyKey, args: unknown[]): boolean {
   if (property === 'execute') return statementMayMutate(args[0])
+  if (property === 'executeMultiple') return true
   if (property === 'batch') {
     return !Array.isArray(args[0]) || args[0].some((statement) => statementMayMutate(statement))
   }
+  if (property === 'transaction') return args[0] !== 'read'
+  if (property === 'migrate') return true
   return false
+}
+
+function assertMutationAllowed(property: PropertyKey, args: unknown[]): boolean {
+  const mayMutate = operationMayMutate(property, args)
+  if (mayMutate) assertJpOhlcvRepairMutationAllowed()
+  return mayMutate
 }
 
 function recordMutation(): void {
@@ -142,13 +153,14 @@ function guardedTransaction<T extends object>(transaction: T, guard: ExternalSto
       const member = Reflect.get(target, property)
       if (typeof member !== 'function') return member
       return (...args: unknown[]) => {
+        const mayMutate = assertMutationAllowed(property, args)
         if (property !== 'close') guard?.assertWritable()
         if (property === 'execute' || property === 'batch')
           (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
             .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
         try {
           const result = guardedResult(Reflect.apply(member, target, args), guard)
-          return recordSuccessfulMutation(result, operationMayMutate(property, args))
+          return recordSuccessfulMutation(result, mayMutate)
         }
         catch (error) {
           if (guard && isStorageIoError(error)) guard.classify(error)
@@ -171,6 +183,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     if (typeof member !== 'function') return member
     return (...args: unknown[]) => {
       const guard = storageGuard()
+      const mayMutate = assertMutationAllowed(property, args)
       guard?.assertWritable()
       if (property === 'execute' || property === 'batch')
         (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
@@ -180,7 +193,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
         if (property === 'transaction') {
           return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
         }
-        return recordSuccessfulMutation(result, operationMayMutate(property, args))
+        return recordSuccessfulMutation(result, mayMutate)
       } catch (error) {
         if (guard && isStorageIoError(error)) guard.classify(error)
         throw error

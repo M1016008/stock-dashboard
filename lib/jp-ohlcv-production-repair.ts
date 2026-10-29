@@ -3,20 +3,32 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { stableSha256, type JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
 import { DEFAULT_JP_OHLCV_REPAIR_LOCK } from '@/lib/jp-ohlcv-repair-barrier'
+import { isProcessGroupAlive } from '@/lib/jp-ohlcv-repair-process-supervisor'
 
 export type JpOhlcvRepairStage =
   | 'PREPARING'
   | 'PREPARED'
   | 'WRITER_LOCKED'
   | 'BACKUP_VERIFIED'
+  | 'READ_SERVICES_HOLDING'
+  | 'READ_SERVICES_HELD'
   | 'DATA_COMMITTING'
   | 'DATA_COMMITTED'
   | 'DATA_VERIFIED'
   | 'DERIVED_REBUILDING'
   | 'DERIVED_VERIFIED'
   | 'SERVING_VERIFIED'
+  | 'READ_SERVICES_RESUMING'
+  | 'READ_SERVICES_RESUMED'
   | 'COMMITTED'
   | 'ROLLBACK_STARTED'
+  | 'ROLLBACK_READ_SERVICES_HOLDING'
+  | 'ROLLBACK_READ_SERVICES_HELD'
+  | 'ROLLBACK_DATA_RESTORED'
+  | 'ROLLBACK_DERIVED_REBUILT'
+  | 'ROLLBACK_SERVING_VERIFIED'
+  | 'ROLLBACK_READ_SERVICES_RESUMING'
+  | 'ROLLBACK_READ_SERVICES_RESUMED'
   | 'ROLLBACK_VERIFIED'
   | 'ROLLED_BACK'
   | 'HOLD'
@@ -36,6 +48,7 @@ export type JpOhlcvRepairApproval = {
   approvedConflictTickers: string[]
   conflictDisposition: 'PRESERVE_EXISTING_HOLD'
   databaseRealpath: string
+  databaseIdentitySha256: string
   stateDirectory: string
   backupDirectory: string
   sourceGenerationBefore: string
@@ -61,7 +74,19 @@ export type JpOhlcvRepairJournal = {
   automaticRetryAllowed: false
   operatorAction: string
   evidence: Record<string, unknown>
-  failure?: { name: string; message: string; originalStage: JpOhlcvRepairStage }
+  failure?: {
+    name: string
+    message: string
+    originalStage: JpOhlcvRepairStage
+    causes: Array<{ name: string; message: string }>
+  }
+  failureHistory?: Array<NonNullable<JpOhlcvRepairJournal['failure']>>
+  activeStageProcess?: {
+    pid: number
+    processGroupId: number
+    commandSha256: string
+    startedAt: string
+  }
 }
 
 export type JpOhlcvRepairRollbackApproval = {
@@ -77,6 +102,11 @@ export type JpOhlcvRepairRollbackApproval = {
   sourceGenerationTarget: string
   servingGenerationTarget: string
   reason: string
+  staleStageProcessRecovery?: {
+    processGroupId: number
+    confirmedStoppedAt: string
+    reason: string
+  }
 }
 
 export type JpOhlcvRepairPaths = {
@@ -108,6 +138,40 @@ function exists(file: string): boolean {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw error
   }
+}
+
+function sanitizeFailureText(value: unknown): string {
+  return String(value)
+    .replace(/\b(Bearer)\s+[^\s]+/gi, '$1 [REDACTED]')
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|AUTH)[A-Z0-9_]*)=([^\s]+)/gi, '$1=[REDACTED]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 500)
+}
+
+function failureCauses(error: unknown): Array<{ name: string; message: string }> {
+  const result: Array<{ name: string; message: string }> = []
+  const visit = (value: unknown): void => {
+    if (value instanceof AggregateError) {
+      for (const nested of value.errors) visit(nested)
+      if (value.cause) visit(value.cause)
+      return
+    }
+    if (value instanceof Error) {
+      result.push({ name: sanitizeFailureText(value.name), message: sanitizeFailureText(value.message) })
+      if (value.cause) visit(value.cause)
+      return
+    }
+    result.push({ name: 'Error', message: sanitizeFailureText(value) })
+  }
+  visit(error)
+  return result
+}
+
+function holdOperatorAction(stage: JpOhlcvRepairStage): string {
+  if (['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED'].includes(stage)) {
+    return 'No data mutation is recorded. Preserve the lock and journal, run the read-only repair status command, and obtain explicit cleanup or retry approval.'
+  }
+  return 'Data or serving state may be partial. Preserve the database, backup, journal, lock and generations; run the read-only repair status command and obtain an exact hash-bound rollback approval.'
 }
 
 export function repairApprovalSha256(approval: JpOhlcvRepairApproval): string {
@@ -161,7 +225,12 @@ export function assertRepairApproval(input: {
     || approval.expectedExistingRows !== approval.expectedMatchingRows + scope.preservedConflicts.length) {
     throw new Error('repair_approval_row_accounting_mismatch')
   }
-  for (const value of [approval.derivedPlanSha256, approval.officialSha256, approval.planSha256]) {
+  for (const value of [
+    approval.databaseIdentitySha256,
+    approval.derivedPlanSha256,
+    approval.officialSha256,
+    approval.planSha256,
+  ]) {
     if (!/^[a-f0-9]{64}$/.test(value)) throw new Error('repair_approval_sha256_invalid')
   }
   for (const directory of [approval.stateDirectory, approval.backupDirectory]) {
@@ -248,6 +317,21 @@ export class JpOhlcvProductionRepairTransaction {
     if (journal.stage === 'ROLLED_BACK' || journal.stage === 'ROLLBACK_VERIFIED') {
       throw new Error(`repair_rollback_terminal_stage:${journal.stage}`)
     }
+    const staleStageProcess = journal.activeStageProcess
+    if (staleStageProcess) {
+      if (isProcessGroupAlive(staleStageProcess.processGroupId)) {
+        throw new Error(`repair_rollback_stage_process_still_active:${staleStageProcess.processGroupId}`)
+      }
+      const recovery = rollback.staleStageProcessRecovery
+      const confirmedStoppedAt = recovery ? Date.parse(recovery.confirmedStoppedAt) : Number.NaN
+      if (!recovery
+        || recovery.processGroupId !== staleStageProcess.processGroupId
+        || !Number.isFinite(confirmedStoppedAt)
+        || confirmedStoppedAt > Date.now()
+        || !recovery.reason.trim()) {
+        throw new Error(`repair_rollback_stage_process_exact_recovery_approval_required:${staleStageProcess.processGroupId}`)
+      }
+    }
     if (!rollback.reason.trim()) throw new Error('repair_rollback_reason_required')
     const transaction = new JpOhlcvProductionRepairTransaction({
       approval: input.approval,
@@ -256,10 +340,71 @@ export class JpOhlcvProductionRepairTransaction {
       transactionId: journal.transactionId,
     })
     transaction.journal = journal
+    if (staleStageProcess) transaction.acknowledgeStoppedStageProcess(rollback.staleStageProcessRecovery!)
     return transaction
   }
 
   currentStage(): JpOhlcvRepairStage | null { return this.journal?.stage ?? null }
+
+  recordStageProcessStarted(input: {
+    pid: number
+    processGroupId: number
+    commandSha256: string
+  }): void {
+    if (!this.journal) throw new Error('repair_stage_process_journal_missing')
+    if (this.journal.activeStageProcess) throw new Error('repair_stage_process_already_recorded')
+    this.assertLockOwnership()
+    this.journal = {
+      ...this.journal,
+      updatedAt: new Date().toISOString(),
+      activeStageProcess: { ...input, startedAt: new Date().toISOString() },
+    }
+    atomicJson(this.paths.journal, this.journal)
+  }
+
+  recordStageProcessStopped(input: {
+    processGroupId: number
+    outcome: string
+  }): void {
+    if (!this.journal?.activeStageProcess) throw new Error('repair_stage_process_record_missing')
+    if (this.journal.activeStageProcess.processGroupId !== input.processGroupId) {
+      throw new Error('repair_stage_process_record_mismatch')
+    }
+    this.assertLockOwnership()
+    const stopped = {
+      ...this.journal.activeStageProcess,
+      stoppedAt: new Date().toISOString(),
+      outcome: sanitizeFailureText(input.outcome),
+    }
+    const { activeStageProcess: _activeStageProcess, ...withoutActive } = this.journal
+    this.journal = {
+      ...withoutActive,
+      updatedAt: new Date().toISOString(),
+      evidence: { ...this.journal.evidence, LAST_STAGE_PROCESS: stopped },
+    }
+    atomicJson(this.paths.journal, this.journal)
+  }
+
+  private acknowledgeStoppedStageProcess(recovery: NonNullable<JpOhlcvRepairRollbackApproval['staleStageProcessRecovery']>): void {
+    if (!this.journal?.activeStageProcess) throw new Error('repair_stage_process_recovery_record_missing')
+    if (this.journal.activeStageProcess.processGroupId !== recovery.processGroupId
+      || isProcessGroupAlive(recovery.processGroupId)) {
+      throw new Error('repair_stage_process_recovery_state_mismatch')
+    }
+    this.assertLockOwnership()
+    const recovered = {
+      ...this.journal.activeStageProcess,
+      confirmedStoppedAt: recovery.confirmedStoppedAt,
+      reason: sanitizeFailureText(recovery.reason),
+    }
+    const { activeStageProcess: _activeStageProcess, ...withoutActive } = this.journal
+    this.journal = {
+      ...withoutActive,
+      updatedAt: new Date().toISOString(),
+      evidence: { ...this.journal.evidence, STALE_STAGE_PROCESS_RECOVERY: recovered },
+    }
+    atomicJson(this.paths.journal, this.journal)
+  }
 
   private assertLockOwnership(): void {
     const lock = JSON.parse(fs.readFileSync(this.paths.lock, 'utf8')) as { transactionId?: string }
@@ -294,6 +439,7 @@ export class JpOhlcvProductionRepairTransaction {
       protectedPaths: [
         this.approval.databaseRealpath,
         this.approval.backupDirectory,
+        this.paths.stateDirectory,
         this.paths.journal,
         this.paths.lock,
       ],
@@ -323,15 +469,21 @@ export class JpOhlcvProductionRepairTransaction {
   hold(error: unknown): never {
     if (!this.journal) throw error
     const originalStage = this.journal.stage
+    const previousFailure = this.journal.failure
     this.journal = {
       ...this.journal,
       stage: 'HOLD',
       updatedAt: new Date().toISOString(),
+      operatorAction: holdOperatorAction(originalStage),
       failure: {
-        name: error instanceof Error ? error.name : 'Error',
-        message: error instanceof Error ? error.message : String(error),
+        name: sanitizeFailureText(error instanceof Error ? error.name : 'Error'),
+        message: sanitizeFailureText(error instanceof Error ? error.message : error),
         originalStage,
+        causes: failureCauses(error),
       },
+      failureHistory: previousFailure
+        ? [...(this.journal.failureHistory ?? []), previousFailure]
+        : this.journal.failureHistory,
     }
     atomicJson(this.paths.journal, this.journal)
     throw error
@@ -350,13 +502,13 @@ export class JpOhlcvProductionRepairTransaction {
   }
 
   markCommitted(): void {
-    if (!this.journal || this.journal.stage !== 'SERVING_VERIFIED') {
+    if (!this.journal || this.journal.stage !== 'READ_SERVICES_RESUMED') {
       throw new Error(`repair_commit_stage_invalid:${this.journal?.stage ?? 'missing'}`)
     }
     const archived = `${this.paths.journal}.committed-${this.transactionId}`
     if (exists(archived)) throw new Error(`repair_commit_archive_exists:${archived}`)
     this.assertLockOwnership()
-    this.advance('SERVING_VERIFIED', 'COMMITTED', { completedAt: new Date().toISOString() })
+    this.advance('READ_SERVICES_RESUMED', 'COMMITTED', { completedAt: new Date().toISOString() })
   }
 
   finalizeCommit(): string {
@@ -373,11 +525,13 @@ export class JpOhlcvProductionRepairTransaction {
   }
 
   markRollbackVerified(evidence: Record<string, unknown>): string {
-    if (!this.journal || this.journal.stage !== 'ROLLBACK_STARTED') throw new Error('repair_rollback_stage_invalid')
+    if (!this.journal || this.journal.stage !== 'ROLLBACK_READ_SERVICES_RESUMED') {
+      throw new Error('repair_rollback_stage_invalid')
+    }
     const archived = `${this.paths.journal}.rolled-back-${this.transactionId}`
     if (exists(archived)) throw new Error(`repair_rollback_archive_exists:${archived}`)
     this.assertLockOwnership()
-    this.advance('ROLLBACK_STARTED', 'ROLLBACK_VERIFIED', evidence)
+    this.advance('ROLLBACK_READ_SERVICES_RESUMED', 'ROLLBACK_VERIFIED', evidence)
     this.advance('ROLLBACK_VERIFIED', 'ROLLED_BACK', { completedAt: new Date().toISOString() })
     fs.renameSync(this.paths.journal, archived)
     fs.unlinkSync(this.paths.lock)

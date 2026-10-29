@@ -160,3 +160,47 @@ plan, missing rows, preserved conflicts and derived plan hashes. It writes an
 external fsynced journal before DB work, uses an exclusive writer adapter,
 requires a verified SQLite online backup, and leaves every crash or ambiguous
 stage in manual HOLD. Automatic retry and automatic cleanup are prohibited.
+
+The hash stored as `derivedPlanSha256` binds the complete executable repair
+plan: normalized official rows, the backup command, Web/Analog hold and resume
+commands, Source Generation publication, derivative rebuild commands, serving
+verification, and rollback commands. Every executable is bound by its realpath
+and SHA-256. Interpreter commands cannot use inline `-e`/`-c`; every script is
+also hash-sealed and executed from a transaction-local content-addressed
+snapshot. Commands run without a shell, receive a non-overridable repair owner
+identity, and must return JSON evidence. The approval also binds a separately
+generated database identity hash covering the exact Production database/schema
+generation being repaired. The
+forward and rollback entry point is
+`npm run execute:jp-ohlcv-production-repair -- --execute ...`. It additionally
+requires `STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED` to equal the exact
+approval hash, `USE_LOCAL_DB=1`, and an exact local database identity; Turso is
+rejected. Build the executable plan from the separately sealed official-row and
+command manifests with `npm run build:jp-ohlcv-production-execution-plan`.
+`docs/jp-ohlcv-gap-repair-derived-plan.json` is design documentation only and is
+intentionally rejected as an executable plan. Production execution remains
+forbidden until the exact generated bundle, plan, database identity, backup
+capacity, service-maintenance window and rollback are approved.
+
+The repair runner holds both Web and Analog before `DATA_COMMITTING` and does
+not resume them until the new Serving Generation passes health verification.
+If either service transition fails, the external barrier and journal remain in
+HOLD and the runner does not continue automatically.
+
+Every detached stage command records its PID/process-group ID and executable
+hash in the fsynced journal before its evidence can be accepted. Parent
+SIGINT, SIGTERM, or SIGHUP terminates the complete group with TERM followed by
+KILL and moves the transaction to HOLD. A parent SIGKILL or power loss leaves
+the active group identity in the journal: status reports whether it is still
+alive, and rollback is refused while it is alive. Once it is proven stopped,
+the exact rollback approval must bind the stale group ID, confirmation time,
+reason, and pre-recovery journal hash before the marker can be acknowledged.
+Stage children receive only an allowlisted runtime environment plus the repair
+owner identity; API and database credentials are not inherited implicitly.
+
+Use `npm run status:jp-ohlcv-production-repair` for a read-only view of the
+transaction ID, stage, protected paths, original failure causes and exact
+operator action. It also reports the active stage process and liveness. A
+non-clear state exits with code 2. Never remove a lock or journal merely to
+make this status command pass; pre-write cleanup and post-write rollback each
+require a separate hash-bound approval.

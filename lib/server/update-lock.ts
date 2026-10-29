@@ -231,7 +231,13 @@ export async function acquireUpdateLock(
 ): Promise<UpdateLockHandle | null> {
   const repairBarrier = jpOhlcvRepairBarrierDecision({ jobType })
   if (repairBarrier.blocked) {
-    console.error(`Update lock ${jobType} deferred: ${repairBarrier.reason}:${repairBarrier.lockPath}`)
+    console.error(JSON.stringify({
+      event: 'jp_ohlcv_repair_writer_deferred',
+      jobType,
+      reason: repairBarrier.reason,
+      transactionId: repairBarrier.transactionId,
+      recovery: 'Run npm run status:jp-ohlcv-production-repair; do not remove the lock or journal automatically.',
+    }))
     return null
   }
   await ensureReady()

@@ -7,6 +7,10 @@ import {
 } from '@/lib/jp-ohlcv-data-quality'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { DEFAULT_JP_OHLCV_REPAIR_LOCK } from '@/lib/jp-ohlcv-repair-barrier'
+import {
+  assertJpOhlcvRepairExecutionPlan,
+  type JpOhlcvRepairExecutionPlan,
+} from '@/lib/jp-ohlcv-command-adapter'
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -30,7 +34,17 @@ const scope = buildJpOhlcvMissingOnlyRepairScope({ plan: parsed.plan, approvedCo
 if (scope.status !== 'READY') throw new Error(`missing_only_scope_hold:${scope.reasons.join(',')}`)
 
 const derivedPlanFile = absolute('--derived-plan')
-const derivedPlanSha256 = stableSha256(JSON.parse(fs.readFileSync(derivedPlanFile, 'utf8')))
+const derivedPlan = JSON.parse(fs.readFileSync(derivedPlanFile, 'utf8')) as JpOhlcvRepairExecutionPlan
+if (derivedPlan.version !== 1
+  || !Array.isArray(derivedPlan.officialRows)
+  || derivedPlan.officialRows.length !== parsed.plan.officialRows
+  || !derivedPlan.commands
+  || derivedPlan.commands.rebuildDerivedServing.length === 0
+  || derivedPlan.commands.rebuildOriginalDerivedServing.length === 0) {
+  throw new Error('repair_executable_plan_incomplete')
+}
+assertJpOhlcvRepairExecutionPlan({ plan: derivedPlan, targetDate: scope.date })
+const derivedPlanSha256 = stableSha256(derivedPlan)
 const approval: JpOhlcvRepairApproval = {
   version: 1,
   executionScope: 'PRODUCTION',
@@ -46,6 +60,7 @@ const approval: JpOhlcvRepairApproval = {
   approvedConflictTickers: conflictTickers.sort(),
   conflictDisposition: 'PRESERVE_EXISTING_HOLD',
   databaseRealpath: fs.realpathSync(absolute('--database')),
+  databaseIdentitySha256: value('--database-identity-sha256'),
   stateDirectory: absolute('--state-directory'),
   backupDirectory: absolute('--backup-directory'),
   sourceGenerationBefore: value('--source-generation-before'),
