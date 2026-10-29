@@ -13,6 +13,7 @@ import {
 import {
   buildJpOhlcvMissingOnlyRepairScope,
   buildJpOhlcvBackfillPlan,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOhlcvBackfillPlan,
   type JpOfficialOhlcvValue,
@@ -76,8 +77,33 @@ const dryRun = readJson<{ plan?: JpOhlcvBackfillPlan }>(dryRunFile)
 if (!dryRun.plan) throw new Error('repair_package_dry_run_plan_missing')
 const officialInput = readJson<JpOfficialOhlcvValue[] | { rows: JpOfficialOhlcvValue[] }>(officialRowsFile)
 const officialRows = Array.isArray(officialInput) ? officialInput : officialInput.rows
-const existingInput = readJson<JpOhlcvValue[] | { rows: JpOhlcvValue[] }>(existingRowsFile)
-const existingRows = Array.isArray(existingInput) ? existingInput : existingInput.rows
+const existingInput = readJson<JpOhlcvValue[] | {
+  rows?: JpOhlcvValue[]
+  reconstructedRows?: JpOhlcvValue[]
+  reconstructedRowsSha256?: string
+  evidenceKind?: string
+  provenance?: unknown
+}>(existingRowsFile)
+const existingRows = Array.isArray(existingInput)
+  ? existingInput
+  : existingInput.reconstructedRows ?? existingInput.rows
+if (!existingRows) throw new Error('repair_package_existing_rows_missing')
+const existingWrapper = Array.isArray(existingInput) ? null : existingInput
+const existingRowsSha256 = stableSha256(existingRows)
+const existingKind = !existingWrapper?.reconstructedRows
+  ? 'DIRECT_PRODUCTION_SNAPSHOT'
+  : existingWrapper.evidenceKind
+const existingProvenanceSha256 = !existingWrapper?.reconstructedRows
+  ? stableSha256({ kind: 'DIRECT_PRODUCTION_SNAPSHOT', fileSha256: sha256File(existingRowsFile) })
+  : stableSha256(existingWrapper.provenance)
+if (existingKind !== config.existingEvidence.kind
+  || sha256File(existingRowsFile) !== config.existingEvidence.fileSha256
+  || existingRowsSha256 !== config.existingEvidence.rowsSha256
+  || existingProvenanceSha256 !== config.existingEvidence.provenanceSha256
+  || (existingWrapper?.reconstructedRows
+    && existingWrapper.reconstructedRowsSha256 !== existingRowsSha256)) {
+  throw new Error('repair_package_existing_evidence_identity_mismatch')
+}
 const rebuiltPlan = buildJpOhlcvBackfillPlan({ date: config.targetDate, officialRows, existingRows })
 if (stableSha256(rebuiltPlan) !== stableSha256(dryRun.plan)) {
   throw new Error('repair_package_evidence_rebuild_mismatch')
@@ -86,8 +112,8 @@ const scope = buildJpOhlcvMissingOnlyRepairScope({
   plan: dryRun.plan,
   approvedConflictTickers: config.preservedConflictTickers,
 })
-if (scope.status !== 'READY' || scope.missingRows.length !== 4067) {
-  throw new Error(`repair_package_scope_not_ready:expected_missing_4067:actual_${scope.missingRows.length}:${scope.reasons.join(',')}`)
+if (scope.status !== 'READY' || scope.missingRows.length !== config.repairScope.missingRows) {
+  throw new Error(`repair_package_scope_not_ready:expected_missing_${config.repairScope.missingRows}:actual_${scope.missingRows.length}:${scope.reasons.join(',')}`)
 }
 if (config.lineage.targetDate !== config.targetDate
   || config.lineage.officialSha256 !== scope.officialSha256
@@ -119,6 +145,7 @@ const rollbackCommands = config.nestedCommands.filter((command) => command.rollb
 const plan: JpOhlcvRepairExecutionPlan = {
   version: 1,
   officialRows,
+  approvalScope: scope,
   commands: {
     createBackup: stage('create-backup', [], 3 * 60 * 60_000),
     holdReadServices: stage('hold-read-services', [], 5 * 60_000),
@@ -152,6 +179,9 @@ const approval: JpOhlcvRepairApproval = {
   officialSha256: scope.officialSha256,
   planSha256: scope.planSha256,
   missingRowsSha256: scope.missingRowsSha256,
+  approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+  runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
+  runtimeSnapshotTtlMs: 900000,
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: dryRun.plan.officialRows,
   expectedExistingRows: dryRun.plan.existingRows,

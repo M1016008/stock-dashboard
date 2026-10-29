@@ -62,6 +62,28 @@ export type JpOhlcvMissingOnlyRepairScope = {
   reasons: string[]
 }
 
+export type JpOhlcvRuntimeRepairScope = JpOhlcvMissingOnlyRepairScope & {
+  runtimeKind: 'BOUNDED_APPROVED_KEY_REVALIDATION'
+  approvalPlanSha256: string
+  approvedMissingRowsSha256: string
+  approvedRepairKeysSha256: string
+  alreadySatisfiedRows: JpOfficialOhlcvValue[]
+  alreadySatisfiedRowsSha256: string
+  runtimeExistingSha256: string
+}
+
+export type JpOhlcvRuntimeHoldSummary = {
+  holdClass: 'SOURCE_REVISED' | 'PRICE_CONFLICT' | 'UNAPPROVED_DRIFT' | 'INVALID_APPROVAL' | 'UNKNOWN'
+  reasonCount: number
+  reasonCounts: Record<string, number>
+  samples: Array<{
+    reason: string
+    key: string | null
+    existing?: JpOhlcvValue
+    official?: JpOfficialOhlcvValue
+  }>
+}
+
 export type JpDailyCoverageEvaluation = {
   status: 'PASS' | 'HOLD'
   providerRows: number
@@ -117,7 +139,7 @@ export function validateJpOhlcvValue(row: JpOhlcvValue): string[] {
   return errors
 }
 
-function sameValue(left: JpOhlcvValue, right: JpOhlcvValue): boolean {
+export function sameJpOhlcvValue(left: JpOhlcvValue, right: JpOhlcvValue): boolean {
   const closeEnough = (a: number, b: number) => Math.abs(a - b) <= Math.max(1e-8, Math.abs(a) * 1e-10)
   return left.ticker === right.ticker
     && left.date === right.date
@@ -147,7 +169,7 @@ function uniqueRows<T extends JpOhlcvValue>(
       byKey.set(key, value)
       continue
     }
-    if (!sameValue(previous, value)) {
+    if (!sameJpOhlcvValue(previous, value)) {
       conflicts.push({
         ticker: value.ticker,
         date: value.date,
@@ -200,7 +222,7 @@ export function buildJpOhlcvBackfillPlan(input: {
     const existingRow = existing.rows.get(key)
     if (!existingRow) {
       missingRows.push(officialRow)
-    } else if (sameValue(existingRow, officialRow)) {
+    } else if (sameJpOhlcvValue(existingRow, officialRow)) {
       matchingRows += 1
     } else {
       conflicts.push({
@@ -276,6 +298,136 @@ export function buildJpOhlcvMissingOnlyRepairScope(input: {
     preservedConflictsSha256: stableSha256(conflicts),
     reasons,
   }
+}
+
+function rowKey(row: Pick<JpOhlcvValue, 'ticker' | 'date'>): string {
+  return `${normalizeTicker(row.ticker)}:${row.date}`
+}
+
+export function jpOhlcvApprovedRepairKeysSha256(rows: readonly JpOhlcvValue[]): string {
+  return stableSha256([...new Set(rows.map(rowKey))].sort())
+}
+
+/**
+ * Revalidates an immutable missing-key approval against a later database
+ * snapshot. Normal updaters may satisfy an approved key only when the stored
+ * value exactly matches the sealed official value. Every other drift is a
+ * fail-closed condition.
+ */
+export function buildJpOhlcvRuntimeRepairScope(input: {
+  approvalScope: JpOhlcvMissingOnlyRepairScope
+  officialRows: readonly JpOfficialOhlcvValue[]
+  existingRows: readonly JpOhlcvValue[]
+}): JpOhlcvRuntimeRepairScope {
+  const approval = input.approvalScope
+  const runtimePlan = buildJpOhlcvBackfillPlan({
+    date: approval.date,
+    officialRows: input.officialRows,
+    existingRows: input.existingRows,
+  })
+  const reasons = new Set<string>()
+  if (approval.status !== 'READY') reasons.add('approval_scope_not_ready')
+  if (runtimePlan.officialSha256 !== approval.officialSha256) reasons.add('official_source_hash_changed')
+
+  const approvedRows = new Map(approval.missingRows.map((row) => [rowKey(row), normalizeValue(row)]))
+  const officialRows = new Map(sorted(input.officialRows).map((row) => [rowKey(row), row]))
+  const existingRows = new Map(sorted(input.existingRows).map((row) => [rowKey(row), row]))
+  const residualMissingRows: JpOfficialOhlcvValue[] = []
+  const alreadySatisfiedRows: JpOfficialOhlcvValue[] = []
+
+  for (const [key, approvedRow] of approvedRows) {
+    const official = officialRows.get(key)
+    if (!official || !sameJpOhlcvValue(official, approvedRow)) {
+      reasons.add(`approved_key_official_value_changed:${key}`)
+      continue
+    }
+    const existing = existingRows.get(key)
+    if (!existing) residualMissingRows.push(official)
+    else if (sameJpOhlcvValue(existing, official)) alreadySatisfiedRows.push(official)
+    else reasons.add(`approved_key_existing_value_conflict:${key}`)
+  }
+
+  for (const missing of runtimePlan.missingRows) {
+    if (!approvedRows.has(rowKey(missing))) reasons.add(`unapproved_missing_key:${rowKey(missing)}`)
+  }
+  const runtimeConflictKeys = new Set(runtimePlan.conflicts.map(rowKey))
+  for (const conflict of runtimePlan.conflicts) {
+    const key = rowKey(conflict)
+    if (approvedRows.has(key)) continue
+    const approvedConflict = approval.preservedConflicts.find((entry) => rowKey(entry) === key)
+    if (!approvedConflict || stableSha256(conflict) !== stableSha256(approvedConflict)) {
+      reasons.add(`unapproved_or_changed_conflict:${key}`)
+    }
+  }
+  for (const conflict of approval.preservedConflicts) {
+    if (!runtimeConflictKeys.has(rowKey(conflict))) {
+      reasons.add(`preserved_conflict_state_changed:${rowKey(conflict)}`)
+    }
+  }
+  for (const key of existingRows.keys()) {
+    if (!officialRows.has(key) && ![...reasons].some((reason) => reason.endsWith(`:${key}`))) {
+      reasons.add(`existing_key_without_official:${key}`)
+    }
+  }
+
+  const missingRows = sorted(residualMissingRows)
+  const satisfiedRows = sorted(alreadySatisfiedRows)
+  return {
+    version: 1,
+    date: approval.date,
+    status: reasons.size === 0 ? 'READY' : 'HOLD',
+    conflictDisposition: approval.conflictDisposition,
+    officialSha256: approval.officialSha256,
+    planSha256: runtimePlan.planSha256,
+    missingRows,
+    missingRowsSha256: stableSha256(missingRows),
+    preservedConflicts: runtimePlan.conflicts,
+    preservedConflictsSha256: stableSha256(runtimePlan.conflicts),
+    reasons: [...reasons].sort(),
+    runtimeKind: 'BOUNDED_APPROVED_KEY_REVALIDATION',
+    approvalPlanSha256: approval.planSha256,
+    approvedMissingRowsSha256: approval.missingRowsSha256,
+    approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(approval.missingRows),
+    alreadySatisfiedRows: satisfiedRows,
+    alreadySatisfiedRowsSha256: stableSha256(satisfiedRows),
+    runtimeExistingSha256: runtimePlan.existingSha256,
+  }
+}
+
+export function summarizeJpOhlcvRuntimeScopeHold(
+  scope: JpOhlcvRuntimeRepairScope,
+  sampleLimit = 12,
+): JpOhlcvRuntimeHoldSummary {
+  const reasonCounts: Record<string, number> = {}
+  for (const reason of scope.reasons) {
+    const category = reason.split(':', 1)[0]
+    reasonCounts[category] = (reasonCounts[category] ?? 0) + 1
+  }
+  const categories = new Set(Object.keys(reasonCounts))
+  const holdClass: JpOhlcvRuntimeHoldSummary['holdClass'] =
+    categories.has('official_source_hash_changed') || categories.has('approved_key_official_value_changed')
+      ? 'SOURCE_REVISED'
+      : categories.has('approved_key_existing_value_conflict') || categories.has('preserved_conflict_state_changed')
+        ? 'PRICE_CONFLICT'
+        : categories.has('unapproved_missing_key') || categories.has('unapproved_or_changed_conflict')
+            || categories.has('existing_key_without_official')
+          ? 'UNAPPROVED_DRIFT'
+          : categories.has('approval_scope_not_ready')
+            ? 'INVALID_APPROVAL'
+            : 'UNKNOWN'
+  const conflicts = new Map(scope.preservedConflicts.map((conflict) => [rowKey(conflict), conflict]))
+  const samples = scope.reasons.slice(0, sampleLimit).map((reason) => {
+    const [, ticker, date] = reason.split(':')
+    const key = ticker && date ? `${ticker}:${date}` : null
+    const conflict = key ? conflicts.get(key) : undefined
+    return {
+      reason: reason.split(':', 1)[0],
+      key,
+      ...(conflict?.existing ? { existing: conflict.existing } : {}),
+      ...(conflict?.official ? { official: conflict.official } : {}),
+    }
+  })
+  return { holdClass, reasonCount: scope.reasons.length, reasonCounts, samples }
 }
 
 function median(values: readonly number[]): number {

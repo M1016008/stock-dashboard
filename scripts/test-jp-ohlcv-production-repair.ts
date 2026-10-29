@@ -7,6 +7,8 @@ import {
   assessJpOhlcvConflictLineage,
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
+  buildJpOhlcvRuntimeRepairScope,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOfficialOhlcvValue,
   type JpOhlcvValue,
@@ -50,6 +52,7 @@ const existing: JpOhlcvValue[] = [
 ]
 const plan = buildJpOhlcvBackfillPlan({ date: '2026-07-17', officialRows: official, existingRows: existing })
 const scope = buildJpOhlcvMissingOnlyRepairScope({ plan, approvedConflictTickers: ['1447'] })
+const runtimeScope = buildJpOhlcvRuntimeRepairScope({ approvalScope: scope, officialRows: official, existingRows: existing })
 assert.equal(scope.status, 'READY')
 assert.equal(scope.missingRows.length, 2)
 assert.deepEqual(assessJpOhlcvConflictLineage({
@@ -100,6 +103,9 @@ const approvalFor = (name: string): JpOhlcvRepairApproval => ({
   officialSha256: scope.officialSha256,
   planSha256: scope.planSha256,
   missingRowsSha256: scope.missingRowsSha256,
+  approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+  runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
+  runtimeSnapshotTtlMs: 900000,
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: plan.officialRows,
   expectedExistingRows: plan.existingRows,
@@ -131,7 +137,7 @@ function adapter(approval: JpOhlcvRepairApproval, overrides: Partial<JpOhlcvRepa
       sourceGeneration: 'jp-source-before',
       servingGeneration: 'jp-serving-before',
     }),
-    revalidatePlan: async () => scope,
+    revalidatePlan: async () => runtimeScope,
     holdReadServices: async () => ({
       web: 'HELD',
       analog: 'HELD',

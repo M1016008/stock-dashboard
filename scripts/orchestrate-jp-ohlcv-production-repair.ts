@@ -23,6 +23,18 @@ import {
 } from '@/lib/storage/launchd-writer-hold-driver'
 import type { WriterHoldDriver } from '@/lib/storage/weekly-writer-hold'
 import { inspectWritableTargetPath } from '@/lib/storage/external-storage-guard'
+import {
+  buildJpOhlcvBackfillPlan,
+  type JpOfficialOhlcvValue,
+  type JpOhlcvMissingOnlyRepairScope,
+} from '@/lib/jp-ohlcv-data-quality'
+import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
+import { fetchJQuantsDailyByDateWithEvidence } from '@/lib/jquants'
+import {
+  assertJpOhlcvRuntimeSnapshot,
+  captureJpOhlcvRuntimeSnapshot,
+  type JpOhlcvRuntimeSnapshot,
+} from '@/lib/jp-ohlcv-runtime-snapshot'
 
 type OperatorPhase = 'PRE_FLIGHT' | 'WRITER_HOLD' | 'IN_TRANSACTION' | 'COMMIT_VERIFY' | 'POST_COMMIT'
 type MutationState = 'NOT_STARTED' | 'TRANSACTION_STATE_UNCERTAIN' | 'COMMIT_REPORTED' | 'COMMIT_VERIFIED'
@@ -61,6 +73,8 @@ function readJson<T>(file: string): T {
 async function runChild(
   bundle: JpOhlcvProductionExecutionPackage,
   config: JpOhlcvProductionExecutionConfiguration,
+  runtimeSnapshotPath: string,
+  runtimeSnapshot: JpOhlcvRuntimeSnapshot,
   onSpawn: () => void,
 ): Promise<{
   status: 'COMMITTED'
@@ -94,6 +108,9 @@ async function runChild(
         ...command.environment,
         STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED:
           process.env.STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED!,
+        STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_PATH: runtimeSnapshotPath,
+        STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_SHA256: runtimeSnapshot.snapshotSha256,
+        STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_FILE_SHA256: sha256File(runtimeSnapshotPath),
       },
       shell: false,
       detached: true,
@@ -217,6 +234,50 @@ async function main(): Promise<void> {
     throw new Error('repair_orchestrator_configuration_mismatch')
   }
   operatorConfig = config
+  const approvalBundle = readJson<{ scope: JpOhlcvMissingOnlyRepairScope }>(bundle.approvalBundlePath)
+  const executionPlan = readJson<JpOhlcvRepairExecutionPlan>(bundle.executionPlanPath)
+  const sealedOfficialSha256 = buildJpOhlcvBackfillPlan({
+    date: config.targetDate,
+    officialRows: executionPlan.officialRows,
+    existingRows: [],
+  }).officialSha256
+  if (sealedOfficialSha256 !== approvalBundle.scope.officialSha256) {
+    throw new Error('repair_preflight_sealed_official_source_mismatch')
+  }
+  const fetchCurrentOfficial = async (): Promise<{
+    rows: JpOfficialOhlcvValue[]
+    proof: JpOhlcvRuntimeSnapshot['officialSourceProof']
+  }> => {
+    const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate)
+    const currentOfficialSha256 = buildJpOhlcvBackfillPlan({
+      date: config.targetDate,
+      officialRows: evidence.rows,
+      existingRows: [],
+    }).officialSha256
+    if (currentOfficialSha256 !== approvalBundle.scope.officialSha256) {
+      throw new Error('repair_preflight_official_source_hash_changed')
+    }
+    return {
+      rows: evidence.rows,
+      proof: {
+        requestedAt: evidence.requestedAt,
+        completedAt: evidence.completedAt,
+        providerRows: evidence.providerRows,
+        acceptedRows: evidence.acceptedRows,
+        rejectedRows: evidence.rejectedRows,
+        contentSha256: evidence.contentSha256,
+      },
+    }
+  }
+  const preHoldOfficial = await fetchCurrentOfficial()
+  const preHoldSnapshot = captureJpOhlcvRuntimeSnapshot({
+    databasePath: config.databaseRealpath,
+    configurationSha256: bundle.configurationSha256,
+    approvalScope: approvalBundle.scope,
+    officialRows: preHoldOfficial.rows,
+    officialSourceProof: preHoldOfficial.proof,
+  })
+  assertJpOhlcvRuntimeSnapshot({ snapshot: preHoldSnapshot })
   inspectWritableTargetPath({
     dbPath: config.databaseRealpath,
     ...config.storageIdentity,
@@ -231,6 +292,9 @@ async function main(): Promise<void> {
   operatorWriterDriver = driver
   operatorPhase = 'WRITER_HOLD'
   type CommittedEvidence = {
+    approvedMissingRows: number
+    alreadySatisfiedExactRows: number
+    residualMissingRows: number
     insertedRows: number
     remainingMissingRows: number
     readServices: unknown
@@ -253,8 +317,26 @@ async function main(): Promise<void> {
     },
     runTransaction: async (assertWriterHoldValid) => {
       await assertWriterHoldValid()
+      const writerStaticOfficial = await fetchCurrentOfficial()
+      const runtimeSnapshot = captureJpOhlcvRuntimeSnapshot({
+        databasePath: config.databaseRealpath,
+        configurationSha256: bundle.configurationSha256,
+        approvalScope: approvalBundle.scope,
+        officialRows: writerStaticOfficial.rows,
+        officialSourceProof: writerStaticOfficial.proof,
+      })
+      assertJpOhlcvRuntimeSnapshot({ snapshot: runtimeSnapshot })
+      fs.mkdirSync(config.stateDirectory, { recursive: true, mode: 0o700 })
+      const runtimeSnapshotPath = path.join(
+        config.stateDirectory,
+        `runtime-snapshot-${Date.now()}-${process.pid}.json`,
+      )
+      fs.writeFileSync(runtimeSnapshotPath, `${JSON.stringify(runtimeSnapshot, null, 2)}\n`, {
+        flag: 'wx',
+        mode: 0o600,
+      })
       operatorPhase = 'IN_TRANSACTION'
-      const committed = await runChild(bundle, config, () => {
+      const committed = await runChild(bundle, config, runtimeSnapshotPath, runtimeSnapshot, () => {
         operatorMutationState = 'TRANSACTION_STATE_UNCERTAIN'
       })
       operatorMutationState = 'COMMIT_REPORTED'
@@ -282,17 +364,34 @@ async function main(): Promise<void> {
       }
       const journal = readJson<{ stage?: unknown; evidence?: Record<string, unknown> }>(committed.archivedJournal)
       const dataCommit = journal.evidence?.DATA_COMMITTED as { insertedRows?: unknown } | undefined
+      const dataCommitting = journal.evidence?.DATA_COMMITTING as {
+        approvedMissingRows?: unknown
+        alreadySatisfiedExactRows?: unknown
+        residualMissingRows?: unknown
+        missingRows?: unknown
+      } | undefined
       const dataVerification = journal.evidence?.DATA_VERIFIED as { missingRows?: unknown } | undefined
       const readServices = journal.evidence?.READ_SERVICES_RESUMED
       const insertedRows = Number(dataCommit?.insertedRows)
+      const approvedMissingRows = Number(dataCommitting?.approvedMissingRows)
+      const alreadySatisfiedExactRows = Number(dataCommitting?.alreadySatisfiedExactRows)
+      const residualMissingRows = Number(dataCommitting?.residualMissingRows)
       const remainingMissingRows = Number(dataVerification?.missingRows)
       if (journal.stage !== 'COMMITTED'
-        || insertedRows !== config.repairScope.missingRows
+        || residualMissingRows !== Number(dataCommitting?.missingRows)
+        || insertedRows !== residualMissingRows
+        || approvedMissingRows !== config.repairScope.missingRows
+        || approvedMissingRows !== alreadySatisfiedExactRows + insertedRows
+        || insertedRows < 0
+        || insertedRows > config.repairScope.missingRows
         || remainingMissingRows !== 0
         || !readServices) {
         throw new Error('repair_orchestrator_committed_evidence_mismatch')
       }
       committedEvidence.value = {
+        approvedMissingRows,
+        alreadySatisfiedExactRows,
+        residualMissingRows,
         insertedRows,
         remainingMissingRows,
         readServices,
@@ -304,15 +403,23 @@ async function main(): Promise<void> {
   const finalEvidence = committedEvidence.value
   if (!finalEvidence) throw new Error('repair_orchestrator_committed_evidence_missing')
   console.log(JSON.stringify({
-    status: 'COMMITTED',
+    status: finalEvidence.insertedRows === 0
+      ? 'COMMITTED_ALREADY_SATISFIED_REBUILT'
+      : 'COMMITTED',
     executionPackageSha256: packageSha256,
+    approvedRepairKeys: finalEvidence.approvedMissingRows,
+    alreadySatisfiedExact: finalEvidence.alreadySatisfiedExactRows,
+    residualAtWriterStaticSnapshot: finalEvidence.residualMissingRows,
+    insertedRows: finalEvidence.insertedRows,
     repairedMissingRows: finalEvidence.insertedRows,
     remainingMissingRows: finalEvidence.remainingMissingRows,
     preservedConflicts: config.preservedConflictTickers,
     unresolvedConflictCount: config.preservedConflictTickers.length,
     dataQualityStatus: 'MISSING_ROWS_REPAIRED_EXISTING_CONFLICTS_HOLD',
     dayFullyRepaired: false,
-    derivedDataNote: 'Derived serving data uses the inserted missing rows. 1447 and 2164 still differ from the official source and retain their pre-repair values.',
+    derivedDataNote: finalEvidence.insertedRows === 0
+      ? 'All approved missing keys were already present with exact sealed official values. No OHLCV row was inserted; generation publication and derived serving rebuild were still verified. Preserved conflicts retain their pre-repair values.'
+      : 'Derived serving data uses the inserted rows plus approved keys already satisfied by exact sealed official values. Preserved conflicts retain their pre-repair values.',
     transaction: result.result,
     readServices: finalEvidence.readServices,
     writerHold: result.writerHold,
@@ -338,8 +445,52 @@ async function observeWriterStates(): Promise<Array<Record<string, unknown>> | n
   }))
 }
 
-function operatorAction(): string {
+type HoldClass = 'BENIGN_RECAPTURE' | 'WAIT_FOR_UPDATER' | 'SOURCE_REVISED' | 'PRICE_CONFLICT'
+  | 'UNAPPROVED_DRIFT' | 'CONCURRENT_STATE_CHANGE' | 'SAFETY_GATE' | 'UNCLASSIFIED'
+
+function holdClass(error: unknown): HoldClass {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('repair_runtime_snapshot_expired:')) return 'BENIGN_RECAPTURE'
+  if (message.includes('repair_runtime_snapshot_source_generation_not_publishable')) return 'WAIT_FOR_UPDATER'
+  if (message.includes('repair_preflight_official_source_hash_changed')
+    || message.includes('official_source_hash_changed')
+    || message.includes('approved_key_official_value_changed')) return 'SOURCE_REVISED'
+  const summaryStart = message.indexOf('repair_runtime_snapshot_scope_hold:')
+  if (summaryStart >= 0) {
+    const encoded = message.slice(summaryStart + 'repair_runtime_snapshot_scope_hold:'.length)
+    try {
+      const parsed = JSON.parse(encoded) as { holdClass?: unknown }
+      if (parsed.holdClass === 'PRICE_CONFLICT') return 'PRICE_CONFLICT'
+      if (parsed.holdClass === 'UNAPPROVED_DRIFT') return 'UNAPPROVED_DRIFT'
+      if (parsed.holdClass === 'SOURCE_REVISED') return 'SOURCE_REVISED'
+      return 'SAFETY_GATE'
+    } catch {
+      return 'SAFETY_GATE'
+    }
+  }
+  if (message.includes('repair_runtime_snapshot_changed_after_writer_hold')) return 'CONCURRENT_STATE_CHANGE'
+  if (message.includes('repair_runtime_snapshot_invalid')
+    || message.includes('repair_runtime_snapshot_official_source_proof_invalid')
+    || message.includes('repair_runtime_snapshot_hash_mismatch')
+    || message.includes('repair_runtime_snapshot_approval_hash_mismatch')) return 'SAFETY_GATE'
+  return 'UNCLASSIFIED'
+}
+
+function operatorAction(error: unknown): string {
   if (operatorMutationState === 'NOT_STARTED') {
+    const classification = holdClass(error)
+    if (classification === 'BENIGN_RECAPTURE') {
+      return 'The database transaction did not start. The short-lived runtime snapshot expired. Verify writer restoration, then capture a new bounded snapshot; do not reuse the expired proof or retry automatically.'
+    }
+    if (classification === 'WAIT_FOR_UPDATER') {
+      return 'The database transaction did not start. A source updater is running or its latest run is not publishable. Restore any held writers through the approved no-mutation path, wait for a terminal publishable updater state, and capture new evidence.'
+    }
+    if (classification === 'SOURCE_REVISED') {
+      return 'The database transaction did not start. The official source changed from the sealed approval. Preserve both source proofs and obtain a new bounded approval; do not insert or overwrite any row.'
+    }
+    if (classification === 'PRICE_CONFLICT' || classification === 'UNAPPROVED_DRIFT') {
+      return 'The database transaction did not start. Production contains a price conflict or unapproved key drift. Preserve the runtime snapshot and investigate the sampled keys; do not widen the repair scope or overwrite rows.'
+    }
     return 'The database transaction did not start. Do not retry automatically. Verify every writer service against writerServices and preserve all evidence. If writers were held, restore them only through the separately hash-approved no-mutation recovery path; then correct only the rejected preflight condition before obtaining fresh exact-hash approval.'
   }
   if (operatorMutationState === 'TRANSACTION_STATE_UNCERTAIN') {
@@ -359,12 +510,16 @@ main().catch(async (error) => {
     phase: operatorPhase,
     productionMutationState: operatorMutationState,
     error: redactedError(error),
-    intendedScope: {
-      missingRows: operatorConfig?.repairScope.missingRows ?? 4067,
-      preservedConflicts: operatorConfig?.preservedConflictTickers ?? ['1447', '2164'],
-      unresolvedConflictCount: operatorConfig?.preservedConflictTickers.length ?? 2,
+    holdClass: holdClass(error),
+    intendedScope: operatorConfig ? {
+      approvedRepairKeys: operatorConfig.repairScope.missingRows,
+      approvedExistingRows: operatorConfig.repairScope.existingRows,
+      approvedMatchingRows: operatorConfig.repairScope.matchingRows,
+      approvedConflictRows: operatorConfig.repairScope.conflicts,
+      preservedConflicts: operatorConfig.preservedConflictTickers,
+      unresolvedConflictCount: operatorConfig.preservedConflictTickers.length,
       dayFullyRepaired: false,
-    },
+    } : null,
     state: operatorConfig ? {
       repairLockPresent: fs.existsSync(path.join(operatorConfig.stateDirectory, 'repair.lock')),
       journalPresent: fs.existsSync(path.join(operatorConfig.stateDirectory, 'repair-journal.json')),
@@ -373,7 +528,7 @@ main().catch(async (error) => {
     writerServices,
     readServiceWarning: 'If readServiceSnapshotPresent is true, Web/Analog may be held or may have failed post-restore health. Verify the exact saved state and health before any service action.',
     writerServiceWarning: 'Any writer with loaded=false that was loaded before maintenance remains intentionally held until the data state is certain. Do not bootstrap it without exact recovery approval.',
-    operatorAction: operatorAction(),
+    operatorAction: operatorAction(error),
   }, null, 2))
   process.exitCode = 1
 })

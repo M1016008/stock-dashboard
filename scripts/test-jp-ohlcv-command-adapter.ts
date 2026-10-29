@@ -6,12 +6,14 @@ import path from 'node:path'
 import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOfficialOhlcvValue,
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import type { JpOhlcvRepairExecutionPlan, JpOhlcvRepairStageCommand } from '@/lib/jp-ohlcv-command-adapter'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
 
 function fileSha256(file: string): string {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -77,14 +79,28 @@ async function main(): Promise<void> {
     heartbeat_at INTEGER NOT NULL,
     lease_expires_at INTEGER NOT NULL
   )`)
+  await client.execute(`CREATE TABLE batch_runs (
+    id INTEGER PRIMARY KEY, job_type TEXT NOT NULL, status TEXT NOT NULL,
+    started_at INTEGER, finished_at INTEGER
+  )`)
+  await client.execute("INSERT INTO batch_runs(id,job_type,status,started_at,finished_at) VALUES(1,'ohlcv_fetch:jquants','success',1,2)")
+  await client.execute('CREATE TABLE daily_snapshots(date TEXT, computed_at INTEGER)')
+  await client.execute('CREATE TABLE stock_screening_serving_dates(as_of TEXT, calculated_at INTEGER)')
+  await client.execute('CREATE TABLE dashboard_cache(date TEXT, computed_at INTEGER)')
   await client.execute({
     sql: 'INSERT INTO ohlcv_daily(ticker,date,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)',
     args: ['1447', '2026-07-17', 273.5, 284.9, 266.8, 270.2, 30],
+  })
+  // Simulate the normal updater satisfying one approved key after approval.
+  await client.execute({
+    sql: 'INSERT INTO ohlcv_daily(ticker,date,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)',
+    args: ['1306', '2026-07-17', 400, 410, 399, 407.9, 10],
   })
 
   const plan: JpOhlcvRepairExecutionPlan = {
     version: 1,
     officialRows,
+    approvalScope: scope,
     commands: {
       createBackup: command({
         databaseRealpath: fs.realpathSync(database),
@@ -120,6 +136,9 @@ async function main(): Promise<void> {
     officialSha256: scope.officialSha256,
     planSha256: scope.planSha256,
     missingRowsSha256: scope.missingRowsSha256,
+    approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+    runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
+    runtimeSnapshotTtlMs: 900000,
     preservedConflictsSha256: scope.preservedConflictsSha256,
     expectedOfficialRows: 3,
     expectedExistingRows: 1,
@@ -139,7 +158,21 @@ async function main(): Promise<void> {
   }
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
   const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
-  const adapters = createJpOhlcvCommandAdapters({ approval, plan })
+  const runtimeSnapshot = captureJpOhlcvRuntimeSnapshot({
+    databasePath: database,
+    configurationSha256: stableSha256({ fixture: 'configuration' }),
+    approvalScope: scope,
+    officialRows,
+    officialSourceProof: {
+      requestedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      providerRows: officialRows.length,
+      acceptedRows: officialRows.length,
+      rejectedRows: 0,
+      contentSha256: 'a'.repeat(64),
+    },
+  })
+  const adapters = createJpOhlcvCommandAdapters({ approval, plan, runtimeSnapshot })
   const result = await runJpOhlcvProductionRepair({
     approval,
     approvalSha256: repairApprovalSha256(approval),
@@ -160,6 +193,17 @@ async function main(): Promise<void> {
     ['7003', 4434],
   ])
   assert.deepEqual(result.conflictsStillHold, ['1447'])
+  const committedJournal = JSON.parse(fs.readFileSync(result.archivedJournal, 'utf8')) as {
+    evidence: { DATA_COMMITTING: Record<string, unknown>; DATA_COMMITTED: Record<string, unknown> }
+  }
+  assert.deepEqual(committedJournal.evidence.DATA_COMMITTING, {
+    approvedMissingRows: 2,
+    alreadySatisfiedExactRows: 1,
+    residualMissingRows: 1,
+    missingRows: 1,
+    missingRowsSha256: stableSha256([officialRows[1]]),
+  })
+  assert.equal(committedJournal.evidence.DATA_COMMITTED.insertedRows, 1)
 
   const context = {
     transactionId: 'command-identity-negative-fixture',

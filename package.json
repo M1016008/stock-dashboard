@@ -153,6 +153,7 @@
     "test:storage-paths": "tsx scripts/test-storage-paths.ts",
     "test:jquants-adjustments": "tsx scripts/test-jquants-adjustments.ts",
     "test:jp-ohlcv-production-repair": "tsx scripts/test-jp-ohlcv-production-repair.ts",
+    "test:jp-ohlcv-runtime-snapshot": "tsx scripts/test-jp-ohlcv-runtime-snapshot.ts",
     "test:jp-ohlcv-command-adapter": "tsx scripts/test-jp-ohlcv-command-adapter.ts",
     "test:jp-ohlcv-executable-plan-e2e": "tsx scripts/test-jp-ohlcv-executable-plan-e2e.ts",
     "build:jp-ohlcv-production-configuration": "tsx scripts/build-jp-ohlcv-production-configuration.ts",

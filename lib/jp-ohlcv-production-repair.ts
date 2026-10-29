@@ -1,7 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { stableSha256, type JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
+import {
+  jpOhlcvApprovedRepairKeysSha256,
+  stableSha256,
+  type JpOhlcvMissingOnlyRepairScope,
+  type JpOhlcvRuntimeRepairScope,
+} from '@/lib/jp-ohlcv-data-quality'
 import { DEFAULT_JP_OHLCV_REPAIR_LOCK } from '@/lib/jp-ohlcv-repair-barrier'
 import {
   readProcessIdentity,
@@ -44,6 +49,9 @@ export type JpOhlcvRepairApproval = {
   officialSha256: string
   planSha256: string
   missingRowsSha256: string
+  approvedRepairKeysSha256: string
+  runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY'
+  runtimeSnapshotTtlMs: 900000
   preservedConflictsSha256: string
   expectedOfficialRows: number
   expectedExistingRows: number
@@ -377,7 +385,7 @@ export function repairResumeServicesApprovalSha256(approval: JpOhlcvRepairResume
 export function assertRepairApproval(input: {
   approval: JpOhlcvRepairApproval
   expectedSha256: string
-  scope: JpOhlcvMissingOnlyRepairScope
+  scope: JpOhlcvMissingOnlyRepairScope | JpOhlcvRuntimeRepairScope
 }): void {
   const { approval, scope } = input
   if (!/^[a-f0-9]{64}$/.test(input.expectedSha256)
@@ -391,16 +399,32 @@ export function assertRepairApproval(input: {
   if (approval.executionScope === 'ISOLATED_FIXTURE' && process.env.NODE_ENV !== 'test') {
     throw new Error('repair_isolated_fixture_scope_requires_test_environment')
   }
+  const runtime = 'runtimeKind' in scope ? scope : null
   if (approval.targetDate !== scope.date
     || approval.officialSha256 !== scope.officialSha256
-    || approval.planSha256 !== scope.planSha256
-    || approval.missingRowsSha256 !== scope.missingRowsSha256
+    || approval.planSha256 !== (runtime?.approvalPlanSha256 ?? scope.planSha256)
+    || approval.missingRowsSha256 !== (runtime?.approvedMissingRowsSha256 ?? scope.missingRowsSha256)
+    || approval.approvedRepairKeysSha256 !== (runtime?.approvedRepairKeysSha256
+      ?? jpOhlcvApprovedRepairKeysSha256(scope.missingRows))
     || approval.preservedConflictsSha256 !== scope.preservedConflictsSha256
     || approval.conflictDisposition !== scope.conflictDisposition) throw new Error('repair_approval_scope_mismatch')
-  if (approval.expectedMissingRows !== scope.missingRows.length) throw new Error('repair_approval_missing_count_mismatch')
+  if (!runtime && approval.expectedMissingRows !== scope.missingRows.length) {
+    throw new Error('repair_approval_missing_count_mismatch')
+  }
+  if (runtime && runtime.missingRows.length + runtime.alreadySatisfiedRows.length !== approval.expectedMissingRows) {
+    throw new Error('repair_runtime_scope_approved_key_accounting_mismatch')
+  }
+  if (approval.runtimeDriftPolicy !== 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY'
+    || approval.runtimeSnapshotTtlMs !== 900000) {
+    throw new Error('repair_approval_runtime_policy_invalid')
+  }
   if (scope.missingRowsSha256 !== stableSha256(scope.missingRows)
     || scope.preservedConflictsSha256 !== stableSha256(scope.preservedConflicts)) {
     throw new Error('repair_scope_content_hash_mismatch')
+  }
+  if (runtime && (runtime.alreadySatisfiedRowsSha256 !== stableSha256(runtime.alreadySatisfiedRows)
+    || runtime.status !== 'READY')) {
+    throw new Error('repair_runtime_scope_content_hash_mismatch')
   }
   if (scope.missingRows.some((row) => row.date !== approval.targetDate)) {
     throw new Error('repair_scope_target_date_mismatch')
@@ -594,7 +618,9 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       stateDirectory: paths.stateDirectory,
     })
     : journal?.operatorAction ?? null
-  const terminalConflicts = terminal?.journal?.preservedConflicts?.tickers ?? []
+  const effectiveConflicts = journal?.preservedConflicts?.tickers
+    ?? terminal?.journal?.preservedConflicts?.tickers
+    ?? []
   const fallbackOperatorAction = status === 'CLEAR'
     ? 'No live repair transaction is present. Review lastTerminalTransaction before planning a new separately approved repair.'
     : 'Fail-Closed. Preserve the entire repair state directory and every approved Production database, DB-WAL, DB-SHM, backup, Source Generation and Serving Generation artifact. Do not delete locks or journals, do not restart the repair, and recover unreadable evidence from the approved bundle or immutable audit copy before choosing cleanup, resume, or rollback.'
@@ -603,7 +629,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
     checkedAt: new Date().toISOString(),
     status,
     transactionState: status,
-    dataQualityStatus: terminalConflicts.length > 0
+    dataQualityStatus: effectiveConflicts.length > 0
       ? 'PARTIAL_REPAIR_UNRESOLVED_CONFLICTS_HOLD'
       : 'NO_UNRESOLVED_CONFLICTS_RECORDED',
     reasons,
@@ -1017,6 +1043,11 @@ export class JpOhlcvProductionRepairTransaction {
     fs.mkdirSync(this.paths.stateDirectory, { recursive: true, mode: 0o700 })
     if (fs.lstatSync(this.paths.stateDirectory).isSymbolicLink()) throw new Error('repair_state_directory_symlink_forbidden')
     assertNoIncompleteRepair(this.paths)
+    for (const terminal of ['committed', 'rolled-back', 'aborted-prewrite']) {
+      if (exists(`${this.paths.journal}.${terminal}-${this.transactionId}`)) {
+        throw new Error(`repair_transaction_id_terminal_state_exists:${this.transactionId}:${terminal}`)
+      }
+    }
     const ownerIdentity = readProcessIdentity(process.pid)
     if (!ownerIdentity) throw new Error('repair_owner_process_identity_unavailable')
     const descriptor = fs.openSync(this.paths.lock, 'wx', 0o600)

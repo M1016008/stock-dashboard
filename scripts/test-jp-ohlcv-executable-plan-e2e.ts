@@ -9,6 +9,7 @@ import path from 'node:path'
 import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOfficialOhlcvValue,
   type JpOhlcvValue,
@@ -32,6 +33,7 @@ import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-or
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 import { runJpOhlcvProductionRepair } from '@/lib/jp-ohlcv-repair-runner'
+import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
@@ -164,6 +166,31 @@ function initializeDatabase(existing: JpOhlcvValue[]): void {
     CREATE TABLE update_locks (
       job_type TEXT PRIMARY KEY, status TEXT NOT NULL, owner TEXT,
       started_at INTEGER NOT NULL, heartbeat_at INTEGER NOT NULL, lease_expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE batch_runs (
+      id INTEGER PRIMARY KEY, job_type TEXT NOT NULL, status TEXT NOT NULL,
+      started_at INTEGER, finished_at INTEGER
+    );
+    INSERT INTO batch_runs(id,job_type,status,started_at,finished_at)
+      VALUES(1,'ohlcv_fetch:jquants','success',1,2);
+    CREATE TABLE daily_snapshots (
+      ticker TEXT NOT NULL, date TEXT NOT NULL, ma_75 REAL, computed_at INTEGER NOT NULL,
+      PRIMARY KEY(ticker,date)
+    );
+    CREATE TABLE stage_transitions (
+      axis TEXT NOT NULL, from_stage INTEGER NOT NULL, to_stage INTEGER NOT NULL,
+      count INTEGER NOT NULL, computed_at INTEGER NOT NULL,
+      PRIMARY KEY(axis,from_stage,to_stage)
+    );
+    CREATE TABLE stock_screening_serving (
+      ticker TEXT NOT NULL, as_of TEXT NOT NULL, PRIMARY KEY(ticker,as_of)
+    );
+    CREATE TABLE stock_screening_serving_dates (
+      as_of TEXT PRIMARY KEY, snapshot_date TEXT NOT NULL, row_count INTEGER NOT NULL,
+      source_version TEXT NOT NULL, status TEXT NOT NULL, calculated_at INTEGER NOT NULL
+    );
+    CREATE TABLE dashboard_cache (
+      date TEXT PRIMARY KEY, payload_json TEXT NOT NULL, computed_at INTEGER NOT NULL
     );
   `)
   const insert = db.prepare('INSERT INTO ohlcv_daily(ticker,date,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?)')
@@ -308,6 +335,7 @@ async function main(): Promise<void> {
     officialSha256: scope.officialSha256,
     planSha256: scope.planSha256,
     missingRowsSha256: scope.missingRowsSha256,
+    approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
     preservedConflictsSha256: scope.preservedConflictsSha256,
   }
   const baselineLineage = { ...lineage, repairStatus: 'BASELINE' as const }
@@ -399,6 +427,18 @@ async function main(): Promise<void> {
         matchingRows: 149,
         missingRows: 4067,
         conflicts: 2,
+        approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+      },
+      existingEvidence: {
+        kind: 'DIRECT_PRODUCTION_SNAPSHOT',
+        fileSha256: stableSha256(existing),
+        rowsSha256: stableSha256(existing),
+        provenanceSha256: stableSha256({ fixture: 'direct-production-snapshot' }),
+      },
+      runtimeSnapshotPolicy: {
+        ttlMs: 900000,
+        sourceJobType: 'ohlcv_fetch:jquants',
+        driftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
       },
       nestedCommands: [
         nested('fixture-derived-forward', 'forward'),
@@ -626,6 +666,7 @@ async function main(): Promise<void> {
     const plan: JpOhlcvRepairExecutionPlan = {
       version: 1,
       officialRows: official,
+      approvalScope: scope,
       commands: {
         createBackup: stageCommand('create-backup'),
         holdReadServices: stageCommand('hold-read-services'),
@@ -653,6 +694,9 @@ async function main(): Promise<void> {
       officialSha256: scope.officialSha256,
       planSha256: scope.planSha256,
       missingRowsSha256: scope.missingRowsSha256,
+      approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+      runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
+      runtimeSnapshotTtlMs: 900000,
       preservedConflictsSha256: scope.preservedConflictsSha256,
       expectedOfficialRows: 4_218,
       expectedExistingRows: 151,
@@ -681,7 +725,21 @@ async function main(): Promise<void> {
     })
     delete process.env.STOCK_DATA_FAILED_SAFE_PATH
     const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
-    const adapters = createJpOhlcvCommandAdapters({ approval, plan })
+    const runtimeSnapshot = captureJpOhlcvRuntimeSnapshot({
+      databasePath,
+      configurationSha256: sha256File(configPath),
+      approvalScope: scope,
+      officialRows: official,
+      officialSourceProof: {
+        requestedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        providerRows: official.length,
+        acceptedRows: official.length,
+        rejectedRows: 0,
+        contentSha256: 'a'.repeat(64),
+      },
+    })
+    const adapters = createJpOhlcvCommandAdapters({ approval, plan, runtimeSnapshot })
     const paths = { stateDirectory, journal: path.join(stateDirectory, 'repair-journal.json'), lock: path.join(stateDirectory, 'repair.lock') }
     const orchestration = await runJpOhlcvMaintenanceOrchestrator({
       config,

@@ -64,7 +64,10 @@ function rowsFromJson<T>(file: string): T[] {
     ? parsed
     : parsed && typeof parsed === 'object' && Array.isArray((parsed as { rows?: unknown }).rows)
       ? (parsed as { rows: unknown[] }).rows
-      : null
+      : parsed && typeof parsed === 'object'
+          && Array.isArray((parsed as { reconstructedRows?: unknown }).reconstructedRows)
+        ? (parsed as { reconstructedRows: unknown[] }).reconstructedRows
+        : null
   if (!rows) throw new Error(`rows_array_required:${file}`)
   return rows as T[]
 }

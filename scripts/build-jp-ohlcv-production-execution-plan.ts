@@ -4,7 +4,7 @@ import {
   assertJpOhlcvRepairExecutionPlan,
   type JpOhlcvRepairExecutionPlan,
 } from '@/lib/jp-ohlcv-command-adapter'
-import type { JpOfficialOhlcvValue } from '@/lib/jp-ohlcv-data-quality'
+import type { JpOfficialOhlcvValue, JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -27,9 +27,10 @@ function readJson<T>(file: string): T {
 const officialInput = readJson<JpOfficialOhlcvValue[] | { rows: JpOfficialOhlcvValue[] }>(absolute('--official-rows'))
 const officialRows = Array.isArray(officialInput) ? officialInput : officialInput.rows
 const commands = readJson<JpOhlcvRepairExecutionPlan['commands']>(absolute('--commands'))
+const approvalScope = readJson<JpOhlcvMissingOnlyRepairScope>(absolute('--approval-scope'))
 const targetDate = value('--target-date')
 const output = absolute('--output')
-const plan: JpOhlcvRepairExecutionPlan = { version: 1, officialRows, commands }
+const plan: JpOhlcvRepairExecutionPlan = { version: 1, officialRows, approvalScope, commands }
 assertJpOhlcvRepairExecutionPlan({ plan, targetDate })
 fs.mkdirSync(path.dirname(output), { recursive: true })
 fs.writeFileSync(output, `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx', mode: 0o600 })

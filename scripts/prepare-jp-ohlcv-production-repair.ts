@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   buildJpOhlcvMissingOnlyRepairScope,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOhlcvBackfillPlan,
 } from '@/lib/jp-ohlcv-data-quality'
@@ -52,6 +53,9 @@ const approval: JpOhlcvRepairApproval = {
   officialSha256: scope.officialSha256,
   planSha256: scope.planSha256,
   missingRowsSha256: scope.missingRowsSha256,
+  approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+  runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
+  runtimeSnapshotTtlMs: 900000,
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: parsed.plan.officialRows,
   expectedExistingRows: parsed.plan.existingRows,

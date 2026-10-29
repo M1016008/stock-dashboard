@@ -1,5 +1,8 @@
 import path from 'node:path'
-import type { JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
+import type {
+  JpOhlcvMissingOnlyRepairScope,
+  JpOhlcvRuntimeRepairScope,
+} from '@/lib/jp-ohlcv-data-quality'
 import {
   assertRepairApproval,
   JpOhlcvProductionRepairTransaction,
@@ -40,18 +43,18 @@ export type JpOhlcvRepairAdapter = {
     sourceGeneration: string
     servingGeneration: string
   }>
-  revalidatePlan: (context: JpOhlcvRepairExecutionContext) => Promise<JpOhlcvMissingOnlyRepairScope>
+  revalidatePlan: (context: JpOhlcvRepairExecutionContext) => Promise<JpOhlcvRuntimeRepairScope>
   holdReadServices: (context: JpOhlcvRepairExecutionContext) => Promise<{
     web: 'HELD'
     analog: 'HELD'
     snapshotSha256: string
   }>
-  insertMissingRowsAtomically: (scope: JpOhlcvMissingOnlyRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
+  insertMissingRowsAtomically: (scope: JpOhlcvRuntimeRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
     insertedRows: number
     missingRowsSha256: string
     sourceGeneration: string
   }>
-  verifyData: (scope: JpOhlcvMissingOnlyRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
+  verifyData: (scope: JpOhlcvRuntimeRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
     missingRows: 0
     preservedConflictsSha256: string
     sourceGeneration: string
@@ -152,6 +155,9 @@ export async function runJpOhlcvProductionRepair(input: {
   archivedJournal: string
   dayFullyRepaired: false
   conflictsStillHold: string[]
+  approvedRepairKeys: number
+  alreadySatisfiedExact: number
+  insertedRows: number
 }> {
   assertRepairApproval({
     approval: input.approval,
@@ -183,6 +189,13 @@ export async function runJpOhlcvProductionRepair(input: {
       writer = await input.adapter.acquireWriterLock(context)
       context.assertExecutionActive()
       transaction.advance('PREPARED', 'WRITER_LOCKED', { owner: writer.owner })
+      const revalidated = await input.adapter.revalidatePlan(context)
+      context.assertExecutionActive()
+      assertRepairApproval({
+        approval: input.approval,
+        expectedSha256: input.approvalSha256,
+        scope: revalidated,
+      })
       const backup = await input.adapter.createAndVerifyConsistentBackup(context)
       context.assertExecutionActive()
       const backupRelative = path.relative(input.approval.backupDirectory, backup.backupRealpath)
@@ -199,13 +212,6 @@ export async function runJpOhlcvProductionRepair(input: {
         throw new Error('repair_backup_evidence_mismatch')
       }
       transaction.advance('WRITER_LOCKED', 'BACKUP_VERIFIED', backup)
-      const revalidated = await input.adapter.revalidatePlan(context)
-      context.assertExecutionActive()
-      assertRepairApproval({
-        approval: input.approval,
-        expectedSha256: input.approvalSha256,
-        scope: revalidated,
-      })
       transaction.advance('BACKUP_VERIFIED', 'READ_SERVICES_HOLDING', {
         requestedAt: new Date().toISOString(),
       })
@@ -216,12 +222,15 @@ export async function runJpOhlcvProductionRepair(input: {
       }
       transaction.advance('READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', held)
       transaction.advance('READ_SERVICES_HELD', 'DATA_COMMITTING', {
+        approvedMissingRows: input.approval.expectedMissingRows,
+        alreadySatisfiedExactRows: revalidated.alreadySatisfiedRows.length,
+        residualMissingRows: revalidated.missingRows.length,
         missingRows: revalidated.missingRows.length,
         missingRowsSha256: revalidated.missingRowsSha256,
       })
       const dataCommit = await input.adapter.insertMissingRowsAtomically(revalidated, context)
       context.assertExecutionActive()
-      if (dataCommit.insertedRows !== input.approval.expectedMissingRows
+      if (dataCommit.insertedRows !== revalidated.missingRows.length
         || dataCommit.missingRowsSha256 !== revalidated.missingRowsSha256
         || dataCommit.sourceGeneration !== input.approval.sourceGenerationAfter) {
         throw new Error('repair_data_commit_evidence_mismatch')
@@ -270,6 +279,9 @@ export async function runJpOhlcvProductionRepair(input: {
         archivedJournal,
         dayFullyRepaired: false,
         conflictsStillHold: [...input.approval.approvedConflictTickers],
+        approvedRepairKeys: input.approval.expectedMissingRows,
+        alreadySatisfiedExact: revalidated.alreadySatisfiedRows.length,
+        insertedRows: dataCommit.insertedRows,
       }
     } catch (error) {
       if (stageMayContainDataMutation(transaction.currentStage())) {

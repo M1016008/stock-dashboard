@@ -22,6 +22,10 @@ import {
 } from '@/lib/jp-ohlcv-executable-plan'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
+import {
+  assertJpOhlcvRuntimeSnapshot,
+  type JpOhlcvRuntimeSnapshot,
+} from '@/lib/jp-ohlcv-runtime-snapshot'
 
 type ApprovalBundle = {
   version: 1
@@ -118,6 +122,25 @@ async function main(): Promise<void> {
   if (process.env.STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED !== bundle.approvalSha256) {
     throw new Error('repair_exact_approval_environment_required')
   }
+  let runtimeSnapshot: JpOhlcvRuntimeSnapshot | null = null
+  if (!rollbackApprovalFile && !cleanupApprovalFile && !resumeServicesApprovalFile) {
+    const runtimeSnapshotPath = process.env.STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_PATH
+    const runtimeSnapshotSha256 = process.env.STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_SHA256
+    const runtimeSnapshotFileSha256 = process.env.STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_FILE_SHA256
+    if (!runtimeSnapshotPath || !path.isAbsolute(runtimeSnapshotPath)
+      || !runtimeSnapshotSha256 || !runtimeSnapshotFileSha256
+      || fs.lstatSync(runtimeSnapshotPath).isSymbolicLink()
+      || sha256File(runtimeSnapshotPath) !== runtimeSnapshotFileSha256) {
+      throw new Error('repair_runtime_snapshot_exact_file_identity_required')
+    }
+    runtimeSnapshot = readJson<JpOhlcvRuntimeSnapshot>(runtimeSnapshotPath)
+    assertJpOhlcvRuntimeSnapshot({ snapshot: runtimeSnapshot, expectedSha256: runtimeSnapshotSha256 })
+    if (runtimeSnapshot.configurationSha256 !== sha256File(configurationPath)
+      || runtimeSnapshot.officialSha256 !== bundle.approval.officialSha256
+      || runtimeSnapshot.approvedRepairKeysSha256 !== bundle.approval.approvedRepairKeysSha256) {
+      throw new Error('repair_runtime_snapshot_approval_mismatch')
+    }
+  }
   const configuredDatabase = process.env.STOCKBOARD_DB_PATH
   if (!configuredDatabase || !path.isAbsolute(configuredDatabase)
     || path.resolve(configuredDatabase) !== bundle.approval.databaseRealpath
@@ -201,7 +224,7 @@ async function main(): Promise<void> {
       return
     }
     const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
-    const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan })
+    const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, runtimeSnapshot: runtimeSnapshot! })
     executionEntered = true
     const result = await runJpOhlcvProductionRepair({
       approval: bundle.approval,

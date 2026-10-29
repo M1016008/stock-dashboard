@@ -17,6 +17,7 @@ import { inspectWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
+  jpOhlcvApprovedRepairKeysSha256,
   stableSha256,
   type JpOhlcvBackfillPlan,
   type JpOfficialOhlcvValue,
@@ -151,15 +152,54 @@ inspectWritableTargetPath({
 
 const officialInput = readJson<JpOfficialOhlcvValue[] | { rows: JpOfficialOhlcvValue[]; officialSha256?: string }>(officialRowsFile)
 const officialRows = Array.isArray(officialInput) ? officialInput : officialInput.rows
-const existingInput = readJson<JpOhlcvValue[] | { rows: JpOhlcvValue[] }>(existingRowsFile)
-const existingRows = Array.isArray(existingInput) ? existingInput : existingInput.rows
+const existingInput = readJson<JpOhlcvValue[] | {
+  rows?: JpOhlcvValue[]
+  reconstructedRows?: JpOhlcvValue[]
+  reconstructedRowsSha256?: string
+  evidenceKind?: string
+  provenance?: unknown
+}>(existingRowsFile)
+const existingRows = Array.isArray(existingInput)
+  ? existingInput
+  : existingInput.reconstructedRows ?? existingInput.rows
+if (!existingRows) throw new Error('repair_configuration_existing_rows_missing')
+const existingRowsSha256 = stableSha256(existingRows)
+const existingEvidence = Array.isArray(existingInput)
+  ? {
+      kind: 'DIRECT_PRODUCTION_SNAPSHOT' as const,
+      fileSha256: sha256File(existingRowsFile),
+      rowsSha256: existingRowsSha256,
+      provenanceSha256: stableSha256({ kind: 'DIRECT_PRODUCTION_SNAPSHOT', fileSha256: sha256File(existingRowsFile) }),
+    }
+  : (() => {
+      if (existingInput.reconstructedRows) {
+        if (existingInput.evidenceKind !== 'RECONSTRUCTED_FROM_BASELINE_AND_READ_ONLY_OBSERVATION'
+          || existingInput.reconstructedRowsSha256 !== existingRowsSha256
+          || !existingInput.provenance) {
+          throw new Error('repair_configuration_reconstructed_evidence_invalid')
+        }
+        return {
+          kind: 'RECONSTRUCTED_FROM_BASELINE_AND_READ_ONLY_OBSERVATION' as const,
+          fileSha256: sha256File(existingRowsFile),
+          rowsSha256: existingRowsSha256,
+          provenanceSha256: stableSha256(existingInput.provenance),
+        }
+      }
+      return {
+        kind: 'DIRECT_PRODUCTION_SNAPSHOT' as const,
+        fileSha256: sha256File(existingRowsFile),
+        rowsSha256: existingRowsSha256,
+        provenanceSha256: stableSha256({ kind: 'DIRECT_PRODUCTION_SNAPSHOT', fileSha256: sha256File(existingRowsFile) }),
+      }
+    })()
 const dryRun = readJson<{ plan?: JpOhlcvBackfillPlan }>(dryRunFile)
 if (!dryRun.plan) throw new Error('repair_configuration_dry_run_plan_missing')
 const rebuilt = buildJpOhlcvBackfillPlan({ date: '2026-07-17', officialRows, existingRows })
 if (stableSha256(rebuilt) !== stableSha256(dryRun.plan)) throw new Error('repair_configuration_evidence_mismatch')
 const scope = buildJpOhlcvMissingOnlyRepairScope({ plan: rebuilt, approvedConflictTickers: ['1447', '2164'] })
-if (scope.status !== 'READY' || officialRows.length !== 4_218 || existingRows.length !== 151
-  || scope.missingRows.length !== 4_067 || rebuilt.matchingRows !== 149) {
+if (scope.status !== 'READY' || officialRows.length === 0 || existingRows.length === 0
+  || scope.missingRows.length === 0
+  || rebuilt.matchingRows + scope.missingRows.length + scope.preservedConflicts.length !== officialRows.length) {
   throw new Error(`repair_configuration_scope_invalid:${scope.reasons.join(',')}`)
 }
 if (!Array.isArray(officialInput) && officialInput.officialSha256
@@ -174,7 +214,6 @@ const runtimeManifest = readJson<{
 }>(runtimeManifestPath)
 const databaseIdentitySha256 = databaseSchemaIdentitySha256(databaseRealpath, sqliteExecutable)
 const databaseObjectIdentitySha256 = databaseFileObjectIdentitySha256(databaseRealpath)
-const existingRowsSha256 = stableSha256(existingRows)
 const sourceGenerationBefore = `jp-source-pre-${stableSha256({ databaseIdentitySha256, existingRowsSha256 }).slice(0, 20)}`
 const sourceGenerationAfter = `jp-source-repair-${scope.missingRowsSha256.slice(0, 20)}`
 const servingGenerationBefore = `jp-serving-pre-${stableSha256({ databaseIdentitySha256, existingRowsSha256 }).slice(0, 20)}`
@@ -186,6 +225,7 @@ const lineage: JpOhlcvProductionExecutionConfiguration['lineage'] = {
   officialSha256: scope.officialSha256,
   planSha256: scope.planSha256,
   missingRowsSha256: scope.missingRowsSha256,
+  approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
   preservedConflictsSha256: scope.preservedConflictsSha256,
 }
 const pointerLineage = { ...lineage, repairStatus: 'BASELINE' as const }
@@ -279,11 +319,18 @@ const config: JpOhlcvProductionExecutionConfiguration = {
   requiredTargetRows,
   preservedConflictRows,
   repairScope: {
-    officialRows: 4218,
-    existingRows: 151,
-    matchingRows: 149,
-    missingRows: 4067,
-    conflicts: 2,
+    officialRows: rebuilt.officialRows,
+    existingRows: rebuilt.existingRows,
+    matchingRows: rebuilt.matchingRows,
+    missingRows: scope.missingRows.length,
+    conflicts: scope.preservedConflicts.length,
+    approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
+  },
+  existingEvidence,
+  runtimeSnapshotPolicy: {
+    ttlMs: 900000,
+    sourceJobType: 'ohlcv_fetch:jquants',
+    driftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
   },
   nestedCommands,
   maximumMaintenanceMs: 12 * 60 * 60_000,

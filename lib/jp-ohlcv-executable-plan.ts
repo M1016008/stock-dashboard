@@ -83,11 +83,23 @@ export type JpOhlcvProductionExecutionConfiguration = {
     volume: number
   }>
   repairScope: {
-    officialRows: 4218
-    existingRows: 151
-    matchingRows: 149
-    missingRows: 4067
-    conflicts: 2
+    officialRows: number
+    existingRows: number
+    matchingRows: number
+    missingRows: number
+    conflicts: number
+    approvedRepairKeysSha256: string
+  }
+  existingEvidence: {
+    kind: 'DIRECT_PRODUCTION_SNAPSHOT' | 'RECONSTRUCTED_FROM_BASELINE_AND_READ_ONLY_OBSERVATION'
+    fileSha256: string
+    rowsSha256: string
+    provenanceSha256: string
+  }
+  runtimeSnapshotPolicy: {
+    ttlMs: 900000
+    sourceJobType: 'ohlcv_fetch:jquants'
+    driftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY'
   }
   nestedCommands: JpOhlcvNestedCommand[]
   maximumMaintenanceMs: number
@@ -104,6 +116,7 @@ export type JpOhlcvProductionExecutionConfiguration = {
     officialSha256: string
     planSha256: string
     missingRowsSha256: string
+    approvedRepairKeysSha256: string
     preservedConflictsSha256: string
   }
 }
@@ -403,6 +416,7 @@ export function assertJpOhlcvProductionExecutionConfiguration(
     || !SHA256.test(config.lineage.officialSha256)
     || !SHA256.test(config.lineage.planSha256)
     || !SHA256.test(config.lineage.missingRowsSha256)
+    || !SHA256.test(config.lineage.approvedRepairKeysSha256)
     || !SHA256.test(config.lineage.preservedConflictsSha256)) {
     throw new Error('repair_execution_configuration_lineage_invalid')
   }
@@ -436,13 +450,31 @@ export function assertJpOhlcvProductionExecutionConfiguration(
   }
   assertExpectedRows(config.requiredTargetRows, '1306,7003')
   assertExpectedRows(config.preservedConflictRows, '1447,2164')
-  if (config.repairScope.officialRows !== 4218
-    || config.repairScope.existingRows !== 151
-    || config.repairScope.matchingRows !== 149
-    || config.repairScope.missingRows !== 4067
-    || config.repairScope.conflicts !== 2
-    || config.repairScope.existingRows + config.repairScope.missingRows !== config.repairScope.officialRows) {
+  if (![config.repairScope.officialRows, config.repairScope.existingRows, config.repairScope.matchingRows,
+    config.repairScope.missingRows, config.repairScope.conflicts].every(Number.isSafeInteger)
+    || config.repairScope.officialRows <= 0
+    || config.repairScope.existingRows < 0
+    || config.repairScope.matchingRows < 0
+    || config.repairScope.missingRows <= 0
+    || config.repairScope.conflicts !== config.preservedConflictTickers.length
+    || config.repairScope.matchingRows + config.repairScope.missingRows + config.repairScope.conflicts
+      !== config.repairScope.officialRows
+    || config.repairScope.matchingRows + config.repairScope.conflicts !== config.repairScope.existingRows
+    || !SHA256.test(config.repairScope.approvedRepairKeysSha256)
+    || config.repairScope.approvedRepairKeysSha256 !== config.lineage.approvedRepairKeysSha256) {
     throw new Error('repair_execution_configuration_scope_counts_invalid')
+  }
+  if (config.runtimeSnapshotPolicy?.ttlMs !== 900000
+    || config.runtimeSnapshotPolicy.sourceJobType !== 'ohlcv_fetch:jquants'
+    || config.runtimeSnapshotPolicy.driftPolicy !== 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY') {
+    throw new Error('repair_execution_configuration_runtime_snapshot_policy_invalid')
+  }
+  if (!['DIRECT_PRODUCTION_SNAPSHOT', 'RECONSTRUCTED_FROM_BASELINE_AND_READ_ONLY_OBSERVATION']
+      .includes(config.existingEvidence?.kind)
+    || !SHA256.test(config.existingEvidence.fileSha256)
+    || !SHA256.test(config.existingEvidence.rowsSha256)
+    || !SHA256.test(config.existingEvidence.provenanceSha256)) {
+    throw new Error('repair_execution_configuration_existing_evidence_invalid')
   }
   if (!Number.isSafeInteger(config.maximumMaintenanceMs)
     || config.maximumMaintenanceMs < 60_000

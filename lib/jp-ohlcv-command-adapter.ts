@@ -4,10 +4,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   buildJpOhlcvBackfillPlan,
-  buildJpOhlcvMissingOnlyRepairScope,
+  buildJpOhlcvRuntimeRepairScope,
   stableSha256,
   type JpOfficialOhlcvValue,
   type JpOhlcvMissingOnlyRepairScope,
+  type JpOhlcvRuntimeRepairScope,
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import type {
@@ -16,6 +17,11 @@ import type {
   JpOhlcvRepairRollbackAdapter,
 } from '@/lib/jp-ohlcv-repair-runner'
 import type { JpOhlcvRepairApproval, JpOhlcvRepairRollbackApproval } from '@/lib/jp-ohlcv-production-repair'
+import {
+  assertJpOhlcvRuntimeSnapshotUnchanged,
+  captureJpOhlcvRuntimeSnapshot,
+  type JpOhlcvRuntimeSnapshot,
+} from '@/lib/jp-ohlcv-runtime-snapshot'
 import {
   assertJpOhlcvRepairExecutionActive,
   clearActiveStageProcess,
@@ -41,6 +47,9 @@ const RESERVED_STAGE_ENVIRONMENT = new Set([
   'STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID',
   'STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH',
   'STOCKBOARD_UPDATE_JOB_TYPE',
+  'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_PATH',
+  'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_SHA256',
+  'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_FILE_SHA256',
 ])
 
 export type JpOhlcvRepairStageCommand = {
@@ -56,6 +65,7 @@ export type JpOhlcvRepairStageCommand = {
 export type JpOhlcvRepairExecutionPlan = {
   version: 1
   officialRows: JpOfficialOhlcvValue[]
+  approvalScope: JpOhlcvMissingOnlyRepairScope
   commands: {
     createBackup: JpOhlcvRepairStageCommand
     holdReadServices: JpOhlcvRepairStageCommand
@@ -155,6 +165,16 @@ export function assertJpOhlcvRepairExecutionPlan(input: {
 }): void {
   if (input.plan.version !== 1 || input.plan.officialRows.length === 0) {
     throw new Error('repair_execution_plan_invalid')
+  }
+  if (input.plan.approvalScope.version !== 1
+    || input.plan.approvalScope.status !== 'READY'
+    || input.plan.approvalScope.date !== input.targetDate
+    || input.plan.approvalScope.officialSha256 !== buildJpOhlcvBackfillPlan({
+      date: input.targetDate,
+      officialRows: input.plan.officialRows,
+      existingRows: [],
+    }).officialSha256) {
+    throw new Error('repair_execution_plan_approval_scope_invalid')
   }
   const keys = new Set<string>()
   for (const row of input.plan.officialRows) {
@@ -395,18 +415,14 @@ async function currentRows(date: string): Promise<JpOhlcvValue[]> {
 }
 
 function revalidatedScope(input: {
-  approval: JpOhlcvRepairApproval
+  approvalScope: JpOhlcvMissingOnlyRepairScope
   officialRows: JpOfficialOhlcvValue[]
   existingRows: JpOhlcvValue[]
-}): JpOhlcvMissingOnlyRepairScope {
-  const plan = buildJpOhlcvBackfillPlan({
-    date: input.approval.targetDate,
+}): JpOhlcvRuntimeRepairScope {
+  return buildJpOhlcvRuntimeRepairScope({
+    approvalScope: input.approvalScope,
     officialRows: input.officialRows,
     existingRows: input.existingRows,
-  })
-  return buildJpOhlcvMissingOnlyRepairScope({
-    plan,
-    approvedConflictTickers: input.approval.approvedConflictTickers,
   })
 }
 
@@ -426,15 +442,21 @@ function assertPlan(input: {
   if (officialIdentity !== input.approval.officialSha256) {
     throw new Error('repair_execution_plan_official_hash_mismatch')
   }
+  if (input.plan.approvalScope.planSha256 !== input.approval.planSha256
+    || input.plan.approvalScope.missingRowsSha256 !== input.approval.missingRowsSha256
+    || input.plan.approvalScope.preservedConflictsSha256 !== input.approval.preservedConflictsSha256) {
+    throw new Error('repair_execution_plan_approval_scope_mismatch')
+  }
 }
 
 export function createJpOhlcvCommandAdapters(input: {
   approval: JpOhlcvRepairApproval
   plan: JpOhlcvRepairExecutionPlan
   rollbackApproval?: JpOhlcvRepairRollbackApproval
+  runtimeSnapshot?: JpOhlcvRuntimeSnapshot
 }): { forward: JpOhlcvRepairAdapter; rollback: JpOhlcvRepairRollbackAdapter } {
   assertPlan(input)
-  let verifiedScope: JpOhlcvMissingOnlyRepairScope | null = null
+  let verifiedScope: JpOhlcvRuntimeRepairScope | null = null
   const acquireWriterLock = async (context: JpOhlcvRepairExecutionContext) => {
     const { acquireUpdateLock, EXCLUSIVE_UPDATE_JOB_TYPES } = await import('@/lib/server/update-lock')
     const lock = await acquireUpdateLock(
@@ -474,11 +496,16 @@ export function createJpOhlcvCommandAdapters(input: {
       return evidence
     },
     revalidatePlan: async () => {
-      verifiedScope = revalidatedScope({
-        approval: input.approval,
+      if (!input.runtimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      const current = captureJpOhlcvRuntimeSnapshot({
+        databasePath: input.approval.databaseRealpath,
+        configurationSha256: input.runtimeSnapshot.configurationSha256,
+        approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
-        existingRows: await currentRows(input.approval.targetDate),
+        officialSourceProof: input.runtimeSnapshot.officialSourceProof,
       })
+      assertJpOhlcvRuntimeSnapshotUnchanged({ sealed: input.runtimeSnapshot, current, stage: 'pre_backup' })
+      verifiedScope = current.runtimeScope
       return verifiedScope
     },
     holdReadServices: async (context) => {
@@ -490,15 +517,47 @@ export function createJpOhlcvCommandAdapters(input: {
       if (!verifiedScope || stableSha256(verifiedScope) !== stableSha256(scope)) {
         throw new Error('repair_insert_scope_not_revalidated')
       }
+      if (!input.runtimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      const beforeInsertSnapshot = captureJpOhlcvRuntimeSnapshot({
+        databasePath: input.approval.databaseRealpath,
+        configurationSha256: input.runtimeSnapshot.configurationSha256,
+        approvalScope: input.plan.approvalScope,
+        officialRows: input.plan.officialRows,
+        officialSourceProof: input.runtimeSnapshot.officialSourceProof,
+      })
+      assertJpOhlcvRuntimeSnapshotUnchanged({
+        sealed: input.runtimeSnapshot,
+        current: beforeInsertSnapshot,
+        stage: 'pre_insert',
+      })
       const { client } = await import('@/lib/db/client')
       const transaction = await client.transaction('write')
       let insertedRows = 0
       try {
+        const beforeRows = await transaction.execute({
+          sql: 'SELECT ticker, date, open, high, low, close, volume FROM ohlcv_daily WHERE date = ? ORDER BY ticker',
+          args: [input.approval.targetDate],
+        })
+        const beforeScope = revalidatedScope({
+          approvalScope: input.plan.approvalScope,
+          officialRows: input.plan.officialRows,
+          existingRows: beforeRows.rows.map((row) => ({
+            ticker: String(row.ticker),
+            date: String(row.date),
+            open: Number(row.open),
+            high: Number(row.high),
+            low: Number(row.low),
+            close: Number(row.close),
+            volume: Number(row.volume),
+          })),
+        })
+        if (beforeScope.status !== 'READY' || stableSha256(beforeScope) !== stableSha256(scope)) {
+          throw new Error('repair_insert_runtime_scope_changed')
+        }
         for (const row of scope.missingRows) {
           const result = await transaction.execute({
             sql: `INSERT INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
-                  VALUES (?, ?, ?, ?, ?, ?, ?)
-                  ON CONFLICT(ticker, date) DO NOTHING`,
+                  VALUES (?, ?, ?, ?, ?, ?, ?)`,
             args: [row.ticker, row.date, row.open, row.high, row.low, row.close, row.volume],
           })
           insertedRows += Number(result.rowsAffected ?? 0)
@@ -520,12 +579,13 @@ export function createJpOhlcvCommandAdapters(input: {
     },
     verifyData: async (scope, context) => {
       const after = revalidatedScope({
-        approval: input.approval,
+        approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
         existingRows: await currentRows(input.approval.targetDate),
       })
       if (after.missingRows.length !== 0
-        || after.preservedConflictsSha256 !== scope.preservedConflictsSha256) {
+        || after.preservedConflictsSha256 !== scope.preservedConflictsSha256
+        || after.alreadySatisfiedRows.length !== input.plan.approvalScope.missingRows.length) {
         throw new Error('repair_post_insert_coverage_mismatch')
       }
       const generation = await runJsonStage<{ status: 'PASS'; sourceGeneration: string }>(
