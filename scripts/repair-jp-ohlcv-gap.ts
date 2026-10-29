@@ -18,6 +18,7 @@ type CliOptions = {
   officialFile: string | null
   existingFile: string | null
   outputFile: string
+  officialOutputFile: string | null
   fetchJquants: boolean
   applyIsolatedDb: string | null
 }
@@ -49,6 +50,9 @@ function options(): CliOptions {
     officialFile: official ? requiredAbsolute('--official-json', official) : null,
     existingFile: existing ? requiredAbsolute('--existing-json', existing) : null,
     outputFile: requiredAbsolute('--output', valueAfter('--output')),
+    officialOutputFile: valueAfter('--official-output')
+      ? requiredAbsolute('--official-output', valueAfter('--official-output'))
+      : null,
     fetchJquants,
     applyIsolatedDb: apply ? requiredAbsolute('--apply-isolated-db', apply) : null,
   }
@@ -163,6 +167,16 @@ async function main(): Promise<void> {
       providerRows: officialRows.length, acceptedRows: officialRows.length, rejectedRows: 0,
       contentSha256: stableSha256(officialRows),
     }
+  }
+  if (args.officialOutputFile) {
+    fs.mkdirSync(path.dirname(args.officialOutputFile), { recursive: true })
+    fs.writeFileSync(args.officialOutputFile, `${JSON.stringify({
+      version: 1,
+      date: args.date,
+      priceBasis: JP_OHLCV_PRICE_BASIS,
+      officialSha256: stableSha256(officialRows),
+      rows: officialRows,
+    }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   }
 
   let client: Client | null = null

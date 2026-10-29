@@ -43,7 +43,7 @@ const RESERVED_STAGE_ENVIRONMENT = new Set([
 export type JpOhlcvRepairStageCommand = {
   executable: string
   executableSha256: string
-  sealedFiles: Array<{ path: string; sha256: string }>
+  sealedFiles: Array<{ path: string; sha256: string; snapshot?: boolean }>
   args: string[]
   workingDirectory: string
   timeoutMs: number
@@ -84,6 +84,17 @@ function sha256File(file: string): string {
   return hash.digest('hex')
 }
 
+function stageFailureDetail(value: string): string {
+  return value
+    .replace(/\b(Bearer|Basic)\s+[^\s]+/gi, '$1 [REDACTED]')
+    .replace(/\b(x-api-key|authorization)\s*:\s*[^\s,}]+/gi, '$1: [REDACTED]')
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|AUTH|COOKIE|API_KEY)[A-Z0-9_]*)=([^\s]+)/gi, '$1=[REDACTED]')
+    .replace(/("(?:password|token|secret|api[_-]?key|authorization)"\s*:\s*)"[^"]*"/gi, '$1"[REDACTED]"')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(-2_000)
+}
+
 function assertCommand(spec: JpOhlcvRepairStageCommand): string {
   if (!path.isAbsolute(spec.executable) || !path.isAbsolute(spec.workingDirectory)) {
     throw new Error('repair_stage_command_absolute_path_required')
@@ -99,6 +110,9 @@ function assertCommand(spec: JpOhlcvRepairStageCommand): string {
   for (const sealed of spec.sealedFiles) {
     if (!path.isAbsolute(sealed.path) || !/^[a-f0-9]{64}$/.test(sealed.sha256)) {
       throw new Error('repair_stage_command_sealed_file_identity_invalid')
+    }
+    if (sealed.snapshot !== undefined && typeof sealed.snapshot !== 'boolean') {
+      throw new Error('repair_stage_command_sealed_file_snapshot_invalid')
     }
     const resolved = fs.realpathSync(sealed.path)
     if (!fs.statSync(resolved).isFile() || sha256File(resolved) !== sealed.sha256) {
@@ -180,6 +194,12 @@ function snapshotSealedFiles(input: {
   const replacements = new Map<string, string>()
   for (const sealed of input.spec.sealedFiles) {
     const source = fs.realpathSync(sealed.path)
+    if (sha256File(source) !== sealed.sha256) {
+      throw new Error(sealed.snapshot === false
+        ? 'repair_stage_command_attested_file_changed_before_execution'
+        : 'repair_stage_command_sealed_file_changed_before_snapshot')
+    }
+    if (sealed.snapshot === false) continue
     const destination = path.join(snapshotDirectory, `${sealed.sha256}-${path.basename(source)}`)
     if (!fs.existsSync(destination)) {
       const bytes = fs.readFileSync(source)
@@ -223,6 +243,7 @@ async function executeStage(input: {
       windowsHide: true,
     })
     const stdout: Buffer[] = []
+    let stderr = Buffer.alloc(0)
     let stdoutBytes = 0
     let outputOverflow = false
     let timedOut = false
@@ -257,7 +278,10 @@ async function executeStage(input: {
       if (!failure && timedOut) failure = new Error('repair_stage_command_timeout')
       if (!failure && outputOverflow) failure = new Error('repair_stage_command_output_limit_exceeded')
       if (!failure && code !== 0) {
-        failure = new Error(`repair_stage_command_failed:exit_${code ?? 'null'}:signal_${signal ?? 'none'}`)
+        const detail = stageFailureDetail(stderr.toString('utf8'))
+        failure = new Error(
+          `repair_stage_command_failed:exit_${code ?? 'null'}:signal_${signal ?? 'none'}${detail ? `:${detail}` : ''}`,
+        )
       }
       try {
         if (registered && child.pid) clearActiveStageProcess(child.pid)
@@ -284,7 +308,10 @@ async function executeStage(input: {
       }
       stdout.push(chunk)
     })
-    child.stderr.resume()
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = Buffer.concat([stderr, chunk])
+      if (stderr.length > 64 * 1024) stderr = stderr.subarray(stderr.length - 64 * 1024)
+    })
     if (!child.pid) return
     try {
       registerActiveStageProcess({ pid: child.pid, processGroupId: child.pid })
@@ -387,13 +414,14 @@ export function createJpOhlcvCommandAdapters(input: {
 }): { forward: JpOhlcvRepairAdapter; rollback: JpOhlcvRepairRollbackAdapter } {
   assertPlan(input)
   let verifiedScope: JpOhlcvMissingOnlyRepairScope | null = null
-  const acquireWriterLock = async () => {
+  const acquireWriterLock = async (context: JpOhlcvRepairExecutionContext) => {
     const lock = await acquireUpdateLock(
       'jp_ohlcv_gap_repair',
       12 * 60 * 60,
       EXCLUSIVE_UPDATE_JOB_TYPES.filter((jobType) => jobType !== 'jp_ohlcv_gap_repair'),
     )
     if (!lock) throw new Error('repair_writer_lock_unavailable')
+    context.childEnvironment.STOCKBOARD_JP_OHLCV_REPAIR_UPDATE_LOCK_OWNER = lock.owner
     return lock
   }
 
@@ -430,7 +458,10 @@ export function createJpOhlcvCommandAdapters(input: {
       })
       return verifiedScope
     },
-    holdReadServices: (context) => runJsonStage(input.plan.commands.holdReadServices, context),
+    holdReadServices: async (context) => {
+      await closeLocalClientBeforeExternalWriter()
+      return runJsonStage(input.plan.commands.holdReadServices, context)
+    },
     insertMissingRowsAtomically: async (scope, context) => {
       if (!verifiedScope || stableSha256(verifiedScope) !== stableSha256(scope)) {
         throw new Error('repair_insert_scope_not_revalidated')
@@ -486,6 +517,7 @@ export function createJpOhlcvCommandAdapters(input: {
       }
     },
     rebuildDerivedServing: async (context) => {
+      await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
       for (const command of input.plan.commands.rebuildDerivedServing) {
         const result = await runJsonStage<{ status: 'PASS'; rebuilt: string[] }>(command, context)
@@ -521,7 +553,10 @@ export function createJpOhlcvCommandAdapters(input: {
       }
       return evidence
     },
-    holdReadServices: (context) => runJsonStage(input.plan.commands.holdReadServices, context),
+    holdReadServices: async (context) => {
+      await closeLocalClientBeforeExternalWriter()
+      return runJsonStage(input.plan.commands.holdReadServices, context)
+    },
     restoreBackupAtomically: async (context) => {
       await closeLocalClientBeforeExternalWriter()
       const evidence = await runJsonStage<{
@@ -536,6 +571,7 @@ export function createJpOhlcvCommandAdapters(input: {
       return evidence
     },
     rebuildOriginalDerivedServing: async (context) => {
+      await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
       for (const command of input.plan.commands.rebuildOriginalDerivedServing) {
         const result = await runJsonStage<{ status: 'PASS'; rebuilt: string[] }>(command, context)

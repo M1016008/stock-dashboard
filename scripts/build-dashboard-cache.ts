@@ -58,6 +58,9 @@ async function main() {
     console.log(payload
       ? `Dashboard cache updated: ${payload.latestDate}${warmed.length > 0 ? ` (${warmed.join(', ')})` : ''}`
       : 'Dashboard cache skipped: no latest date')
+    if (process.env.STOCKBOARD_JP_OHLCV_REPAIR_OWNER === '1' && !payload) {
+      throw new Error('JP OHLCV repair dashboard cache rebuild produced no serving payload')
+    }
   } catch (err) {
     await db
       .update(batchRuns)

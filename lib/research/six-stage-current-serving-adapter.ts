@@ -123,8 +123,13 @@ export async function assertCurrentServingProjectionUpdateLock(input: {
   owner: string
   query: CurrentServingQuery
 }): Promise<void> {
-  const jobType = input.market === 'JP' ? 'update_latest' : 'us_update_latest'
-  if (!input.owner.startsWith(`${jobType}:`)) throw new Error('CURRENT_PROJECTION_UPDATE_LOCK_OWNER_INVALID')
+  const marketJobType = input.market === 'JP' ? 'update_latest' : 'us_update_latest'
+  const jobType = input.owner.startsWith(`${marketJobType}:`)
+    ? marketJobType
+    : input.market === 'JP' && input.owner.startsWith('jp_ohlcv_gap_repair:')
+      ? 'jp_ohlcv_gap_repair'
+      : null
+  if (!jobType) throw new Error('CURRENT_PROJECTION_UPDATE_LOCK_OWNER_INVALID')
   const rows = await input.query<{ active: unknown }>(
     `SELECT 1 AS active
      FROM update_locks
