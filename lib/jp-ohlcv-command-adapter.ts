@@ -503,6 +503,7 @@ export function createJpOhlcvCommandAdapters(input: {
         approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
         officialSourceProof: input.runtimeSnapshot.officialSourceProof,
+        officialSourceContract: input.runtimeSnapshot.officialSourceContract,
       })
       assertJpOhlcvRuntimeSnapshotUnchanged({ sealed: input.runtimeSnapshot, current, stage: 'pre_backup' })
       verifiedScope = current.runtimeScope
@@ -524,6 +525,7 @@ export function createJpOhlcvCommandAdapters(input: {
         approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
         officialSourceProof: input.runtimeSnapshot.officialSourceProof,
+        officialSourceContract: input.runtimeSnapshot.officialSourceContract,
       })
       assertJpOhlcvRuntimeSnapshotUnchanged({
         sealed: input.runtimeSnapshot,

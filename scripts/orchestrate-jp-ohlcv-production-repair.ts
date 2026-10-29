@@ -29,7 +29,11 @@ import {
   type JpOhlcvMissingOnlyRepairScope,
 } from '@/lib/jp-ohlcv-data-quality'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
-import { fetchJQuantsDailyByDateWithEvidence } from '@/lib/jquants'
+import type { JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import {
+  assertJQuantsDailyByDateSourceContract,
+  fetchJQuantsDailyByDateWithEvidence,
+} from '@/lib/jquants'
 import {
   assertJpOhlcvRuntimeSnapshot,
   captureJpOhlcvRuntimeSnapshot,
@@ -43,6 +47,18 @@ let operatorPhase: OperatorPhase = 'PRE_FLIGHT'
 let operatorMutationState: MutationState = 'NOT_STARTED'
 let operatorConfig: JpOhlcvProductionExecutionConfiguration | null = null
 let operatorWriterDriver: WriterHoldDriver | null = null
+let operatorOfficialSourceEvidence: null | {
+  requestedAt: string
+  completedAt: string
+  providerRows: number
+  acceptedRows: number
+  rejectedRows: number
+  noTradeRows: number
+  unexpectedRejectedRows: number
+  contentSha256: string
+  rejectedRowsSha256: string
+  rejectedRowEvidence: unknown[]
+} = null
 
 function redactedError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error))
@@ -234,7 +250,20 @@ async function main(): Promise<void> {
     throw new Error('repair_orchestrator_configuration_mismatch')
   }
   operatorConfig = config
-  const approvalBundle = readJson<{ scope: JpOhlcvMissingOnlyRepairScope }>(bundle.approvalBundlePath)
+  const approvalBundle = readJson<{
+    approval: JpOhlcvRepairApproval
+    scope: JpOhlcvMissingOnlyRepairScope
+  }>(bundle.approvalBundlePath)
+  try {
+    assertJQuantsDailyByDateSourceContract(approvalBundle.approval.officialSourceContract, {
+      requestedDate: config.targetDate,
+      acceptedRows: approvalBundle.approval.expectedOfficialRows,
+      contentSha256: approvalBundle.approval.officialSha256,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`repair_execution_package_stale_official_source_contract_regenerate_required:${reason}`)
+  }
   const executionPlan = readJson<JpOhlcvRepairExecutionPlan>(bundle.executionPlanPath)
   const sealedOfficialSha256 = buildJpOhlcvBackfillPlan({
     date: config.targetDate,
@@ -249,6 +278,18 @@ async function main(): Promise<void> {
     proof: JpOhlcvRuntimeSnapshot['officialSourceProof']
   }> => {
     const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate)
+    operatorOfficialSourceEvidence = {
+      requestedAt: evidence.requestedAt,
+      completedAt: evidence.completedAt,
+      providerRows: evidence.providerRows,
+      acceptedRows: evidence.acceptedRows,
+      rejectedRows: evidence.rejectedRows,
+      noTradeRows: evidence.noTradeRows,
+      unexpectedRejectedRows: evidence.unexpectedRejectedRows,
+      contentSha256: evidence.contentSha256,
+      rejectedRowsSha256: evidence.rejectedRowsSha256,
+      rejectedRowEvidence: evidence.rejectedRowEvidence,
+    }
     const currentOfficialSha256 = buildJpOhlcvBackfillPlan({
       date: config.targetDate,
       officialRows: evidence.rows,
@@ -265,7 +306,10 @@ async function main(): Promise<void> {
         providerRows: evidence.providerRows,
         acceptedRows: evidence.acceptedRows,
         rejectedRows: evidence.rejectedRows,
+        noTradeRows: evidence.noTradeRows,
+        unexpectedRejectedRows: evidence.unexpectedRejectedRows,
         contentSha256: evidence.contentSha256,
+        rejectedRowsSha256: evidence.rejectedRowsSha256,
       },
     }
   }
@@ -276,8 +320,12 @@ async function main(): Promise<void> {
     approvalScope: approvalBundle.scope,
     officialRows: preHoldOfficial.rows,
     officialSourceProof: preHoldOfficial.proof,
+    officialSourceContract: approvalBundle.approval.officialSourceContract,
   })
-  assertJpOhlcvRuntimeSnapshot({ snapshot: preHoldSnapshot })
+  assertJpOhlcvRuntimeSnapshot({
+    snapshot: preHoldSnapshot,
+    expectedOfficialSourceContract: approvalBundle.approval.officialSourceContract,
+  })
   inspectWritableTargetPath({
     dbPath: config.databaseRealpath,
     ...config.storageIdentity,
@@ -324,8 +372,12 @@ async function main(): Promise<void> {
         approvalScope: approvalBundle.scope,
         officialRows: writerStaticOfficial.rows,
         officialSourceProof: writerStaticOfficial.proof,
+        officialSourceContract: approvalBundle.approval.officialSourceContract,
       })
-      assertJpOhlcvRuntimeSnapshot({ snapshot: runtimeSnapshot })
+      assertJpOhlcvRuntimeSnapshot({
+        snapshot: runtimeSnapshot,
+        expectedOfficialSourceContract: approvalBundle.approval.officialSourceContract,
+      })
       fs.mkdirSync(config.stateDirectory, { recursive: true, mode: 0o700 })
       const runtimeSnapshotPath = path.join(
         config.stateDirectory,
@@ -447,7 +499,7 @@ async function observeWriterStates(): Promise<Array<Record<string, unknown>> | n
 }
 
 type HoldClass = 'BENIGN_RECAPTURE' | 'WAIT_FOR_UPDATER' | 'SOURCE_REVISED' | 'PRICE_CONFLICT'
-  | 'UNAPPROVED_DRIFT' | 'CONCURRENT_STATE_CHANGE' | 'SAFETY_GATE' | 'UNCLASSIFIED'
+  | 'UNAPPROVED_DRIFT' | 'PROVIDER_ENVELOPE_CHANGED' | 'CONCURRENT_STATE_CHANGE' | 'SAFETY_GATE' | 'UNCLASSIFIED'
 
 function holdClass(error: unknown): HoldClass {
   const message = error instanceof Error ? error.message : String(error)
@@ -455,7 +507,10 @@ function holdClass(error: unknown): HoldClass {
   if (message.includes('repair_runtime_snapshot_source_generation_not_publishable')) return 'WAIT_FOR_UPDATER'
   if (message.includes('repair_preflight_official_source_hash_changed')
     || message.includes('official_source_hash_changed')
+    || message.includes('official_source_accepted_content_mismatch')
     || message.includes('approved_key_official_value_changed')) return 'SOURCE_REVISED'
+  if (message.includes('official_source_rejection_policy_violation')
+    || message.includes('official_source_provider_envelope_mismatch')) return 'PROVIDER_ENVELOPE_CHANGED'
   const summaryStart = message.indexOf('repair_runtime_snapshot_scope_hold:')
   if (summaryStart >= 0) {
     const encoded = message
@@ -474,8 +529,11 @@ function holdClass(error: unknown): HoldClass {
   if (message.includes('repair_runtime_snapshot_changed_after_writer_hold')) return 'CONCURRENT_STATE_CHANGE'
   if (message.includes('repair_runtime_snapshot_invalid')
     || message.includes('repair_runtime_snapshot_official_source_proof_invalid')
+    || message.includes('repair_runtime_snapshot_official_source_contract_invalid')
+    || message.includes('repair_runtime_snapshot_official_source_contract_approval_mismatch')
     || message.includes('repair_runtime_snapshot_hash_mismatch')
-    || message.includes('repair_runtime_snapshot_approval_hash_mismatch')) return 'SAFETY_GATE'
+    || message.includes('repair_runtime_snapshot_approval_hash_mismatch')
+    || message.includes('stale_official_source_contract_regenerate_required')) return 'SAFETY_GATE'
   return 'UNCLASSIFIED'
 }
 
@@ -490,6 +548,9 @@ function operatorAction(error: unknown): string {
     }
     if (classification === 'SOURCE_REVISED') {
       return 'The database transaction did not start. The official source changed from the sealed approval. Preserve both source proofs and obtain a new bounded approval; do not insert or overwrite any row.'
+    }
+    if (classification === 'PROVIDER_ENVELOPE_CHANGED') {
+      return 'The database transaction did not start and Production data was not modified. The accepted OHLCV set may still match, but the provider envelope contains an unapproved rejected-row set or an unexpected partially populated row. Preserve both source proofs and obtain a new exact package approval. If writers are already held, restore them only through the approved no-mutation recovery path; do not weaken the rejection policy or retry automatically.'
     }
     if (classification === 'PRICE_CONFLICT' || classification === 'UNAPPROVED_DRIFT') {
       return 'The database transaction did not start. Production contains a price conflict or unapproved key drift. Preserve the runtime snapshot and investigate the sampled keys; do not widen the repair scope or overwrite rows.'
@@ -507,6 +568,28 @@ function operatorAction(error: unknown): string {
 
 main().catch(async (error) => {
   const writerServices = await observeWriterStates()
+  let officialSourceEvidenceFile: null
+    | { path: string; sha256: string; error?: never }
+    | { path: null; sha256?: never; error: string } = null
+  if (operatorConfig && operatorOfficialSourceEvidence && operatorMutationState === 'NOT_STARTED') {
+    try {
+      fs.mkdirSync(operatorConfig.stateDirectory, { recursive: true, mode: 0o700 })
+      const evidencePath = path.join(
+        operatorConfig.stateDirectory,
+        `official-source-hold-${Date.now()}-${process.pid}.json`,
+      )
+      fs.writeFileSync(evidencePath, `${JSON.stringify(operatorOfficialSourceEvidence, null, 2)}\n`, {
+        flag: 'wx',
+        mode: 0o600,
+      })
+      officialSourceEvidenceFile = { path: evidencePath, sha256: sha256File(evidencePath) }
+    } catch (evidenceError) {
+      officialSourceEvidenceFile = {
+        path: null,
+        error: redactedError(evidenceError),
+      }
+    }
+  }
   console.error(JSON.stringify({
     status: 'HOLD',
     automaticRetryAllowed: false,
@@ -530,6 +613,7 @@ main().catch(async (error) => {
       readServiceSnapshotPresent: fs.existsSync(operatorConfig.serviceSnapshotPath),
     } : null,
     writerServices,
+    officialSourceEvidenceFile,
     readServiceWarning: 'If readServiceSnapshotPresent is true, Web/Analog may be held or may have failed post-restore health. Verify the exact saved state and health before any service action.',
     writerServiceWarning: 'Any writer with loaded=false that was loaded before maintenance remains intentionally held until the data state is certain. Do not bootstrap it without exact recovery approval.',
     operatorAction: operatorAction(error),

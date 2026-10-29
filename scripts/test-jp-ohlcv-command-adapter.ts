@@ -139,6 +139,19 @@ async function main(): Promise<void> {
     approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
     runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
     runtimeSnapshotTtlMs: 900000,
+    officialSourceContract: {
+      version: 1,
+      endpoint: '/v2/equities/bars/daily',
+      requestedDate: '2026-07-17',
+      providerRows: officialRows.length,
+      acceptedRows: officialRows.length,
+      rejectedRows: 0,
+      noTradeRows: 0,
+      unexpectedRejectedRows: 0,
+      contentSha256: scope.officialSha256,
+      rejectedRowsSha256: stableSha256([]),
+      rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL',
+    },
     preservedConflictsSha256: scope.preservedConflictsSha256,
     expectedOfficialRows: 3,
     expectedExistingRows: 1,
@@ -169,8 +182,12 @@ async function main(): Promise<void> {
       providerRows: officialRows.length,
       acceptedRows: officialRows.length,
       rejectedRows: 0,
-      contentSha256: 'a'.repeat(64),
+      noTradeRows: 0,
+      unexpectedRejectedRows: 0,
+      contentSha256: scope.officialSha256,
+      rejectedRowsSha256: stableSha256([]),
     },
+    officialSourceContract: approval.officialSourceContract,
   })
   const adapters = createJpOhlcvCommandAdapters({ approval, plan, runtimeSnapshot })
   const result = await runJpOhlcvProductionRepair({

@@ -49,15 +49,15 @@ export function fromJQuantsCode(code: string): string {
 // API: 日足 OHLCV (/equities/bars/daily)
 // ─────────────────────────────────────
 
-interface JBarRow {
+export interface JBarRow {
   Date: string         // "2023-03-24"
   Code: string         // 5桁、例 "86970"
   O: number | null     // open
   H: number | null     // high
   L: number | null     // low
   C: number | null     // close
-  UL: number | null    // upper limit (ストップ高)
-  LL: number | null    // lower limit (ストップ安)
+  UL: number | string | null    // upper limit (ストップ高)
+  LL: number | string | null    // lower limit (ストップ安)
   Vo: number | null    // volume
   Va: number | null    // value (売買代金)
   AdjFactor: number | null
@@ -168,8 +168,214 @@ export interface JQuantsDailyByDateEvidence {
   providerRows: number
   acceptedRows: number
   rejectedRows: number
+  noTradeRows: number
+  unexpectedRejectedRows: number
   contentSha256: string
+  rejectedRowsSha256: string
+  rejectedRowEvidence: JQuantsRejectedDailyRowEvidence[]
   rows: JQuantsDailyByDateRow[]
+}
+
+export type JQuantsDailyByDateSourceContract = {
+  version: 1
+  endpoint: '/v2/equities/bars/daily'
+  requestedDate: string
+  providerRows: number
+  acceptedRows: number
+  rejectedRows: number
+  noTradeRows: number
+  unexpectedRejectedRows: 0
+  contentSha256: string
+  rejectedRowsSha256: string
+  rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL'
+}
+
+export type JQuantsRejectedDailyRowEvidence = {
+  code: string
+  date: string
+  reason: 'ALL_OHLCV_FIELDS_NULL' | 'MISSING_CLOSE_WITH_OTHER_OHLCV_FIELDS'
+  adjustmentFactor: number | null
+  upperLimit: number | null
+  lowerLimit: number | null
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  volume: number | null
+  value: number | null
+  adjustedOpen: number | null
+  adjustedHigh: number | null
+  adjustedLow: number | null
+  adjustedClose: number | null
+  adjustedVolume: number | null
+}
+
+export function assertJQuantsRejectedDailyRowEvidence(
+  value: unknown,
+  contract: JQuantsDailyByDateSourceContract,
+): asserts value is JQuantsRejectedDailyRowEvidence[] {
+  if (!Array.isArray(value) || value.length !== contract.rejectedRows) {
+    throw new Error('jquants_daily_rejected_evidence_count_mismatch')
+  }
+  const rows = value as JQuantsRejectedDailyRowEvidence[]
+  const keys = new Set<string>()
+  const nullableFields: Array<keyof JQuantsRejectedDailyRowEvidence> = [
+    'open', 'high', 'low', 'close', 'volume', 'value',
+    'adjustedOpen', 'adjustedHigh', 'adjustedLow', 'adjustedClose', 'adjustedVolume',
+  ]
+  for (const row of rows) {
+    if (!row || typeof row.code !== 'string' || !row.code
+      || row.date !== contract.requestedDate
+      || row.reason !== 'ALL_OHLCV_FIELDS_NULL'
+      || nullableFields.some((field) => row[field] !== null)) {
+      throw new Error('jquants_daily_rejected_evidence_row_invalid')
+    }
+    const key = `${row.code}|${row.date}`
+    if (keys.has(key)) throw new Error('jquants_daily_rejected_evidence_duplicate_key')
+    keys.add(key)
+  }
+  if (stableSha256(rows) !== contract.rejectedRowsSha256) {
+    throw new Error('jquants_daily_rejected_evidence_hash_mismatch')
+  }
+}
+
+export function assertJQuantsDailyByDateSourceContract(
+  value: unknown,
+  expected?: { requestedDate: string; acceptedRows: number; contentSha256: string },
+): asserts value is JQuantsDailyByDateSourceContract {
+  const contract = value as Partial<JQuantsDailyByDateSourceContract> | null
+  if (!contract || contract.version !== 1) throw new Error('jquants_daily_source_contract_version_invalid')
+  if (contract.endpoint !== '/v2/equities/bars/daily') throw new Error('jquants_daily_source_contract_endpoint_invalid')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(contract.requestedDate ?? '')) {
+    throw new Error('jquants_daily_source_contract_date_invalid')
+  }
+  if (!Number.isInteger(contract.providerRows) || !Number.isInteger(contract.acceptedRows)
+    || !Number.isInteger(contract.rejectedRows) || !Number.isInteger(contract.noTradeRows)
+    || contract.providerRows! < 0 || contract.acceptedRows! < 0
+    || contract.rejectedRows! < 0 || contract.noTradeRows! < 0) {
+    throw new Error('jquants_daily_source_contract_row_count_invalid')
+  }
+  if (contract.providerRows !== contract.acceptedRows! + contract.rejectedRows!
+    || contract.rejectedRows !== contract.noTradeRows
+    || contract.unexpectedRejectedRows !== 0) {
+    throw new Error('jquants_daily_source_contract_rejection_accounting_invalid')
+  }
+  if (!/^[a-f0-9]{64}$/.test(contract.contentSha256 ?? '')
+    || !/^[a-f0-9]{64}$/.test(contract.rejectedRowsSha256 ?? '')) {
+    throw new Error('jquants_daily_source_contract_hash_invalid')
+  }
+  if (contract.rejectionPolicy !== 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL') {
+    throw new Error('jquants_daily_source_contract_policy_invalid')
+  }
+  if (expected && (contract.requestedDate !== expected.requestedDate
+    || contract.acceptedRows !== expected.acceptedRows
+    || contract.contentSha256 !== expected.contentSha256)) {
+    throw new Error('jquants_daily_source_contract_expected_source_mismatch')
+  }
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function rejectedDailyRowEvidence(row: JBarRow): JQuantsRejectedDailyRowEvidence {
+  const ohlcvFields = [
+    row.O, row.H, row.L, row.C, row.Vo, row.Va,
+    row.AdjO, row.AdjH, row.AdjL, row.AdjC, row.AdjVo,
+  ]
+  return {
+    code: String(row.Code),
+    date: String(row.Date),
+    reason: ohlcvFields.every((value) => value === null || value === undefined)
+      ? 'ALL_OHLCV_FIELDS_NULL'
+      : 'MISSING_CLOSE_WITH_OTHER_OHLCV_FIELDS',
+    adjustmentFactor: finiteNumberOrNull(row.AdjFactor),
+    upperLimit: finiteNumberOrNull(row.UL),
+    lowerLimit: finiteNumberOrNull(row.LL),
+    open: finiteNumberOrNull(row.O),
+    high: finiteNumberOrNull(row.H),
+    low: finiteNumberOrNull(row.L),
+    close: finiteNumberOrNull(row.C),
+    volume: finiteNumberOrNull(row.Vo),
+    value: finiteNumberOrNull(row.Va),
+    adjustedOpen: finiteNumberOrNull(row.AdjO),
+    adjustedHigh: finiteNumberOrNull(row.AdjH),
+    adjustedLow: finiteNumberOrNull(row.AdjL),
+    adjustedClose: finiteNumberOrNull(row.AdjC),
+    adjustedVolume: finiteNumberOrNull(row.AdjVo),
+  }
+}
+
+export function jQuantsDailyByDateSourceContract(
+  evidence: JQuantsDailyByDateEvidence,
+): JQuantsDailyByDateSourceContract {
+  if (evidence.unexpectedRejectedRows !== 0) {
+    const sample = evidence.rejectedRowEvidence
+      .filter((row) => row.reason !== 'ALL_OHLCV_FIELDS_NULL')
+      .slice(0, 10)
+      .map((row) => `${row.code}:${row.reason}`)
+      .join(',')
+    throw new Error(`jquants_daily_source_unexpected_rejected_rows:${evidence.unexpectedRejectedRows}:${sample}`)
+  }
+  const contract: JQuantsDailyByDateSourceContract = {
+    version: 1,
+    endpoint: evidence.endpoint,
+    requestedDate: evidence.requestedDate,
+    providerRows: evidence.providerRows,
+    acceptedRows: evidence.acceptedRows,
+    rejectedRows: evidence.rejectedRows,
+    noTradeRows: evidence.noTradeRows,
+    unexpectedRejectedRows: 0,
+    contentSha256: evidence.contentSha256,
+    rejectedRowsSha256: evidence.rejectedRowsSha256,
+    rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL',
+  }
+  assertJQuantsDailyByDateSourceContract(contract)
+  return contract
+}
+
+export function buildJQuantsDailyByDateEvidence(input: {
+  date: string
+  requestedAt: string
+  completedAt: string
+  pages: number
+  providerRows: readonly JBarRow[]
+}): JQuantsDailyByDateEvidence {
+  const accepted: JQuantsDailyByDateRow[] = []
+  const rejected: JQuantsRejectedDailyRowEvidence[] = []
+  for (const row of input.providerRows) {
+    const ohlcv = toOhlcv(row)
+    if (!ohlcv) {
+      rejected.push(rejectedDailyRowEvidence(row))
+      continue
+    }
+    accepted.push({
+      ticker: fromJQuantsCode(row.Code),
+      adjustmentFactor: row.AdjFactor ?? 1,
+      ...ohlcv,
+    })
+  }
+  const rows = accepted.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  rejected.sort((a, b) => a.code.localeCompare(b.code) || a.date.localeCompare(b.date))
+  const noTradeRows = rejected.filter((row) => row.reason === 'ALL_OHLCV_FIELDS_NULL').length
+  return {
+    endpoint: '/v2/equities/bars/daily',
+    requestedDate: input.date,
+    requestedAt: input.requestedAt,
+    completedAt: input.completedAt,
+    pages: input.pages,
+    providerRows: input.providerRows.length,
+    acceptedRows: rows.length,
+    rejectedRows: rejected.length,
+    noTradeRows,
+    unexpectedRejectedRows: rejected.length - noTradeRows,
+    contentSha256: stableSha256(rows),
+    rejectedRowsSha256: stableSha256(rejected),
+    rejectedRowEvidence: rejected,
+    rows,
+  }
 }
 
 export function hasJQuantsCorporateAction(adjustmentFactor: number | null | undefined): boolean {
@@ -255,9 +461,8 @@ export function shouldApplyJQuantsLegacyAdjustment(input: {
 
 export async function fetchJQuantsDailyByDateWithEvidence(date: string): Promise<JQuantsDailyByDateEvidence> {
   const apiKey = getApiKey()
-  const all: JQuantsDailyByDateRow[] = []
+  const providerRows: JBarRow[] = []
   let paginationKey: string | undefined
-  let providerRows = 0
   let pages = 0
   const requestedAt = new Date().toISOString()
 
@@ -287,33 +492,17 @@ export async function fetchJQuantsDailyByDateWithEvidence(date: string): Promise
       })
     }
     pages += 1
-    providerRows += json.data?.length ?? 0
-    for (const row of json.data ?? []) {
-      const ohlcv = toOhlcv(row)
-      if (!ohlcv) continue
-      all.push({
-        ticker: fromJQuantsCode(row.Code),
-        adjustmentFactor: row.AdjFactor ?? 1,
-        ...ohlcv,
-      })
-    }
+    providerRows.push(...(json.data ?? []))
     paginationKey = json.pagination_key
   } while (paginationKey)
 
-  const rows = all.sort((a, b) => a.ticker.localeCompare(b.ticker))
-  const contentSha256 = stableSha256(rows)
-  return {
-    endpoint: '/v2/equities/bars/daily',
-    requestedDate: date,
+  return buildJQuantsDailyByDateEvidence({
+    date,
     requestedAt,
     completedAt: new Date().toISOString(),
     pages,
     providerRows,
-    acceptedRows: rows.length,
-    rejectedRows: providerRows - rows.length,
-    contentSha256,
-    rows,
-  }
+  })
 }
 
 export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {

@@ -8,6 +8,10 @@ import {
   type JpOhlcvRuntimeRepairScope,
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
+import {
+  assertJQuantsDailyByDateSourceContract,
+  type JQuantsDailyByDateSourceContract,
+} from '@/lib/jquants'
 
 type ReadOnlyDatabase = {
   prepare(sql: string): {
@@ -44,7 +48,10 @@ export type JpOhlcvOfficialSourceProof = {
   providerRows: number
   acceptedRows: number
   rejectedRows: number
+  noTradeRows: number
+  unexpectedRejectedRows: number
   contentSha256: string
+  rejectedRowsSha256: string
 }
 
 export type JpOhlcvRuntimeSnapshot = {
@@ -57,6 +64,8 @@ export type JpOhlcvRuntimeSnapshot = {
   officialRows: number
   officialSourceProof: JpOhlcvOfficialSourceProof
   officialSourceProofSha256: string
+  officialSourceContract: JQuantsDailyByDateSourceContract
+  officialSourceContractSha256: string
   runtimeScope: JpOhlcvRuntimeRepairScope
   sourceWatermark: JpOhlcvSourceWatermark
   sourceWatermarkSha256: string
@@ -171,6 +180,7 @@ export function captureJpOhlcvRuntimeSnapshot(input: {
   approvalScope: JpOhlcvMissingOnlyRepairScope
   officialRows: readonly JpOfficialOhlcvValue[]
   officialSourceProof: JpOhlcvOfficialSourceProof
+  officialSourceContract: JQuantsDailyByDateSourceContract
   now?: Date
 }): JpOhlcvRuntimeSnapshot {
   const now = input.now ?? new Date()
@@ -193,6 +203,8 @@ export function captureJpOhlcvRuntimeSnapshot(input: {
       officialRows: input.officialRows.length,
       officialSourceProof: input.officialSourceProof,
       officialSourceProofSha256: stableSha256(input.officialSourceProof),
+      officialSourceContract: input.officialSourceContract,
+      officialSourceContractSha256: stableSha256(input.officialSourceContract),
       runtimeScope,
       sourceWatermark: source,
       sourceWatermarkSha256: stableSha256(source),
@@ -208,6 +220,7 @@ export function captureJpOhlcvRuntimeSnapshot(input: {
 export function assertJpOhlcvRuntimeSnapshot(input: {
   snapshot: JpOhlcvRuntimeSnapshot
   expectedSha256?: string
+  expectedOfficialSourceContract?: JQuantsDailyByDateSourceContract
   now?: Date
   stage?: string
 }): void {
@@ -235,14 +248,63 @@ export function assertJpOhlcvRuntimeSnapshot(input: {
   }
   const proofRequested = Date.parse(snapshot.officialSourceProof.requestedAt)
   const proofCompleted = Date.parse(snapshot.officialSourceProof.completedAt)
+  const proofContract = {
+    version: 1 as const,
+    endpoint: '/v2/equities/bars/daily' as const,
+    requestedDate: snapshot.officialSourceContract.requestedDate,
+    providerRows: snapshot.officialSourceProof.providerRows,
+    acceptedRows: snapshot.officialSourceProof.acceptedRows,
+    rejectedRows: snapshot.officialSourceProof.rejectedRows,
+    noTradeRows: snapshot.officialSourceProof.noTradeRows,
+    unexpectedRejectedRows: snapshot.officialSourceProof.unexpectedRejectedRows,
+    contentSha256: snapshot.officialSourceProof.contentSha256,
+    rejectedRowsSha256: snapshot.officialSourceProof.rejectedRowsSha256,
+    rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL' as const,
+  }
+  try {
+    assertJQuantsDailyByDateSourceContract(snapshot.officialSourceContract, {
+      requestedDate: snapshot.runtimeScope.date,
+      acceptedRows: snapshot.officialRows,
+      contentSha256: snapshot.officialSha256,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`repair_runtime_snapshot_official_source_contract_invalid:${reason}`)
+  }
   if (!Number.isFinite(proofRequested) || !Number.isFinite(proofCompleted)
     || proofRequested > proofCompleted || proofCompleted > captured
-    || snapshot.officialSourceProof.providerRows !== snapshot.officialRows
-    || snapshot.officialSourceProof.acceptedRows !== snapshot.officialRows
-    || snapshot.officialSourceProof.rejectedRows !== 0
     || !/^[a-f0-9]{64}$/.test(snapshot.officialSourceProof.contentSha256)
-    || snapshot.officialSourceProofSha256 !== stableSha256(snapshot.officialSourceProof)) {
+    || !/^[a-f0-9]{64}$/.test(snapshot.officialSourceProof.rejectedRowsSha256)
+    || snapshot.officialSourceProofSha256 !== stableSha256(snapshot.officialSourceProof)
+    || snapshot.officialSourceContractSha256 !== stableSha256(snapshot.officialSourceContract)) {
     throw new Error('repair_runtime_snapshot_official_source_proof_invalid')
+  }
+  if (snapshot.officialSourceProof.acceptedRows !== snapshot.officialRows
+    || snapshot.officialSourceProof.contentSha256 !== snapshot.officialSha256) {
+    throw new Error('repair_runtime_snapshot_official_source_accepted_content_mismatch')
+  }
+  if (snapshot.officialSourceProof.providerRows !== snapshot.officialSourceProof.acceptedRows + snapshot.officialSourceProof.rejectedRows
+    || snapshot.officialSourceProof.rejectedRows !== snapshot.officialSourceProof.noTradeRows
+    || snapshot.officialSourceProof.unexpectedRejectedRows !== 0) {
+    throw new Error(
+      `repair_runtime_snapshot_official_source_rejection_policy_violation:`
+      + `provider=${snapshot.officialSourceProof.providerRows}:accepted=${snapshot.officialSourceProof.acceptedRows}:`
+      + `rejected=${snapshot.officialSourceProof.rejectedRows}:noTrade=${snapshot.officialSourceProof.noTradeRows}:`
+      + `unexpected=${snapshot.officialSourceProof.unexpectedRejectedRows}`,
+    )
+  }
+  const observedContractSha256 = stableSha256(proofContract)
+  if (observedContractSha256 !== snapshot.officialSourceContractSha256) {
+    throw new Error(
+      `repair_runtime_snapshot_official_source_provider_envelope_mismatch:`
+      + `expectedHash=${snapshot.officialSourceContractSha256}:observedHash=${observedContractSha256}:`
+      + `expectedProvider=${snapshot.officialSourceContract.providerRows}:observedProvider=${proofContract.providerRows}:`
+      + `expectedRejected=${snapshot.officialSourceContract.rejectedRows}:observedRejected=${proofContract.rejectedRows}`,
+    )
+  }
+  if (input.expectedOfficialSourceContract
+    && stableSha256(input.expectedOfficialSourceContract) !== snapshot.officialSourceContractSha256) {
+    throw new Error('repair_runtime_snapshot_official_source_contract_approval_mismatch')
   }
   if (captured - proofCompleted > JP_OHLCV_RUNTIME_SNAPSHOT_TTL_MS) {
     throw new Error(`repair_runtime_snapshot_expired:${input.stage ?? 'unspecified'}:official_source_proof`)
@@ -264,7 +326,7 @@ export function assertJpOhlcvRuntimeSnapshotUnchanged(input: {
   assertJpOhlcvRuntimeSnapshot({ snapshot: input.current, stage: input.stage })
   if (input.sealed.configurationSha256 !== input.current.configurationSha256
     || input.sealed.officialSha256 !== input.current.officialSha256
-    || input.sealed.officialSourceProofSha256 !== input.current.officialSourceProofSha256
+    || input.sealed.officialSourceContractSha256 !== input.current.officialSourceContractSha256
     || input.sealed.approvedRepairKeysSha256 !== input.current.approvedRepairKeysSha256
     || input.sealed.runtimeScope.runtimeExistingSha256 !== input.current.runtimeScope.runtimeExistingSha256
     || input.sealed.sourceWatermarkSha256 !== input.current.sourceWatermarkSha256

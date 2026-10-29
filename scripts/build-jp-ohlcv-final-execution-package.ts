@@ -28,6 +28,12 @@ import {
   type JpOhlcvRepairExecutionPlan,
   type JpOhlcvRepairStageCommand,
 } from '@/lib/jp-ohlcv-command-adapter'
+import {
+  assertJQuantsDailyByDateSourceContract,
+  assertJQuantsRejectedDailyRowEvidence,
+  type JQuantsDailyByDateSourceContract,
+  type JQuantsRejectedDailyRowEvidence,
+} from '@/lib/jquants'
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -75,8 +81,16 @@ assertJpOhlcvProductionExecutionConfiguration(config)
 if (config.mode !== 'PRODUCTION') throw new Error('repair_package_production_configuration_required')
 const dryRun = readJson<{ plan?: JpOhlcvBackfillPlan }>(dryRunFile)
 if (!dryRun.plan) throw new Error('repair_package_dry_run_plan_missing')
-const officialInput = readJson<JpOfficialOhlcvValue[] | { rows: JpOfficialOhlcvValue[] }>(officialRowsFile)
+const officialInput = readJson<JpOfficialOhlcvValue[] | {
+  rows: JpOfficialOhlcvValue[]
+  sourceContract?: JQuantsDailyByDateSourceContract
+  rejectedRows?: JQuantsRejectedDailyRowEvidence[]
+}>(officialRowsFile)
 const officialRows = Array.isArray(officialInput) ? officialInput : officialInput.rows
+const officialSourceContract = Array.isArray(officialInput) ? null : officialInput.sourceContract ?? null
+const officialRejectedRows = Array.isArray(officialInput) ? null : officialInput.rejectedRows ?? null
+if (!officialSourceContract) throw new Error('repair_package_official_source_contract_missing')
+if (!officialRejectedRows) throw new Error('repair_package_official_rejected_rows_missing')
 const existingInput = readJson<JpOhlcvValue[] | {
   rows?: JpOhlcvValue[]
   reconstructedRows?: JpOhlcvValue[]
@@ -107,6 +121,22 @@ if (existingKind !== config.existingEvidence.kind
 const rebuiltPlan = buildJpOhlcvBackfillPlan({ date: config.targetDate, officialRows, existingRows })
 if (stableSha256(rebuiltPlan) !== stableSha256(dryRun.plan)) {
   throw new Error('repair_package_evidence_rebuild_mismatch')
+}
+try {
+  assertJQuantsDailyByDateSourceContract(officialSourceContract, {
+    requestedDate: config.targetDate,
+    acceptedRows: officialRows.length,
+    contentSha256: rebuiltPlan.officialSha256,
+  })
+} catch (error) {
+  const reason = error instanceof Error ? error.message : String(error)
+  throw new Error(`repair_package_official_source_contract_invalid:${reason}`)
+}
+try {
+  assertJQuantsRejectedDailyRowEvidence(officialRejectedRows, officialSourceContract)
+} catch (error) {
+  const reason = error instanceof Error ? error.message : String(error)
+  throw new Error(`repair_package_official_rejected_rows_invalid:${reason}`)
 }
 const scope = buildJpOhlcvMissingOnlyRepairScope({
   plan: dryRun.plan,
@@ -182,6 +212,7 @@ const approval: JpOhlcvRepairApproval = {
   approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
   runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
   runtimeSnapshotTtlMs: 900000,
+  officialSourceContract,
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: dryRun.plan.officialRows,
   expectedExistingRows: dryRun.plan.existingRows,
@@ -205,6 +236,14 @@ const approvalBundle = {
   approval,
   approvalSha256: repairApprovalSha256(approval),
   scope,
+  officialSourceEvidence: {
+    sourceContract: officialSourceContract,
+    rejectedRows: officialRejectedRows,
+  },
+  officialSourceEvidenceSha256: stableSha256({
+    sourceContract: officialSourceContract,
+    rejectedRows: officialRejectedRows,
+  }),
   productionMutationAuthorized: false,
   executionStatus: 'HOLD_PENDING_EXPLICIT_APPROVAL' as const,
 }

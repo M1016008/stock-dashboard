@@ -134,7 +134,11 @@ async function main(): Promise<void> {
       throw new Error('repair_runtime_snapshot_exact_file_identity_required')
     }
     runtimeSnapshot = readJson<JpOhlcvRuntimeSnapshot>(runtimeSnapshotPath)
-    assertJpOhlcvRuntimeSnapshot({ snapshot: runtimeSnapshot, expectedSha256: runtimeSnapshotSha256 })
+    assertJpOhlcvRuntimeSnapshot({
+      snapshot: runtimeSnapshot,
+      expectedSha256: runtimeSnapshotSha256,
+      expectedOfficialSourceContract: bundle.approval.officialSourceContract,
+    })
     if (runtimeSnapshot.configurationSha256 !== sha256File(configurationPath)
       || runtimeSnapshot.officialSha256 !== bundle.approval.officialSha256
       || runtimeSnapshot.approvedRepairKeysSha256 !== bundle.approval.approvedRepairKeysSha256) {

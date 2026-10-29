@@ -22,6 +22,7 @@ import {
 } from '@/lib/jp-ohlcv-repair-runner'
 import {
   assertNoIncompleteRepair,
+  assertRepairApproval,
   inspectJpOhlcvProductionRepair,
   repairApprovalSha256,
   repairPrewriteCleanupApprovalSha256,
@@ -106,6 +107,19 @@ const approvalFor = (name: string): JpOhlcvRepairApproval => ({
   approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
   runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
   runtimeSnapshotTtlMs: 900000,
+  officialSourceContract: {
+    version: 1,
+    endpoint: '/v2/equities/bars/daily',
+    requestedDate: scope.date,
+    providerRows: plan.officialRows,
+    acceptedRows: plan.officialRows,
+    rejectedRows: 0,
+    noTradeRows: 0,
+    unexpectedRejectedRows: 0,
+    contentSha256: scope.officialSha256,
+    rejectedRowsSha256: stableSha256([]),
+    rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL',
+  },
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: plan.officialRows,
   expectedExistingRows: plan.existingRows,
@@ -123,6 +137,16 @@ const approvalFor = (name: string): JpOhlcvRepairApproval => ({
   servingGenerationAfter: 'jp-serving-after',
   derivedPlanSha256: stableSha256({ commands: ['fixture-derived'] }),
 })
+
+const missingSourceContract = {
+  ...approvalFor('missing-source-contract'),
+  officialSourceContract: undefined,
+} as unknown as JpOhlcvRepairApproval
+assert.throws(() => assertRepairApproval({
+  approval: missingSourceContract,
+  expectedSha256: repairApprovalSha256(missingSourceContract),
+  scope,
+}), /official_source_contract_invalid/)
 
 function adapter(approval: JpOhlcvRepairApproval, overrides: Partial<JpOhlcvRepairAdapter> = {}): JpOhlcvRepairAdapter {
   let rows = existing.map((row) => ({ ...row }))

@@ -7,6 +7,7 @@ import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
   buildJpOhlcvRuntimeRepairScope,
+  stableSha256,
   type JpOfficialOhlcvValue,
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
@@ -169,13 +170,29 @@ const insert = database.prepare('INSERT INTO ohlcv_daily VALUES(?,?,?,?,?,?,?)')
 insert.run(conflict.ticker, conflict.date, conflict.open, conflict.high, conflict.low, conflict.close, conflict.volume)
 database.close()
 
+const sourceContract = {
+  version: 1 as const,
+  endpoint: '/v2/equities/bars/daily' as const,
+  requestedDate: date,
+  providerRows: official.length + 224,
+  acceptedRows: official.length,
+  rejectedRows: 224,
+  noTradeRows: 224,
+  unexpectedRejectedRows: 0 as const,
+  contentSha256: approvalScope.officialSha256,
+  rejectedRowsSha256: 'b'.repeat(64),
+  rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL' as const,
+}
 const sourceProof = (at: Date) => ({
   requestedAt: at.toISOString(),
   completedAt: at.toISOString(),
-  providerRows: official.length,
+  providerRows: official.length + 224,
   acceptedRows: official.length,
-  rejectedRows: 0,
-  contentSha256: 'a'.repeat(64),
+  rejectedRows: 224,
+  noTradeRows: 224,
+  unexpectedRejectedRows: 0,
+  contentSha256: approvalScope.officialSha256,
+  rejectedRowsSha256: 'b'.repeat(64),
 })
 
 const fixedAt = new Date('2026-10-29T00:00:00.000Z')
@@ -185,6 +202,7 @@ const fixed = captureJpOhlcvRuntimeSnapshot({
   approvalScope,
   officialRows: official,
   officialSourceProof: sourceProof(fixedAt),
+  officialSourceContract: sourceContract,
   now: fixedAt,
 })
 assert.doesNotThrow(() => assertJpOhlcvRuntimeSnapshot({
@@ -204,6 +222,7 @@ const staleOfficialProof = captureJpOhlcvRuntimeSnapshot({
   approvalScope,
   officialRows: official,
   officialSourceProof: sourceProof(staleProofAt),
+  officialSourceContract: sourceContract,
   now: staleProofCapturedAt,
 })
 assert.throws(() => assertJpOhlcvRuntimeSnapshot({
@@ -218,6 +237,7 @@ const sealed = captureJpOhlcvRuntimeSnapshot({
   approvalScope,
   officialRows: official,
   officialSourceProof: sourceProof(sealedAt),
+  officialSourceContract: sourceContract,
   now: sealedAt,
 })
 const changedDatabase = new DatabaseSync(databasePath)
@@ -229,8 +249,42 @@ const changed = captureJpOhlcvRuntimeSnapshot({
   approvalScope,
   officialRows: official,
   officialSourceProof: sourceProof(sealedAt),
+  officialSourceContract: sourceContract,
   now: sealedAt,
 })
 assert.throws(() => assertJpOhlcvRuntimeSnapshotUnchanged({ sealed, current: changed }), /changed_after_writer_hold/)
+
+const malformedProof = {
+  ...fixed,
+  officialSourceProof: { ...fixed.officialSourceProof, unexpectedRejectedRows: 1, noTradeRows: 223 },
+}
+malformedProof.officialSourceProofSha256 = stableSha256(malformedProof.officialSourceProof)
+const { snapshotSha256: _malformedHash, ...malformedBody } = malformedProof
+malformedProof.snapshotSha256 = stableSha256(malformedBody)
+assert.throws(() => assertJpOhlcvRuntimeSnapshot({ snapshot: malformedProof, now: fixedAt }), /rejection_policy_violation/)
+
+const changedEnvelope = {
+  ...fixed,
+  officialSourceProof: { ...fixed.officialSourceProof, rejectedRowsSha256: 'c'.repeat(64) },
+}
+changedEnvelope.officialSourceProofSha256 = stableSha256(changedEnvelope.officialSourceProof)
+const { snapshotSha256: _envelopeHash, ...changedEnvelopeBody } = changedEnvelope
+changedEnvelope.snapshotSha256 = stableSha256(changedEnvelopeBody)
+assert.throws(
+  () => assertJpOhlcvRuntimeSnapshot({ snapshot: changedEnvelope, now: fixedAt }),
+  /provider_envelope_mismatch:expectedHash=.*:observedHash=/,
+)
+
+const changedAccepted = {
+  ...fixed,
+  officialSourceProof: { ...fixed.officialSourceProof, contentSha256: 'c'.repeat(64) },
+}
+changedAccepted.officialSourceProofSha256 = stableSha256(changedAccepted.officialSourceProof)
+const { snapshotSha256: _acceptedHash, ...changedAcceptedBody } = changedAccepted
+changedAccepted.snapshotSha256 = stableSha256(changedAcceptedBody)
+assert.throws(
+  () => assertJpOhlcvRuntimeSnapshot({ snapshot: changedAccepted, now: fixedAt }),
+  /accepted_content_mismatch/,
+)
 
 console.log('JP OHLCV runtime snapshot tests: PASS')

@@ -7,6 +7,12 @@ import {
   type JpOhlcvBackfillPlan,
 } from '@/lib/jp-ohlcv-data-quality'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import {
+  assertJQuantsDailyByDateSourceContract,
+  assertJQuantsRejectedDailyRowEvidence,
+  type JQuantsDailyByDateSourceContract,
+  type JQuantsRejectedDailyRowEvidence,
+} from '@/lib/jquants'
 import { DEFAULT_JP_OHLCV_REPAIR_LOCK } from '@/lib/jp-ohlcv-repair-barrier'
 import {
   assertJpOhlcvRepairExecutionPlan,
@@ -46,6 +52,21 @@ if (derivedPlan.version !== 1
 }
 assertJpOhlcvRepairExecutionPlan({ plan: derivedPlan, targetDate: scope.date })
 const derivedPlanSha256 = stableSha256(derivedPlan)
+const sourceContractInput = JSON.parse(fs.readFileSync(absolute('--official-source-contract'), 'utf8')) as
+  | JQuantsDailyByDateSourceContract
+  | { sourceContract?: JQuantsDailyByDateSourceContract; rejectedRows?: JQuantsRejectedDailyRowEvidence[] }
+const officialSourceContract = 'sourceContract' in sourceContractInput
+  ? sourceContractInput.sourceContract
+  : sourceContractInput
+const officialRejectedRows = 'sourceContract' in sourceContractInput
+  ? sourceContractInput.rejectedRows
+  : null
+assertJQuantsDailyByDateSourceContract(officialSourceContract, {
+  requestedDate: scope.date,
+  acceptedRows: parsed.plan.officialRows,
+  contentSha256: scope.officialSha256,
+})
+assertJQuantsRejectedDailyRowEvidence(officialRejectedRows, officialSourceContract)
 const approval: JpOhlcvRepairApproval = {
   version: 1,
   executionScope: 'PRODUCTION',
@@ -56,6 +77,7 @@ const approval: JpOhlcvRepairApproval = {
   approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
   runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
   runtimeSnapshotTtlMs: 900000,
+  officialSourceContract,
   preservedConflictsSha256: scope.preservedConflictsSha256,
   expectedOfficialRows: parsed.plan.officialRows,
   expectedExistingRows: parsed.plan.existingRows,
@@ -87,6 +109,8 @@ const bundle = {
   approval,
   approvalSha256: repairApprovalSha256(approval),
   scope,
+  officialSourceEvidence: { sourceContract: officialSourceContract, rejectedRows: officialRejectedRows },
+  officialSourceEvidenceSha256: stableSha256({ sourceContract: officialSourceContract, rejectedRows: officialRejectedRows }),
   productionMutationAuthorized: false,
   executionStatus: 'HOLD_PENDING_EXPLICIT_APPROVAL',
 }

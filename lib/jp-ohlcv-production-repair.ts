@@ -13,6 +13,10 @@ import {
   recordedProcessIdentityState,
   type RecordedProcessIdentity,
 } from '@/lib/jp-ohlcv-repair-process-supervisor'
+import {
+  assertJQuantsDailyByDateSourceContract,
+  type JQuantsDailyByDateSourceContract,
+} from '@/lib/jquants'
 
 export type JpOhlcvRepairStage =
   | 'PREPARING'
@@ -52,6 +56,7 @@ export type JpOhlcvRepairApproval = {
   approvedRepairKeysSha256: string
   runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY'
   runtimeSnapshotTtlMs: 900000
+  officialSourceContract: JQuantsDailyByDateSourceContract
   preservedConflictsSha256: string
   expectedOfficialRows: number
   expectedExistingRows: number
@@ -452,6 +457,17 @@ export function assertRepairApproval(input: {
   if (approval.runtimeDriftPolicy !== 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY'
     || approval.runtimeSnapshotTtlMs !== 900000) {
     throw new Error('repair_approval_runtime_policy_invalid')
+  }
+  const sourceContract = approval.officialSourceContract
+  try {
+    assertJQuantsDailyByDateSourceContract(sourceContract, {
+      requestedDate: approval.targetDate,
+      acceptedRows: approval.expectedOfficialRows,
+      contentSha256: approval.officialSha256,
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`repair_approval_official_source_contract_invalid:${reason}`)
   }
   if (scope.missingRowsSha256 !== stableSha256(scope.missingRows)
     || scope.preservedConflictsSha256 !== stableSha256(scope.preservedConflicts)) {
