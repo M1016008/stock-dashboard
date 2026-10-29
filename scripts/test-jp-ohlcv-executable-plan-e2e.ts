@@ -562,6 +562,16 @@ async function main(): Promise<void> {
       STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
     }
+    execFileSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'hold-read-services',
+      '--config', configPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    })
     assert.throws(() => execFileSync(process.execPath, restoreArgs, {
       cwd: process.cwd(),
       encoding: 'utf8',

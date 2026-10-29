@@ -265,13 +265,16 @@ async function executeStage(input: {
       if (timer) clearTimeout(timer)
       let failure = inputFailure
       let processGroupStopped = !child.pid
+      let unexpectedDescendants = false
       try {
         if (killPromise) await killPromise
         if (child.pid && isProcessGroupAlive(child.pid)) {
+          unexpectedDescendants = !terminationRequested && code === 0 && signal === null
           await terminateAndWaitForProcessGroup(child.pid)
         }
         processGroupStopped = !child.pid || !isProcessGroupAlive(child.pid)
         if (!processGroupStopped) failure = new Error('repair_stage_command_descendants_remained')
+        else if (unexpectedDescendants) failure = new Error('repair_stage_command_descendants_remained_after_exit')
       } catch (error) {
         failure = error instanceof Error ? error : new Error(String(error))
         processGroupStopped = !child.pid || !isProcessGroupAlive(child.pid)
@@ -309,7 +312,10 @@ async function executeStage(input: {
       stdoutBytes += chunk.length
       if (stdoutBytes > 16 * 1024 * 1024) {
         outputOverflow = true
-        void requestTermination()
+        void requestTermination().catch(() => {
+          // finalize() owns the durable survivor decision and preserves the
+          // active process record when termination cannot be proven.
+        })
         return
       }
       stdout.push(chunk)
@@ -334,14 +340,19 @@ async function executeStage(input: {
       })
       recorded = true
     } catch (error) {
-      void requestTermination().finally(() => {
-        void finalize(error instanceof Error ? error : new Error(String(error)), null, null)
-      })
+      void requestTermination()
+        .catch(() => undefined)
+        .finally(() => {
+          void finalize(error instanceof Error ? error : new Error(String(error)), null, null)
+        })
       return
     }
     timer = setTimeout(() => {
       timedOut = true
-      void requestTermination()
+      void requestTermination().catch(() => {
+        // finalize() records the termination failure without dropping the
+        // durable activeStageProcess guard.
+      })
     }, input.spec.timeoutMs)
   })
 }
@@ -545,6 +556,12 @@ export function createJpOhlcvCommandAdapters(input: {
 
   const rollback: JpOhlcvRepairRollbackAdapter = {
     acquireWriterLock,
+    restoreRecoveryRequired: async (context) => {
+      const state = path.join(input.approval.stateDirectory, `rollback-restore-${context.transactionId}.json`)
+      if (!fs.existsSync(state)) return false
+      const parsed = JSON.parse(fs.readFileSync(state, 'utf8')) as { phase?: unknown }
+      return parsed.phase !== 'COMPLETED'
+    },
     verifyBackupForRollback: async (context) => {
       const evidence = await runJsonStage<{
         backupRealpath: string

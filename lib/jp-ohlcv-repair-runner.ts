@@ -100,6 +100,7 @@ function stageMayContainDataMutation(stage: ReturnType<JpOhlcvProductionRepairTr
 
 export type JpOhlcvRepairRollbackAdapter = {
   acquireWriterLock: (context: JpOhlcvRepairExecutionContext) => Promise<{ owner: string; release: () => Promise<void> }>
+  restoreRecoveryRequired: (context: JpOhlcvRepairExecutionContext) => Promise<boolean>
   verifyBackupForRollback: (context: JpOhlcvRepairExecutionContext) => Promise<{
     backupRealpath: string
     backupSha256: string
@@ -395,6 +396,15 @@ export async function runJpOhlcvProductionRepairRollback(input: {
     let writer: Awaited<ReturnType<JpOhlcvRepairRollbackAdapter['acquireWriterLock']>> | null = null
     try {
       context.assertExecutionActive()
+      if (await input.adapter.restoreRecoveryRequired(context)) {
+        const recovered = await input.adapter.restoreBackupAtomically(context)
+        context.assertExecutionActive()
+        if (recovered.databaseRealpath !== input.approval.databaseRealpath
+          || recovered.databaseSha256 !== input.rollbackApproval.backupSha256
+          || recovered.sourceGeneration !== input.rollbackApproval.sourceGenerationTarget) {
+          throw new Error('repair_rollback_interrupted_restore_recovery_mismatch')
+        }
+      }
       writer = await input.adapter.acquireWriterLock(context)
       context.assertExecutionActive()
       const backup = await input.adapter.verifyBackupForRollback(context)

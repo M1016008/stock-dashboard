@@ -17,6 +17,7 @@ import {
 } from '@/lib/jp-ohlcv-executable-plan'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  assertNoUnauthorizedDatabaseHandles,
   createLaunchdWriterHoldDriver,
   type LaunchdRuntimeIdentity,
 } from '@/lib/storage/launchd-writer-hold-driver'
@@ -278,16 +279,69 @@ function assertRestoredDatabase(input: Omit<RestoreState, 'phase' | 'updatedAt'>
   if (!fs.existsSync(input.databaseRealpath)
     || sha256File(input.databaseRealpath) !== input.backupSha256
     || !fs.existsSync(input.failedPath)
-    || fs.existsSync(input.temporaryPath)) {
+    || fs.existsSync(input.temporaryPath)
+    || fs.existsSync(`${input.databaseRealpath}-wal`)
+    || fs.existsSync(`${input.databaseRealpath}-shm`)) {
     throw new Error(`repair_restore_activated_state_invalid:${restoreStatePath()}`)
   }
 }
 
-function restoreBackupWithJournal(metadata: {
+async function assertRestoreExecutionBarrier(input: Omit<RestoreState, 'phase' | 'updatedAt'>): Promise<void> {
+  if (!fs.existsSync(config.serviceSnapshotPath)) {
+    throw new Error(`repair_restore_read_service_snapshot_missing:${config.serviceSnapshotPath}`)
+  }
+  const snapshot = readJson<JpOhlcvServiceSnapshot>(config.serviceSnapshotPath)
+  assertSnapshot(snapshot, 'READ_SERVICE')
+  assertSnapshotServices(snapshot, config.readServices)
+  const services = config.mode === 'PRODUCTION'
+    ? [...config.writerServices, ...config.readServices]
+    : config.readServices
+  const driver = config.mode === 'PRODUCTION'
+    ? createLaunchdWriterHoldDriver(services.map(launchdIdentity))
+    : null
+  for (const service of services) {
+    const observed = driver ? await driver.observe(service.label) : await observeFixture(service)
+    if (observed.loaded || observed.pid !== null || observed.processGroupId !== null) {
+      throw new Error(`repair_restore_service_not_held:${service.label}`)
+    }
+  }
+  if (config.mode === 'PRODUCTION') {
+    const files = [
+      input.databaseRealpath,
+      `${input.databaseRealpath}-wal`,
+      `${input.databaseRealpath}-shm`,
+      input.temporaryPath,
+      input.failedPath,
+      `${input.failedPath}-wal`,
+      `${input.failedPath}-shm`,
+    ].filter((file) => fs.existsSync(file))
+    if (fs.existsSync(input.databaseRealpath)) {
+      assertNoUnauthorizedDatabaseHandles({
+        databasePath: input.databaseRealpath,
+        approvedReaders: [],
+        timeoutMs: 30_000,
+      })
+    } else if (files.length > 0) {
+      const result = spawnSync('/usr/sbin/lsof', ['-nP', '-Fpcn', ...files], {
+        encoding: 'utf8',
+        timeout: 30_000,
+      })
+      if (result.status === 0 && result.stdout.trim()) {
+        throw new Error('repair_restore_database_handle_present')
+      }
+      if (result.status !== 0 && !(result.status === 1 && !result.stdout.trim() && !result.stderr.trim())) {
+        throw new Error('repair_restore_database_handle_probe_ambiguous')
+      }
+    }
+  }
+}
+
+async function restoreBackupWithJournal(metadata: {
   backupRealpath: string
   backupSha256: string
-}): RestoreState {
+}): Promise<RestoreState> {
   const expected = expectedRestoreState(metadata)
+  await assertRestoreExecutionBarrier(expected)
   let state = readRestoreState(expected)
   if (!state) {
     if (!fs.existsSync(expected.databaseRealpath)
@@ -302,12 +356,20 @@ function restoreBackupWithJournal(metadata: {
     if (fs.existsSync(expected.failedPath)) {
       throw new Error(`repair_restore_primary_archived_without_journal_phase:${restoreStatePath()}`)
     }
+    if (fs.existsSync(expected.temporaryPath)
+      && sha256File(expected.temporaryPath) !== expected.backupSha256) {
+      fs.unlinkSync(expected.temporaryPath)
+      syncDirectory(path.dirname(expected.temporaryPath))
+    }
     if (!fs.existsSync(expected.temporaryPath)) {
       fs.copyFileSync(expected.backupRealpath, expected.temporaryPath, fs.constants.COPYFILE_EXCL)
     }
     if (sha256File(expected.temporaryPath) !== expected.backupSha256) {
       throw new Error(`repair_restore_copy_hash_mismatch:${restoreStatePath()}`)
     }
+    const temporaryDescriptor = fs.openSync(expected.temporaryPath, 'r')
+    try { fs.fsyncSync(temporaryDescriptor) } finally { fs.closeSync(temporaryDescriptor) }
+    syncDirectory(path.dirname(expected.temporaryPath))
     state = writeRestoreState(expected, 'BACKUP_STAGED')
     fixtureRestoreCrash('after-backup-staged')
   }
@@ -349,6 +411,9 @@ function restoreBackupWithJournal(metadata: {
         || !fs.existsSync(expected.temporaryPath)
         || !fs.existsSync(expected.failedPath)) {
         throw new Error(`repair_restore_activation_state_ambiguous:${restoreStatePath()}`)
+      }
+      if (sha256File(expected.temporaryPath) !== expected.backupSha256) {
+        throw new Error(`repair_restore_staged_hash_mismatch:${restoreStatePath()}`)
       }
       fs.renameSync(expected.temporaryPath, expected.databaseRealpath)
       syncDirectory(path.dirname(expected.databaseRealpath))
@@ -829,7 +894,7 @@ async function main(): Promise<Record<string, unknown>> {
   }
   if (operation === 'restore-backup') {
     const metadata = requireBackupMetadata()
-    const restoreState = restoreBackupWithJournal(metadata)
+    const restoreState = await restoreBackupWithJournal(metadata)
     return {
       databaseRealpath: config.databaseRealpath,
       databaseSha256: sha256File(config.databaseRealpath),

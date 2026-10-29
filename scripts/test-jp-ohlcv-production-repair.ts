@@ -480,6 +480,7 @@ for (const [name, override, expectedStage] of [
     },
   }
   const rollbackApprovalSha256 = repairRollbackApprovalSha256(rollbackApproval)
+  const rollbackOrder: string[] = []
   const rollback = await runJpOhlcvProductionRepairRollback({
     approval,
     approvalSha256,
@@ -487,7 +488,14 @@ for (const [name, override, expectedStage] of [
     rollbackApprovalSha256,
     paths: repairPaths,
     adapter: {
-      acquireWriterLock: async () => ({ owner: 'fixture-recovery-writer', release: async () => undefined }),
+      acquireWriterLock: async () => {
+        rollbackOrder.push('writer-lock')
+        return { owner: 'fixture-recovery-writer', release: async () => undefined }
+      },
+      restoreRecoveryRequired: async () => {
+        rollbackOrder.push('recovery-check')
+        return true
+      },
       verifyBackupForRollback: async () => {
         assert.equal(stableSha256(fs.readFileSync(backup)), beforeHash)
         return {
@@ -504,6 +512,7 @@ for (const [name, override, expectedStage] of [
         snapshotSha256: stableSha256({ web: 'rollback-fixture', analog: 'rollback-fixture' }),
       }),
       restoreBackupAtomically: async () => {
+        rollbackOrder.push('restore')
         fs.copyFileSync(backup, database)
         return {
           databaseRealpath: database,
@@ -525,6 +534,7 @@ for (const [name, override, expectedStage] of [
     },
   })
   assert.equal(rollback.status, 'ROLLED_BACK')
+  assert.deepEqual(rollbackOrder.slice(0, 3), ['recovery-check', 'restore', 'writer-lock'])
   assert.equal(stableSha256(fs.readFileSync(database)), beforeHash)
   assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
 }
@@ -559,6 +569,7 @@ for (const [name, override, expectedStage] of [
     paths: repairPaths,
     adapter: {
       acquireWriterLock: async () => { throw new Error('must_not_run') },
+      restoreRecoveryRequired: async () => false,
       verifyBackupForRollback: async () => { throw new Error('must_not_run') },
       holdReadServices: async () => { throw new Error('must_not_run') },
       restoreBackupAtomically: async () => { throw new Error('must_not_run') },
@@ -613,6 +624,7 @@ for (const [name, override, expectedStage] of [
     paths: repairPaths,
     adapter: {
       acquireWriterLock: async () => ({ owner: 'fixture-recovery-writer', release: async () => undefined }),
+      restoreRecoveryRequired: async () => false,
       verifyBackupForRollback: async () => { throw new Error('rollback_backup_probe_failed') },
       holdReadServices: async () => { throw new Error('must_not_run') },
       restoreBackupAtomically: async () => { throw new Error('must_not_run') },

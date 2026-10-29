@@ -283,7 +283,7 @@ function holdOperatorAction(input: {
     return 'The new Source and Serving generations were verified, but Web/Analog resume is uncertain. Preserve all artifacts and run status. Choose either exact hash-bound RESUME_READ_SERVICES after revalidating the promoted generation, or exact hash-bound ROLLBACK; never retry automatically.'
   }
   if (stage === 'COMMITTED') {
-    return 'The data, derived state, generations and read services were verified and committed, but final journal archival is incomplete. Do not retry or roll back automatically. Preserve the committed journal and lock, verify the generation pointers and service state against this transaction, and obtain an exact operator recovery approval.'
+    return 'The data, derived state, generations and read services were verified and committed, but final journal archival is incomplete. Do not retry or roll back: rollback is forbidden for this state. Preserve the committed journal and lock and verify generation pointers and services against this transaction. No automated finalization recovery is implemented; require a separately reviewed manual recovery procedure and approval.'
   }
   if (stage.startsWith('ROLLBACK_')) {
     return `Rollback is incomplete and must not be restarted automatically. Preserve ${databaseRealpath}, ${databaseRealpath}.restore-${transactionId}, ${databaseRealpath}.failed-${transactionId}, their WAL/SHM sidecars, the verified backup, and ${path.join(stateDirectory, `rollback-restore-${transactionId}.json`)}. Keep Web/Analog and every writer held. Inspect the restore phase, hashes, Source/Serving generations and active process record; require exact stale-process evidence if present, then use an operator-approved recovery procedure for that phase.`
@@ -636,6 +636,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
         stateDirectory: paths.stateDirectory,
         journal: paths.journal,
         lock: paths.lock,
+        allProtectedPaths: journal.protectedPaths,
       } : null,
       preservedConflicts: journal?.preservedConflicts ?? null,
       parseFailure: journalParseFailure,
@@ -725,6 +726,10 @@ export class JpOhlcvProductionRepairTransaction {
     }
     if (journal.stage === 'ROLLED_BACK' || journal.stage === 'ROLLBACK_VERIFIED') {
       throw new Error(`repair_rollback_terminal_stage:${journal.stage}`)
+    }
+    if (journal.stage === 'COMMITTED'
+      || (journal.stage === 'HOLD' && journal.failure?.originalStage === 'COMMITTED')) {
+      throw new Error('repair_rollback_committed_transaction_forbidden')
     }
     const staleStageProcess = journal.activeStageProcess
     if (staleStageProcess) {
@@ -1012,6 +1017,8 @@ export class JpOhlcvProductionRepairTransaction {
         `${this.approval.databaseRealpath}-shm`,
         `${this.approval.databaseRealpath}.restore-${this.transactionId}`,
         `${this.approval.databaseRealpath}.failed-${this.transactionId}`,
+        `${this.approval.databaseRealpath}.failed-${this.transactionId}-wal`,
+        `${this.approval.databaseRealpath}.failed-${this.transactionId}-shm`,
         this.approval.backupDirectory,
         this.paths.stateDirectory,
         this.paths.journal,
@@ -1048,7 +1055,9 @@ export class JpOhlcvProductionRepairTransaction {
 
   hold(error: unknown): never {
     if (!this.journal) throw error
-    const originalStage = this.journal.stage
+    const originalStage = this.journal.stage === 'HOLD' && this.journal.failure
+      ? this.journal.failure.originalStage
+      : this.journal.stage
     const previousFailure = this.journal.failure
     this.journal = {
       ...this.journal,
