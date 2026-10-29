@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,17 +13,25 @@ import {
 } from '@/lib/jp-ohlcv-data-quality'
 import {
   runJpOhlcvProductionRepair,
+  runJpOhlcvProductionRepairPrewriteCleanup,
+  runJpOhlcvProductionRepairResumeReadServices,
   runJpOhlcvProductionRepairRollback,
   type JpOhlcvRepairAdapter,
 } from '@/lib/jp-ohlcv-repair-runner'
 import {
   assertNoIncompleteRepair,
+  inspectJpOhlcvProductionRepair,
   repairApprovalSha256,
+  repairPrewriteCleanupApprovalSha256,
+  repairResumeServicesApprovalSha256,
   repairRollbackApprovalSha256,
   JpOhlcvProductionRepairTransaction,
   type JpOhlcvRepairApproval,
   type JpOhlcvRepairPaths,
+  type JpOhlcvRepairPrewriteCleanupApproval,
+  type JpOhlcvRepairResumeServicesApproval,
   type JpOhlcvRepairRollbackApproval,
+  type JpOhlcvRepairRunnerRecovery,
 } from '@/lib/jp-ohlcv-production-repair'
 import {
   jpOhlcvRepairBarrierDecision,
@@ -63,6 +72,27 @@ const paths = (name: string): JpOhlcvRepairPaths => {
     lock: path.join(stateDirectory, 'repair.lock'),
   }
 }
+const markOriginalRunnerStopped = (repairPaths: JpOhlcvRepairPaths): void => {
+  const lock = JSON.parse(fs.readFileSync(repairPaths.lock, 'utf8'))
+  fs.writeFileSync(repairPaths.lock, `${JSON.stringify({
+    ...lock,
+    pid: 999_998,
+    processGroupId: 999_998,
+    processIdentitySha256: 'c'.repeat(64),
+  })}\n`)
+}
+const runnerRecoveryFor = (repairPaths: JpOhlcvRepairPaths): JpOhlcvRepairRunnerRecovery => {
+  const lock = JSON.parse(fs.readFileSync(repairPaths.lock, 'utf8'))
+  return {
+    pid: Number(lock.pid),
+    processGroupId: Number(lock.processGroupId),
+    processIdentitySha256: String(lock.processIdentitySha256),
+    observedState: 'PID_ABSENT',
+    confirmedStoppedAt: new Date().toISOString(),
+    reason: 'fixture confirms the exact recorded runner identity is absent',
+  }
+}
+const fileSha256 = (file: string): string => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const approvalFor = (name: string): JpOhlcvRepairApproval => ({
   version: 1,
   executionScope: 'ISOLATED_FIXTURE',
@@ -409,9 +439,11 @@ for (const [name, override, expectedStage] of [
     pid: 999_999,
     processGroupId: 999_999,
     commandSha256: 'a'.repeat(64),
+    processIdentitySha256: 'b'.repeat(64),
   })
 
   const journal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  markOriginalRunnerStopped(repairPaths)
   const rollbackApprovalWithoutProcessRecovery: JpOhlcvRepairRollbackApproval = {
     version: 1,
     action: 'ROLLBACK',
@@ -425,6 +457,7 @@ for (const [name, override, expectedStage] of [
     sourceGenerationTarget: approval.sourceGenerationBefore,
     servingGenerationTarget: approval.servingGenerationBefore,
     reason: 'fixture operator approval after simulated SIGKILL',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
   }
   await assert.rejects(async () => {
     JpOhlcvProductionRepairTransaction.resumeForRollback({
@@ -438,7 +471,10 @@ for (const [name, override, expectedStage] of [
   const rollbackApproval: JpOhlcvRepairRollbackApproval = {
     ...rollbackApprovalWithoutProcessRecovery,
     staleStageProcessRecovery: {
+      pid: 999_999,
       processGroupId: 999_999,
+      commandSha256: 'a'.repeat(64),
+      processIdentitySha256: 'b'.repeat(64),
       confirmedStoppedAt: new Date().toISOString(),
       reason: 'fixture process group confirmed absent after simulated parent SIGKILL',
     },
@@ -513,6 +549,7 @@ for (const [name, override, expectedStage] of [
     sourceGenerationTarget: approval.sourceGenerationBefore,
     servingGenerationTarget: approval.servingGenerationBefore,
     reason: 'fixture mismatch must fail closed',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
   }
   await assert.rejects(runJpOhlcvProductionRepairRollback({
     approval,
@@ -552,6 +589,7 @@ for (const [name, override, expectedStage] of [
   transaction.advance('WRITER_LOCKED', 'BACKUP_VERIFIED', { backupRealpath: backup, backupSha256 })
   assert.throws(() => transaction.hold(new Error('original_derived_failure')), /original_derived_failure/)
   const firstJournal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  markOriginalRunnerStopped(repairPaths)
   const rollbackApproval: JpOhlcvRepairRollbackApproval = {
     version: 1,
     action: 'ROLLBACK',
@@ -565,6 +603,7 @@ for (const [name, override, expectedStage] of [
     sourceGenerationTarget: approval.sourceGenerationBefore,
     servingGenerationTarget: approval.servingGenerationBefore,
     reason: 'fixture rollback preflight failure must preserve the original cause',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
   }
   await assert.rejects(runJpOhlcvProductionRepairRollback({
     approval,
@@ -586,6 +625,231 @@ for (const [name, override, expectedStage] of [
   assert.equal(secondJournal.failure.message, 'rollback_backup_probe_failed')
   assert.equal(secondJournal.failureHistory.at(-1).message, 'original_derived_failure')
   assert.equal(secondJournal.failureHistory.at(-1).originalStage, 'BACKUP_VERIFIED')
+}
+
+{
+  const name = 'prewrite-cleanup'
+  const approval = approvalFor(name)
+  const approvalSha256 = repairApprovalSha256(approval)
+  const repairPaths = paths(name)
+  await assert.rejects(runJpOhlcvProductionRepair({
+    approval,
+    approvalSha256,
+    scope,
+    paths: repairPaths,
+    adapter: adapter(approval, {
+      createAndVerifyConsistentBackup: async () => { throw new Error('fixture_backup_failed_before_mutation') },
+    }),
+    transactionId: name,
+  }), /fixture_backup_failed_before_mutation/)
+  const journal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  const checkedAt = new Date().toISOString()
+  const checkedWriterJobTypes = [
+    'calendar_stage_backfill_jp', 'calendar_stage_backfill_us', 'db_maintenance', 'earnings_refresh',
+    'jp_ohlcv_gap_repair', 'kabutan_material_news', 'kabutan_themes', 'large_holder_daily',
+    'ml_freshness_guard', 'ml_learning', 'post_ohlcv_refresh', 'sector_structure', 'stage_transitions',
+    'update_latest', 'us_adjusted_foundation', 'us_adjusted_source_snapshots', 'us_update_latest',
+  ]
+  const updateLockSnapshotPath = path.join(repairPaths.stateDirectory, 'update-lock-snapshot.json')
+  const processSnapshotPath = path.join(repairPaths.stateDirectory, 'writer-process-snapshot.json')
+  fs.writeFileSync(updateLockSnapshotPath, `${JSON.stringify({
+    version: 1,
+    checkedAt,
+    databaseRealpath: approval.databaseRealpath,
+    databaseIdentitySha256: approval.databaseIdentitySha256,
+    repairTransactionId: name,
+    locks: checkedWriterJobTypes.map((jobType) => ({ jobType, state: 'ABSENT', leaseExpiresAt: null })),
+  })}\n`)
+  fs.writeFileSync(processSnapshotPath, `${JSON.stringify({
+    version: 1,
+    checkedAt,
+    scanStatus: 'CLEAR',
+    matchingWriterProcesses: [],
+  })}\n`)
+  const writerLockEvidence = {
+    version: 1 as const,
+    checkedAt,
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    databaseRealpath: approval.databaseRealpath,
+    databaseIdentitySha256: approval.databaseIdentitySha256,
+    repairTransactionId: name,
+    updateLockSnapshotPath,
+    updateLockSnapshotSha256: fileSha256(updateLockSnapshotPath),
+    processSnapshotPath,
+    processSnapshotSha256: fileSha256(processSnapshotPath),
+  }
+  const cleanupApproval: JpOhlcvRepairPrewriteCleanupApproval = {
+    version: 1,
+    action: 'ARCHIVE_PREWRITE_HOLD',
+    repairApprovalSha256: approvalSha256,
+    journalSha256: stableSha256(journal),
+    transactionId: name,
+    writerLockEvidence,
+    writerLockEvidenceSha256: stableSha256(writerLockEvidence),
+    reason: 'fixture confirms no Production mutation and no writer lock remains',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+  }
+  const expiredWriterEvidence = {
+    ...writerLockEvidence,
+    checkedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+    expiresAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  }
+  const expiredCleanupApproval: JpOhlcvRepairPrewriteCleanupApproval = {
+    ...cleanupApproval,
+    writerLockEvidence: expiredWriterEvidence,
+    writerLockEvidenceSha256: stableSha256(expiredWriterEvidence),
+  }
+  assert.throws(() => runJpOhlcvProductionRepairPrewriteCleanup({
+    approval,
+    approvalSha256,
+    cleanupApproval: expiredCleanupApproval,
+    cleanupApprovalSha256: repairPrewriteCleanupApprovalSha256(expiredCleanupApproval),
+    paths: repairPaths,
+  }), /prewrite_cleanup_approval_state_mismatch/)
+  const originalProcessSnapshot = fs.readFileSync(processSnapshotPath)
+  fs.appendFileSync(processSnapshotPath, 'tampered\n')
+  assert.throws(() => runJpOhlcvProductionRepairPrewriteCleanup({
+    approval,
+    approvalSha256,
+    cleanupApproval,
+    cleanupApprovalSha256: repairPrewriteCleanupApprovalSha256(cleanupApproval),
+    paths: repairPaths,
+  }), /evidence_snapshot_hash_mismatch/)
+  fs.writeFileSync(processSnapshotPath, originalProcessSnapshot)
+  assert.throws(() => runJpOhlcvProductionRepairPrewriteCleanup({
+    approval,
+    approvalSha256,
+    cleanupApproval,
+    cleanupApprovalSha256: repairPrewriteCleanupApprovalSha256(cleanupApproval),
+    paths: repairPaths,
+  }), /original_runner_still_active/)
+  const mismatchedLock = JSON.parse(fs.readFileSync(repairPaths.lock, 'utf8'))
+  fs.writeFileSync(repairPaths.lock, `${JSON.stringify({
+    ...mismatchedLock,
+    processIdentitySha256: 'd'.repeat(64),
+  })}\n`)
+  assert.throws(() => runJpOhlcvProductionRepairPrewriteCleanup({
+    approval,
+    approvalSha256,
+    cleanupApproval,
+    cleanupApprovalSha256: repairPrewriteCleanupApprovalSha256(cleanupApproval),
+    paths: repairPaths,
+  }), /original_runner_exact_approval_required/)
+  const stoppedCleanupApproval: JpOhlcvRepairPrewriteCleanupApproval = {
+    ...cleanupApproval,
+    originalRunnerRecovery: {
+      pid: Number(mismatchedLock.pid),
+      processGroupId: Number(mismatchedLock.processGroupId),
+      processIdentitySha256: 'd'.repeat(64),
+      observedState: 'PID_REUSED_OR_IDENTITY_MISMATCH',
+      confirmedStoppedAt: new Date().toISOString(),
+      reason: 'fixture explicitly binds the mismatched recorded owner identity',
+    },
+  }
+  const result = runJpOhlcvProductionRepairPrewriteCleanup({
+    approval,
+    approvalSha256,
+    cleanupApproval: stoppedCleanupApproval,
+    cleanupApprovalSha256: repairPrewriteCleanupApprovalSha256(stoppedCleanupApproval),
+    paths: repairPaths,
+  })
+  assert.equal(result.status, 'ABORTED_PREWRITE')
+  assert.equal(result.productionDataMutation, false)
+  assert.ok(fs.existsSync(result.archivedJournal))
+  assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
+}
+
+{
+  const name = 'resume-read-services'
+  const approval = approvalFor(name)
+  const approvalSha256 = repairApprovalSha256(approval)
+  const repairPaths = paths(name)
+  await assert.rejects(runJpOhlcvProductionRepair({
+    approval,
+    approvalSha256,
+    scope,
+    paths: repairPaths,
+    adapter: adapter(approval, {
+      resumeReadServices: async () => { throw new Error('fixture_resume_command_lost_evidence') },
+    }),
+    transactionId: name,
+  }), /fixture_resume_command_lost_evidence/)
+  const journal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  markOriginalRunnerStopped(repairPaths)
+  const resumeApproval: JpOhlcvRepairResumeServicesApproval = {
+    version: 1,
+    action: 'RESUME_READ_SERVICES',
+    repairApprovalSha256: approvalSha256,
+    journalSha256: stableSha256(journal),
+    transactionId: name,
+    sourceGeneration: approval.sourceGenerationAfter,
+    servingGeneration: approval.servingGenerationAfter,
+    reason: 'fixture revalidates the promoted serving generation before idempotent service resume',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+  }
+  const result = await runJpOhlcvProductionRepairResumeReadServices({
+    approval,
+    approvalSha256,
+    resumeApproval,
+    resumeApprovalSha256: repairResumeServicesApprovalSha256(resumeApproval),
+    paths: repairPaths,
+    adapter: adapter(approval),
+  })
+  assert.equal(result.status, 'COMMITTED')
+  assert.equal(result.recoveredReadServices, true)
+  const inspection = inspectJpOhlcvProductionRepair(repairPaths)
+  assert.equal(inspection.status, 'CLEAR')
+  assert.equal(inspection.dataQualityStatus, 'PARTIAL_REPAIR_UNRESOLVED_CONFLICTS_HOLD')
+  assert.deepEqual(
+    (inspection.lastTerminalTransaction as { preservedConflicts: { tickers: string[] } }).preservedConflicts.tickers,
+    ['1447'],
+  )
+}
+
+{
+  const name = 'independent-status-parse'
+  const approval = approvalFor(name)
+  const repairPaths = paths(name)
+  await assert.rejects(runJpOhlcvProductionRepair({
+    approval,
+    approvalSha256: repairApprovalSha256(approval),
+    scope,
+    paths: repairPaths,
+    adapter: adapter(approval, {
+      createAndVerifyConsistentBackup: async () => { throw new Error('fixture_status_hold') },
+    }),
+    transactionId: name,
+  }))
+  fs.writeFileSync(repairPaths.lock, '{broken-lock-json\n')
+  const inspection = inspectJpOhlcvProductionRepair(repairPaths)
+  assert.equal(inspection.status, 'HOLD_UNCERTAIN')
+  assert.equal((inspection.journal as { transactionId: string }).transactionId, name)
+  assert.ok((inspection.reasons as string[]).some((reason) => reason.startsWith('LOCK_PARSE_FAILED:')))
+  fs.writeFileSync(repairPaths.journal, '{broken-journal-json\n')
+  const bothCorrupt = inspectJpOhlcvProductionRepair(repairPaths)
+  assert.equal(bothCorrupt.status, 'HOLD_UNCERTAIN')
+  assert.match(String(bothCorrupt.fallbackOperatorAction), /Preserve the entire repair state directory/)
+  assert.equal(
+    (bothCorrupt.protectedResourcesFallback as { journal: string }).journal,
+    repairPaths.journal,
+  )
+}
+
+{
+  const name = 'crashed-parent-without-stage-child'
+  const approval = approvalFor(name)
+  const repairPaths = paths(name)
+  const transaction = new JpOhlcvProductionRepairTransaction({
+    approval,
+    approvalSha256: repairApprovalSha256(approval),
+    paths: repairPaths,
+    transactionId: name,
+  })
+  transaction.prepare()
+  markOriginalRunnerStopped(repairPaths)
+  const inspection = inspectJpOhlcvProductionRepair(repairPaths)
+  assert.equal(inspection.status, 'HOLD_UNCERTAIN')
+  assert.ok((inspection.reasons as string[]).includes('LOCK_OWNER_PROCESS:PID_ABSENT'))
 }
 
 console.log('JP OHLCV Production repair transaction tests: PASS')

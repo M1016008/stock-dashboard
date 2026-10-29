@@ -23,6 +23,7 @@ import {
   clearActiveStageProcess,
   currentJpOhlcvRepairShutdownSignal,
   isProcessGroupAlive,
+  readProcessIdentity,
   registerActiveStageProcess,
   terminateAndWaitForProcessGroup,
 } from '@/lib/jp-ohlcv-repair-process-supervisor'
@@ -288,10 +289,15 @@ async function executeStage(input: {
     try {
       registerActiveStageProcess({ pid: child.pid, processGroupId: child.pid })
       registered = true
+      const identity = readProcessIdentity(child.pid)
+      if (!identity || identity.processGroupId !== child.pid) {
+        throw new Error('repair_stage_process_identity_unavailable')
+      }
       input.context.recordStageProcessStarted({
         pid: child.pid,
         processGroupId: child.pid,
         commandSha256: input.spec.executableSha256,
+        processIdentitySha256: identity.identitySha256,
       })
       recorded = true
     } catch (error) {

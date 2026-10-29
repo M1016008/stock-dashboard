@@ -2,10 +2,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
 import {
+  inspectJpOhlcvProductionRepair,
   repairApprovalSha256,
+  repairPrewriteCleanupApprovalSha256,
+  repairResumeServicesApprovalSha256,
   repairRollbackApprovalSha256,
   type JpOhlcvRepairApproval,
   type JpOhlcvRepairPaths,
+  type JpOhlcvRepairPrewriteCleanupApproval,
+  type JpOhlcvRepairResumeServicesApproval,
   type JpOhlcvRepairRollbackApproval,
 } from '@/lib/jp-ohlcv-production-repair'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
@@ -17,6 +22,9 @@ type ApprovalBundle = {
   scope: JpOhlcvMissingOnlyRepairScope
   executionStatus: 'HOLD_PENDING_EXPLICIT_APPROVAL'
 }
+
+let reportPaths: JpOhlcvRepairPaths | null = null
+let executionEntered = false
 
 function value(flag: string): string | null {
   const index = process.argv.indexOf(flag)
@@ -64,11 +72,36 @@ async function main(): Promise<void> {
     journal: path.join(bundle.approval.stateDirectory, 'repair-journal.json'),
     lock: path.join(bundle.approval.stateDirectory, 'repair.lock'),
   }
+  reportPaths = paths
   const { installJpOhlcvRepairSignalHandlers, assertJpOhlcvRepairExecutionActive } = await import('@/lib/jp-ohlcv-repair-process-supervisor')
   const uninstallSignalHandlers = installJpOhlcvRepairSignalHandlers()
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
   const rollbackApprovalFile = value('--rollback-approval')
+  const cleanupApprovalFile = value('--prewrite-cleanup-approval')
+  const resumeServicesApprovalFile = value('--resume-services-approval')
+  if ([rollbackApprovalFile, cleanupApprovalFile, resumeServicesApprovalFile].filter(Boolean).length > 1) {
+    throw new Error('repair_recovery_mode_conflict')
+  }
   try {
+    if (cleanupApprovalFile) {
+      if (!path.isAbsolute(cleanupApprovalFile)) throw new Error('--prewrite-cleanup-approval_absolute_path_required')
+      const cleanupApproval = readJson<JpOhlcvRepairPrewriteCleanupApproval>(path.resolve(cleanupApprovalFile))
+      const expectedCleanupSha = value('--prewrite-cleanup-approval-sha256')
+      if (!expectedCleanupSha || repairPrewriteCleanupApprovalSha256(cleanupApproval) !== expectedCleanupSha) {
+        throw new Error('repair_prewrite_cleanup_exact_approval_hash_required')
+      }
+      const { runJpOhlcvProductionRepairPrewriteCleanup } = await import('@/lib/jp-ohlcv-repair-runner')
+      executionEntered = true
+      const result = runJpOhlcvProductionRepairPrewriteCleanup({
+        approval: bundle.approval,
+        approvalSha256: bundle.approvalSha256,
+        cleanupApproval,
+        cleanupApprovalSha256: expectedCleanupSha,
+        paths,
+      })
+      console.log(JSON.stringify(result))
+      return
+    }
     if (rollbackApprovalFile) {
       if (!path.isAbsolute(rollbackApprovalFile)) throw new Error('--rollback-approval_absolute_path_required')
       const rollbackApproval = readJson<JpOhlcvRepairRollbackApproval>(path.resolve(rollbackApprovalFile))
@@ -78,6 +111,7 @@ async function main(): Promise<void> {
       }
       const { runJpOhlcvProductionRepairRollback } = await import('@/lib/jp-ohlcv-repair-runner')
       const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, rollbackApproval })
+      executionEntered = true
       const result = await runJpOhlcvProductionRepairRollback({
         approval: bundle.approval,
         approvalSha256: bundle.approvalSha256,
@@ -90,8 +124,31 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(result))
       return
     }
+    if (resumeServicesApprovalFile) {
+      if (!path.isAbsolute(resumeServicesApprovalFile)) throw new Error('--resume-services-approval_absolute_path_required')
+      const resumeApproval = readJson<JpOhlcvRepairResumeServicesApproval>(path.resolve(resumeServicesApprovalFile))
+      const expectedResumeSha = value('--resume-services-approval-sha256')
+      if (!expectedResumeSha || repairResumeServicesApprovalSha256(resumeApproval) !== expectedResumeSha) {
+        throw new Error('repair_resume_services_exact_approval_hash_required')
+      }
+      const { runJpOhlcvProductionRepairResumeReadServices } = await import('@/lib/jp-ohlcv-repair-runner')
+      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan })
+      executionEntered = true
+      const result = await runJpOhlcvProductionRepairResumeReadServices({
+        approval: bundle.approval,
+        approvalSha256: bundle.approvalSha256,
+        resumeApproval,
+        resumeApprovalSha256: expectedResumeSha,
+        paths,
+        adapter: adapters.forward,
+      })
+      assertJpOhlcvRepairExecutionActive()
+      console.log(JSON.stringify(result))
+      return
+    }
     const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
     const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan })
+    executionEntered = true
     const result = await runJpOhlcvProductionRepair({
       approval: bundle.approval,
       approvalSha256: bundle.approvalSha256,
@@ -107,6 +164,32 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+  let inspection: Record<string, unknown> | null = null
+  if (reportPaths) {
+    try { inspection = inspectJpOhlcvProductionRepair(reportPaths) } catch (inspectionError) {
+      inspection = {
+        status: 'HOLD_UNCERTAIN',
+        reasons: [`STATUS_INSPECTION_FAILED:${inspectionError instanceof Error ? inspectionError.message : String(inspectionError)}`],
+      }
+    }
+  }
+  const stateJournal = inspection?.journal as { operatorAction?: unknown } | null | undefined
+  const exactOperatorAction = typeof stateJournal?.operatorAction === 'string'
+    ? stateJournal.operatorAction
+    : typeof inspection?.fallbackOperatorAction === 'string'
+      ? inspection.fallbackOperatorAction
+      : null
+  console.error(JSON.stringify({
+    status: executionEntered ? 'TRANSACTION_HOLD_OR_REJECTED' : 'PRECONDITION_REJECTED_NO_RUNNER_ENTRY',
+    automaticRetryAllowed: false,
+    failure: {
+      name: error instanceof Error ? error.name : 'Error',
+      message: error instanceof Error ? error.message : String(error),
+    },
+    repairState: inspection,
+    operatorAction: exactOperatorAction
+      ? `${exactOperatorAction} Automatic retry is forbidden.`
+      : 'No runner state path was established. Correct only the rejected input, then obtain or reconfirm the exact approval before a new attempt.',
+  }, null, 2))
   process.exitCode = 1
 })

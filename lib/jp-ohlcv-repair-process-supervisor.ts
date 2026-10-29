@@ -1,6 +1,15 @@
+import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+
 type ActiveStageProcess = {
   pid: number
   processGroupId: number
+}
+
+export type RecordedProcessIdentity = {
+  pid: number
+  processGroupId: number
+  identitySha256: string
 }
 
 const HANDLED_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
@@ -16,6 +25,43 @@ export function isProcessGroupAlive(processGroupId: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+export function readProcessIdentity(pid: number): RecordedProcessIdentity | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return null
+  const result = spawnSync('/bin/ps', ['-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'comm=', '-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: 2_000,
+  })
+  if (result.error || result.status !== 0 || !result.stdout.trim()) return null
+  const normalized = result.stdout.trim().replace(/\s+/g, ' ')
+  const fields = normalized.split(' ')
+  const actualPid = Number(fields[0])
+  const processGroupId = Number(fields[1])
+  if (actualPid !== pid || !Number.isSafeInteger(processGroupId) || processGroupId <= 1) return null
+  return {
+    pid,
+    processGroupId,
+    identitySha256: crypto.createHash('sha256').update(normalized).digest('hex'),
+  }
+}
+
+export function recordedProcessIdentityState(recorded: RecordedProcessIdentity):
+  | 'MATCHING_PROCESS_ACTIVE'
+  | 'RECORDED_PROCESS_GROUP_ACTIVE_WITHOUT_LEADER'
+  | 'PID_ABSENT'
+  | 'PID_REUSED_OR_IDENTITY_MISMATCH' {
+  const current = readProcessIdentity(recorded.pid)
+  if (!current) {
+    return isProcessGroupAlive(recorded.processGroupId)
+      ? 'RECORDED_PROCESS_GROUP_ACTIVE_WITHOUT_LEADER'
+      : 'PID_ABSENT'
+  }
+  if (current.processGroupId !== recorded.processGroupId
+    || current.identitySha256 !== recorded.identitySha256) {
+    return 'PID_REUSED_OR_IDENTITY_MISMATCH'
+  }
+  return 'MATCHING_PROCESS_ACTIVE'
 }
 
 export function terminateProcessGroup(processGroupId: number, signal: NodeJS.Signals): void {

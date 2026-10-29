@@ -109,8 +109,11 @@ Every gate is sequential. Failure stops the operation without continuing.
 8. Health and observation
    - Run freshness and serving health checks, then the approved 1306/7003 API
      and chart smoke checks.
-   - Observe the normal updater and data-quality monitor before releasing the
-     writer lock and closing the repair journal.
+   - Commit the verified generation, resume Web/Analog, then release the writer
+     lock and archive the transaction journal. The normal updater cannot run
+     while the repair writer barrier is held, so its next scheduled success is
+     a separate post-transaction observation gate recorded alongside the
+     terminal archive; it is not falsely represented as in-transaction evidence.
 
 ## Derived-data boundary
 
@@ -188,19 +191,83 @@ If either service transition fails, the external barrier and journal remain in
 HOLD and the runner does not continue automatically.
 
 Every detached stage command records its PID/process-group ID and executable
-hash in the fsynced journal before its evidence can be accepted. Parent
+hash plus an OS process-start identity hash in the fsynced journal before its
+evidence can be accepted. Parent
 SIGINT, SIGTERM, or SIGHUP terminates the complete group with TERM followed by
 KILL and moves the transaction to HOLD. A parent SIGKILL or power loss leaves
 the active group identity in the journal: status reports whether it is still
 alive, and rollback is refused while it is alive. Once it is proven stopped,
-the exact rollback approval must bind the stale group ID, confirmation time,
-reason, and pre-recovery journal hash before the marker can be acknowledged.
+the exact recovery approval must bind the PID, group ID, executable hash,
+process-start identity, confirmation time, reason, and pre-recovery journal
+hash before the marker can be acknowledged. A live recorded group remains a
+HOLD even when its leader PID has disappeared.
 Stage children receive only an allowlisted runtime environment plus the repair
 owner identity; API and database credentials are not inherited implicitly.
 
 Use `npm run status:jp-ohlcv-production-repair` for a read-only view of the
 transaction ID, stage, protected paths, original failure causes and exact
-operator action. It also reports the active stage process and liveness. A
+operator action. Lock and journal parsing are independent, so a corrupt lock
+cannot hide a readable journal. The report includes approval/journal hashes,
+Source and Serving generations, verified backup identity, read-service impact,
+active process identity, and the latest terminal transaction including the
+unresolved 1447/2164 conflict set. A
 non-clear state exits with code 2. Never remove a lock or journal merely to
 make this status command pass; pre-write cleanup and post-write rollback each
 require a separate hash-bound approval.
+
+`CLEAR` means only that no live repair barrier/journal is present. Always inspect
+`dataQualityStatus` and `lastTerminalTransaction`: a committed 4,067-row insert
+still reports `PARTIAL_REPAIR_UNRESOLVED_CONFLICTS_HOLD` while 1447/2164 remain
+unadjudicated.
+
+For a HOLD at `PREPARING`, `PREPARED`, `WRITER_LOCKED`, or `BACKUP_VERIFIED`,
+the only cleanup path is `--prewrite-cleanup-approval` with its exact SHA-256.
+The approval must bind the journal hash and evidence that the database writer
+lock is absent or expired. That evidence is a maximum-15-minute structure
+binding the database path/identity, transaction ID, complete writer job-type
+set, empty active-lock list, clear process scan, and hashes of both read-only
+snapshots. Both immutable JSON snapshot files are opened without following a
+file symlink, byte-hash verified, parsed, and semantically checked by the
+Runner; a bare assertion, arbitrary hash, missing job type, active/unknown
+writer, or changed snapshot is rejected. The journal is
+archived, never deleted, and the
+result explicitly states that no Production data mutation was recorded.
+
+For a HOLD whose original stage is `READ_SERVICES_RESUMING`, operators may use
+`--resume-services-approval` only after the exact promoted Source and Serving
+generations are reverified. The command reacquires the writer lock, reruns the
+sealed serving verification, and calls the sealed idempotent Web/Analog resume
+command before committing. Every other post-write HOLD remains rollback-only.
+All execution failures emit structured HOLD evidence and prohibit automatic
+retry.
+
+Approval files are ordinary canonical JSON and their SHA-256 is computed with
+the same `stableSha256` contract as the live journal. Minimal action shapes are:
+
+```json
+{
+  "action": "ARCHIVE_PREWRITE_HOLD",
+  "repairApprovalSha256": "<approved repair hash>",
+  "journalSha256": "<current journal hash>",
+  "transactionId": "<exact transaction>",
+  "writerLockEvidence": "<structured short-lived evidence described above>"
+}
+```
+
+```json
+{
+  "action": "RESUME_READ_SERVICES",
+  "repairApprovalSha256": "<approved repair hash>",
+  "journalSha256": "<current journal hash>",
+  "transactionId": "<exact transaction>",
+  "sourceGeneration": "<verified new source generation>",
+  "servingGeneration": "<verified new serving generation>"
+}
+```
+
+The complete typed fields, reason, evidence hash, and any stale-process identity
+must be present; these abbreviated examples are not directly executable.
+Every recovery approval also binds the original Runner lock owner PID, process
+group, process-start identity hash, observed state, confirmation time, and
+reason. PID reuse or identity mismatch is a distinct `HOLD_UNCERTAIN` state and
+cannot be treated as a stopped Runner without that exact approval.

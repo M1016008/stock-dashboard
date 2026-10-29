@@ -5,6 +5,8 @@ import {
   JpOhlcvProductionRepairTransaction,
   type JpOhlcvRepairApproval,
   type JpOhlcvRepairPaths,
+  type JpOhlcvRepairPrewriteCleanupApproval,
+  type JpOhlcvRepairResumeServicesApproval,
   type JpOhlcvRepairRollbackApproval,
 } from '@/lib/jp-ohlcv-production-repair'
 import {
@@ -21,6 +23,7 @@ export type JpOhlcvRepairExecutionContext = {
     pid: number
     processGroupId: number
     commandSha256: string
+    processIdentitySha256: string
   }) => void
   recordStageProcessStopped: (input: { processGroupId: number; outcome: string }) => void
   assertExecutionActive: () => void
@@ -130,6 +133,11 @@ export type JpOhlcvRepairRollbackAdapter = {
     health: 'PASS'
   }>
 }
+
+export type JpOhlcvRepairResumeServicesAdapter = Pick<
+  JpOhlcvRepairAdapter,
+  'acquireWriterLock' | 'verifyServing' | 'resumeReadServices'
+>
 
 export async function runJpOhlcvProductionRepair(input: {
   approval: JpOhlcvRepairApproval
@@ -276,6 +284,83 @@ export async function runJpOhlcvProductionRepair(input: {
         }
       }
       return transaction.hold(failure)
+    }
+  })
+}
+
+export function runJpOhlcvProductionRepairPrewriteCleanup(input: {
+  approval: JpOhlcvRepairApproval
+  approvalSha256: string
+  cleanupApproval: JpOhlcvRepairPrewriteCleanupApproval
+  cleanupApprovalSha256: string
+  paths: JpOhlcvRepairPaths
+}): { status: 'ABORTED_PREWRITE'; archivedJournal: string; productionDataMutation: false } {
+  const transaction = JpOhlcvProductionRepairTransaction.resumeForPrewriteCleanup(input)
+  const archivedJournal = transaction.archivePrewriteHold({
+    cleanupApprovalSha256: input.cleanupApprovalSha256,
+    writerLockEvidence: input.cleanupApproval.writerLockEvidence,
+    writerLockEvidenceSha256: input.cleanupApproval.writerLockEvidenceSha256,
+    originalRunnerRecovery: input.cleanupApproval.originalRunnerRecovery,
+    reason: input.cleanupApproval.reason,
+  })
+  return { status: 'ABORTED_PREWRITE', archivedJournal, productionDataMutation: false }
+}
+
+export async function runJpOhlcvProductionRepairResumeReadServices(input: {
+  approval: JpOhlcvRepairApproval
+  approvalSha256: string
+  resumeApproval: JpOhlcvRepairResumeServicesApproval
+  resumeApprovalSha256: string
+  paths: JpOhlcvRepairPaths
+  adapter: JpOhlcvRepairResumeServicesAdapter
+}): Promise<{ status: 'COMMITTED'; archivedJournal: string; recoveredReadServices: true }> {
+  const transaction = JpOhlcvProductionRepairTransaction.resumeForReadServices(input)
+  const context: JpOhlcvRepairExecutionContext = {
+    transactionId: transaction.transactionId,
+    lockPath: input.paths.lock,
+    childEnvironment: jpOhlcvRepairOwnerEnvironment({
+      transactionId: transaction.transactionId,
+      lockPath: input.paths.lock,
+    }),
+    recordStageProcessStarted: (stageProcess) => transaction.recordStageProcessStarted(stageProcess),
+    recordStageProcessStopped: (stageProcess) => transaction.recordStageProcessStopped(stageProcess),
+    assertExecutionActive: assertJpOhlcvRepairExecutionActive,
+  }
+  return withJpOhlcvRepairBarrierOwner(context, async () => {
+    let writer: Awaited<ReturnType<JpOhlcvRepairResumeServicesAdapter['acquireWriterLock']>> | null = null
+    try {
+      context.assertExecutionActive()
+      writer = await input.adapter.acquireWriterLock(context)
+      context.assertExecutionActive()
+      const serving = await input.adapter.verifyServing(context)
+      context.assertExecutionActive()
+      if (serving.sourceGeneration !== input.resumeApproval.sourceGeneration
+        || serving.servingGeneration !== input.resumeApproval.servingGeneration
+        || serving.health !== 'PASS') {
+        throw new Error('repair_resume_services_serving_revalidation_mismatch')
+      }
+      transaction.beginReadServicesRecovery({
+        resumeApprovalSha256: input.resumeApprovalSha256,
+        writerOwner: writer.owner,
+        serving,
+      })
+      transaction.advance('SERVING_VERIFIED', 'READ_SERVICES_RESUMING', {
+        requestedAt: new Date().toISOString(),
+        recovery: true,
+      })
+      const resumed = await input.adapter.resumeReadServices(context)
+      context.assertExecutionActive()
+      if (resumed.web !== 'PASS' || resumed.analog !== 'PASS' || resumed.health !== 'PASS') {
+        throw new Error('repair_resume_services_health_mismatch')
+      }
+      transaction.advance('READ_SERVICES_RESUMING', 'READ_SERVICES_RESUMED', resumed)
+      transaction.markCommitted()
+      await writer.release()
+      writer = null
+      const archivedJournal = transaction.finalizeCommit()
+      return { status: 'COMMITTED', archivedJournal, recoveredReadServices: true }
+    } catch (error) {
+      return transaction.hold(error)
     }
   })
 }
