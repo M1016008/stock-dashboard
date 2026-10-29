@@ -657,6 +657,7 @@ for (const [name, override, expectedStage] of [
   })
   transaction.advance('BACKUP_VERIFIED', 'DATA_COMMITTED', { fixture: 'forward-data-changed' })
   transaction.beginRollback({ fixture: 'rollback-runner-started' })
+  transaction.beginRollback({ fixture: 'idempotent-resume-after-sigkill' })
   transaction.advance('ROLLBACK_STARTED', 'ROLLBACK_READ_SERVICES_HOLDING', { requestedAt: new Date().toISOString() })
   transaction.advance('ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', {
     web: 'HELD',
@@ -671,6 +672,12 @@ for (const [name, override, expectedStage] of [
   markOriginalRunnerStopped(repairPaths)
   const killedJournal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
   assert.equal(killedJournal.stage, 'ROLLBACK_DATA_RESTORED')
+  const killedInspection = inspectJpOhlcvProductionRepair(repairPaths)
+  assert.equal((killedInspection.journal as { readServicesMayBeHeld: boolean }).readServicesMayBeHeld, true)
+  assert.match(
+    String((killedInspection.journal as { operatorAction: string }).operatorAction),
+    /exact hash-bound rollback approval/,
+  )
   const rollbackApproval: JpOhlcvRepairRollbackApproval = {
     version: 1,
     action: 'ROLLBACK',
@@ -728,6 +735,31 @@ for (const [name, override, expectedStage] of [
   assert.equal(result.status, 'ROLLED_BACK')
   assert.equal(restoreCalls, 0)
   assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
+}
+
+{
+  const name = 'rollback-invalid-durable-restore-evidence'
+  const approval = approvalFor(name)
+  const transaction = new JpOhlcvProductionRepairTransaction({
+    approval,
+    approvalSha256: repairApprovalSha256(approval),
+    paths: paths(name),
+    transactionId: name,
+  })
+  transaction.prepare()
+  transaction.beginRollback({ fixture: 'invalid-evidence' })
+  transaction.advance('ROLLBACK_STARTED', 'ROLLBACK_READ_SERVICES_HOLDING', { requestedAt: new Date().toISOString() })
+  transaction.advance('ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', {
+    web: 'HELD',
+    analog: 'HELD',
+    snapshotSha256: stableSha256({ fixture: 'invalid-evidence' }),
+  })
+  transaction.advance('ROLLBACK_READ_SERVICES_HELD', 'ROLLBACK_DATA_RESTORED', {
+    databaseRealpath: approval.databaseRealpath,
+    databaseSha256: 'not-a-sha256',
+    sourceGeneration: approval.sourceGenerationBefore,
+  })
+  assert.throws(() => transaction.rollbackDataRestoreEvidence(), /repair_rollback_prior_restore_evidence_invalid/)
 }
 
 {

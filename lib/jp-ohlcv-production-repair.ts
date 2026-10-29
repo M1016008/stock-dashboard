@@ -576,13 +576,24 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
             : 'ACTIVE_OR_INCOMPLETE'
   const terminal = latestTerminalJournal(paths.stateDirectory, path.basename(paths.journal))
   const backup = journal?.evidence.BACKUP_VERIFIED as { backupRealpath?: unknown; backupSha256?: unknown } | undefined
-  const readServicesMayBeHeld = journal?.stage === 'HOLD' && journal.failure
+  const effectiveJournalStage = journal?.stage === 'HOLD' && journal.failure
+    ? journal.failure.originalStage
+    : journal?.stage ?? null
+  const readServicesMayBeHeld = effectiveJournalStage
     ? ['READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', 'DATA_COMMITTING', 'DATA_COMMITTED', 'DATA_VERIFIED',
       'DERIVED_REBUILDING', 'DERIVED_VERIFIED', 'SERVING_VERIFIED', 'READ_SERVICES_RESUMING',
       'ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', 'ROLLBACK_DATA_RESTORED',
       'ROLLBACK_DERIVED_REBUILT', 'ROLLBACK_SERVING_VERIFIED', 'ROLLBACK_READ_SERVICES_RESUMING']
-      .includes(journal.failure.originalStage)
+      .includes(effectiveJournalStage)
     : false
+  const journalOperatorAction = journal && effectiveJournalStage?.startsWith('ROLLBACK_')
+    ? holdOperatorAction({
+      stage: effectiveJournalStage,
+      transactionId: journal.transactionId,
+      databaseRealpath: journal.databaseRealpath,
+      stateDirectory: paths.stateDirectory,
+    })
+    : journal?.operatorAction ?? null
   const terminalConflicts = terminal?.journal?.preservedConflicts?.tickers ?? []
   const fallbackOperatorAction = status === 'CLEAR'
     ? 'No live repair transaction is present. Review lastTerminalTransaction before planning a new separately approved repair.'
@@ -624,7 +635,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       targetDate: journal?.targetDate ?? null,
       sourceGeneration: journal?.sourceGeneration ?? null,
       servingGeneration: journal?.servingGeneration ?? null,
-      operatorAction: journal?.operatorAction ?? null,
+      operatorAction: journalOperatorAction,
       failure: journal?.failure ?? null,
       failureHistory: journal?.failureHistory ?? [],
       readServicesMayBeHeld,
@@ -1110,7 +1121,8 @@ export class JpOhlcvProductionRepairTransaction {
   beginRollback(evidence: Record<string, unknown>): void {
     if (!this.journal) throw new Error('repair_rollback_journal_missing')
     const current = this.journal.stage
-    if (current === 'ROLLBACK_STARTED' || current === 'ROLLBACK_VERIFIED' || current === 'ROLLED_BACK' || current === 'COMMITTED') {
+    if (current === 'ROLLBACK_STARTED') return
+    if (current === 'ROLLBACK_VERIFIED' || current === 'ROLLED_BACK' || current === 'COMMITTED') {
       throw new Error(`repair_rollback_stage_invalid:${current}`)
     }
     this.advance(current, 'ROLLBACK_STARTED', {
