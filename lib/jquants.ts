@@ -11,6 +11,7 @@
 // 公式仕様: https://jpx-jquants.com/ja/spec/eq-bars-daily
 
 import type { OHLCV } from '@/types/stock'
+import { classifyJpFetchFailure, stableSha256, type JpFetchFailureCategory } from '@/lib/jp-ohlcv-data-quality'
 
 const BASE_URL = 'https://api.jquants.com/v2'
 
@@ -70,6 +71,25 @@ interface JBarRow {
 interface JBarsResponse {
   data: JBarRow[]
   pagination_key?: string
+}
+
+export class JQuantsRequestError extends Error {
+  readonly endpoint: string
+  readonly httpStatus: number | null
+  readonly category: JpFetchFailureCategory
+  readonly retryable: boolean
+
+  constructor(input: { endpoint: string; httpStatus: number | null; message: string }) {
+    const classified = classifyJpFetchFailure(input.httpStatus == null
+      ? input.message
+      : `HTTP ${input.httpStatus}: ${input.message}`)
+    super(`${input.message}; category=${classified.category}; httpStatus=${input.httpStatus ?? 'none'}`)
+    this.name = 'JQuantsRequestError'
+    this.endpoint = input.endpoint
+    this.httpStatus = input.httpStatus
+    this.category = classified.category
+    this.retryable = classified.retryable
+  }
 }
 
 function toOhlcv(row: JBarRow): OHLCV | null {
@@ -137,6 +157,19 @@ export async function fetchJQuantsDaily(
 export interface JQuantsDailyByDateRow extends OHLCV {
   ticker: string
   adjustmentFactor: number
+}
+
+export interface JQuantsDailyByDateEvidence {
+  endpoint: '/v2/equities/bars/daily'
+  requestedDate: string
+  requestedAt: string
+  completedAt: string
+  pages: number
+  providerRows: number
+  acceptedRows: number
+  rejectedRows: number
+  contentSha256: string
+  rows: JQuantsDailyByDateRow[]
 }
 
 export function hasJQuantsCorporateAction(adjustmentFactor: number | null | undefined): boolean {
@@ -220,10 +253,13 @@ export function shouldApplyJQuantsLegacyAdjustment(input: {
   })
 }
 
-export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+export async function fetchJQuantsDailyByDateWithEvidence(date: string): Promise<JQuantsDailyByDateEvidence> {
   const apiKey = getApiKey()
   const all: JQuantsDailyByDateRow[] = []
   let paginationKey: string | undefined
+  let providerRows = 0
+  let pages = 0
+  const requestedAt = new Date().toISOString()
 
   do {
     const params = new URLSearchParams({ date })
@@ -232,9 +268,26 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       headers: { 'x-api-key': apiKey },
     })
     if (!res.ok) {
-      throw new Error(`J-Quants bars/daily date=${date} 失敗: ${res.status} ${await res.text()}`)
+      // Response bodies can contain provider diagnostics. Do not persist them because
+      // they are not needed for retry classification and may contain request context.
+      throw new JQuantsRequestError({
+        endpoint: '/v2/equities/bars/daily',
+        httpStatus: res.status,
+        message: `J-Quants bars/daily date=${date} failed`,
+      })
     }
-    const json = await res.json() as JBarsResponse
+    let json: JBarsResponse
+    try {
+      json = await res.json() as JBarsResponse
+    } catch {
+      throw new JQuantsRequestError({
+        endpoint: '/v2/equities/bars/daily',
+        httpStatus: res.status,
+        message: `J-Quants bars/daily date=${date} invalid JSON response`,
+      })
+    }
+    pages += 1
+    providerRows += json.data?.length ?? 0
     for (const row of json.data ?? []) {
       const ohlcv = toOhlcv(row)
       if (!ohlcv) continue
@@ -247,7 +300,24 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
     paginationKey = json.pagination_key
   } while (paginationKey)
 
-  return all.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  const rows = all.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  const contentSha256 = stableSha256(rows)
+  return {
+    endpoint: '/v2/equities/bars/daily',
+    requestedDate: date,
+    requestedAt,
+    completedAt: new Date().toISOString(),
+    pages,
+    providerRows,
+    acceptedRows: rows.length,
+    rejectedRows: providerRows - rows.length,
+    contentSha256,
+    rows,
+  }
+}
+
+export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+  return (await fetchJQuantsDailyByDateWithEvidence(date)).rows
 }
 
 // ─────────────────────────────────────
