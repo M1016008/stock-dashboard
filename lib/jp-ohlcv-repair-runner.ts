@@ -396,14 +396,7 @@ export async function runJpOhlcvProductionRepairRollback(input: {
     let writer: Awaited<ReturnType<JpOhlcvRepairRollbackAdapter['acquireWriterLock']>> | null = null
     try {
       context.assertExecutionActive()
-      const resumeOriginalStage = transaction.rollbackResumeOriginalStage()
-      const restoreAlreadyRecorded = resumeOriginalStage !== null && [
-        'ROLLBACK_DATA_RESTORED',
-        'ROLLBACK_DERIVED_REBUILT',
-        'ROLLBACK_SERVING_VERIFIED',
-        'ROLLBACK_READ_SERVICES_RESUMING',
-        'ROLLBACK_READ_SERVICES_RESUMED',
-      ].includes(resumeOriginalStage)
+      let durableRestoreEvidence = transaction.rollbackDataRestoreEvidence()
       if (await input.adapter.restoreRecoveryRequired(context)) {
         const recovered = await input.adapter.restoreBackupAtomically(context)
         context.assertExecutionActive()
@@ -412,6 +405,7 @@ export async function runJpOhlcvProductionRepairRollback(input: {
           || recovered.sourceGeneration !== input.rollbackApproval.sourceGenerationTarget) {
           throw new Error('repair_rollback_interrupted_restore_recovery_mismatch')
         }
+        durableRestoreEvidence = recovered
       }
       writer = await input.adapter.acquireWriterLock(context)
       context.assertExecutionActive()
@@ -444,9 +438,8 @@ export async function runJpOhlcvProductionRepairRollback(input: {
         throw new Error('repair_rollback_read_service_hold_evidence_mismatch')
       }
       transaction.advance('ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', held)
-      const restored = restoreAlreadyRecorded
-        ? transaction.rollbackDataRestoreEvidence()
-        : await input.adapter.restoreBackupAtomically(context)
+      const restored = durableRestoreEvidence
+        ?? await input.adapter.restoreBackupAtomically(context)
       context.assertExecutionActive()
       if (restored.databaseRealpath !== input.approval.databaseRealpath
         || !/^[a-f0-9]{64}$/.test(restored.databaseSha256)

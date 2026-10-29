@@ -543,7 +543,7 @@ for (const [name, override, expectedStage] of [
     staleStageProcessRecovery: undefined,
   }
   let retryRestoreCalls = 0
-  const retryRollback = await runJpOhlcvProductionRepairRollback({
+  await assert.rejects(runJpOhlcvProductionRepairRollback({
     approval,
     approvalSha256,
     rollbackApproval: retryApproval,
@@ -559,10 +559,55 @@ for (const [name, override, expectedStage] of [
         sourceGeneration: approval.sourceGenerationBefore,
         servingGeneration: approval.servingGenerationBefore,
       }),
+      holdReadServices: async () => { throw new Error('fixture_second_retry_hold_failure') },
+      restoreBackupAtomically: async () => {
+        retryRestoreCalls += 1
+        throw new Error('must_not_restore_completed_backup')
+      },
+      rebuildOriginalDerivedServing: async () => ({
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+        rebuilt: ['fixture-derived'],
+      }),
+      verifyOriginalServing: async () => ({
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+        health: 'PASS',
+      }),
+      resumeReadServices: async () => ({ web: 'PASS', analog: 'PASS', health: 'PASS' }),
+    },
+  }), /fixture_second_retry_hold_failure/)
+  assert.equal(retryRestoreCalls, 0)
+  const twiceFailedJournal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  assert.equal(twiceFailedJournal.stage, 'HOLD')
+  assert.equal(twiceFailedJournal.failure.originalStage, 'ROLLBACK_READ_SERVICES_HOLDING')
+  assert.equal(twiceFailedJournal.evidence.ROLLBACK_DATA_RESTORED.databaseSha256, beforeHash)
+  const finalRetryApproval: JpOhlcvRepairRollbackApproval = {
+    ...retryApproval,
+    journalSha256: stableSha256(twiceFailedJournal),
+    reason: 'fixture third attempt still resumes from durable restore evidence after an earlier retry failure',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+  }
+  const retryRollback = await runJpOhlcvProductionRepairRollback({
+    approval,
+    approvalSha256,
+    rollbackApproval: finalRetryApproval,
+    rollbackApprovalSha256: repairRollbackApprovalSha256(finalRetryApproval),
+    paths: repairPaths,
+    adapter: {
+      acquireWriterLock: async () => ({ owner: 'fixture-final-retry-writer', release: async () => undefined }),
+      restoreRecoveryRequired: async () => false,
+      verifyBackupForRollback: async () => ({
+        backupRealpath: backup,
+        backupSha256: beforeHash,
+        quickCheck: 'PASS',
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+      }),
       holdReadServices: async () => ({
         web: 'HELD',
         analog: 'HELD',
-        snapshotSha256: stableSha256({ web: 'retry-fixture', analog: 'retry-fixture' }),
+        snapshotSha256: stableSha256({ web: 'final-retry-fixture', analog: 'final-retry-fixture' }),
       }),
       restoreBackupAtomically: async () => {
         retryRestoreCalls += 1
@@ -584,6 +629,104 @@ for (const [name, override, expectedStage] of [
   assert.equal(retryRollback.status, 'ROLLED_BACK')
   assert.equal(retryRestoreCalls, 0)
   assert.equal(stableSha256(fs.readFileSync(database)), beforeHash)
+  assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
+}
+
+{
+  const name = 'rollback-sigkill-after-data-restored'
+  const approval = approvalFor(name)
+  const approvalSha256 = repairApprovalSha256(approval)
+  const repairPaths = paths(name)
+  const database = approval.databaseRealpath
+  const backup = path.join(approval.backupDirectory, 'jp.db.backup')
+  fs.mkdirSync(approval.backupDirectory, { recursive: true })
+  fs.writeFileSync(database, 'restored-generation-before-derived-rebuild\n')
+  fs.copyFileSync(database, backup)
+  const beforeHash = stableSha256(fs.readFileSync(database))
+  const transaction = new JpOhlcvProductionRepairTransaction({
+    approval,
+    approvalSha256,
+    paths: repairPaths,
+    transactionId: name,
+  })
+  transaction.prepare()
+  transaction.advance('PREPARED', 'WRITER_LOCKED', { owner: 'fixture-forward-writer' })
+  transaction.advance('WRITER_LOCKED', 'BACKUP_VERIFIED', {
+    backupRealpath: backup,
+    backupSha256: beforeHash,
+  })
+  transaction.advance('BACKUP_VERIFIED', 'DATA_COMMITTED', { fixture: 'forward-data-changed' })
+  transaction.beginRollback({ fixture: 'rollback-runner-started' })
+  transaction.advance('ROLLBACK_STARTED', 'ROLLBACK_READ_SERVICES_HOLDING', { requestedAt: new Date().toISOString() })
+  transaction.advance('ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', {
+    web: 'HELD',
+    analog: 'HELD',
+    snapshotSha256: stableSha256({ web: 'sigkill-fixture', analog: 'sigkill-fixture' }),
+  })
+  transaction.advance('ROLLBACK_READ_SERVICES_HELD', 'ROLLBACK_DATA_RESTORED', {
+    databaseRealpath: database,
+    databaseSha256: beforeHash,
+    sourceGeneration: approval.sourceGenerationBefore,
+  })
+  markOriginalRunnerStopped(repairPaths)
+  const killedJournal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
+  assert.equal(killedJournal.stage, 'ROLLBACK_DATA_RESTORED')
+  const rollbackApproval: JpOhlcvRepairRollbackApproval = {
+    version: 1,
+    action: 'ROLLBACK',
+    repairApprovalSha256: approvalSha256,
+    journalSha256: stableSha256(killedJournal),
+    transactionId: name,
+    databaseRealpath: database,
+    backupDirectory: approval.backupDirectory,
+    backupRealpath: backup,
+    backupSha256: beforeHash,
+    sourceGenerationTarget: approval.sourceGenerationBefore,
+    servingGenerationTarget: approval.servingGenerationBefore,
+    reason: 'fixture resumes a SIGKILL journal that never transitioned to HOLD',
+    originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+  }
+  let restoreCalls = 0
+  const result = await runJpOhlcvProductionRepairRollback({
+    approval,
+    approvalSha256,
+    rollbackApproval,
+    rollbackApprovalSha256: repairRollbackApprovalSha256(rollbackApproval),
+    paths: repairPaths,
+    adapter: {
+      acquireWriterLock: async () => ({ owner: 'fixture-sigkill-retry-writer', release: async () => undefined }),
+      restoreRecoveryRequired: async () => false,
+      verifyBackupForRollback: async () => ({
+        backupRealpath: backup,
+        backupSha256: beforeHash,
+        quickCheck: 'PASS',
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+      }),
+      holdReadServices: async () => ({
+        web: 'HELD',
+        analog: 'HELD',
+        snapshotSha256: stableSha256({ web: 'sigkill-retry', analog: 'sigkill-retry' }),
+      }),
+      restoreBackupAtomically: async () => {
+        restoreCalls += 1
+        throw new Error('must_not_restore_after_sigkill')
+      },
+      rebuildOriginalDerivedServing: async () => ({
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+        rebuilt: ['fixture-derived'],
+      }),
+      verifyOriginalServing: async () => ({
+        sourceGeneration: approval.sourceGenerationBefore,
+        servingGeneration: approval.servingGenerationBefore,
+        health: 'PASS',
+      }),
+      resumeReadServices: async () => ({ web: 'PASS', analog: 'PASS', health: 'PASS' }),
+    },
+  })
+  assert.equal(result.status, 'ROLLED_BACK')
+  assert.equal(restoreCalls, 0)
   assert.doesNotThrow(() => assertNoIncompleteRepair(repairPaths))
 }
 

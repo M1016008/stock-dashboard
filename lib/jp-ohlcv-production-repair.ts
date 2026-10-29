@@ -911,24 +911,18 @@ export class JpOhlcvProductionRepairTransaction {
 
   currentStage(): JpOhlcvRepairStage | null { return this.journal?.stage ?? null }
 
-  rollbackResumeOriginalStage(): JpOhlcvRepairStage | null {
-    return this.journal?.stage === 'HOLD' && this.journal.failure?.originalStage.startsWith('ROLLBACK_')
-      ? this.journal.failure.originalStage
-      : null
-  }
-
   rollbackDataRestoreEvidence(): {
     databaseRealpath: string
     databaseSha256: string
     sourceGeneration: string
-  } {
+  } | null {
     const evidence = this.journal?.evidence.ROLLBACK_DATA_RESTORED as {
       databaseRealpath?: unknown
       databaseSha256?: unknown
       sourceGeneration?: unknown
     } | undefined
-    if (!evidence
-      || evidence.databaseRealpath !== this.approval.databaseRealpath
+    if (!evidence) return null
+    if (evidence.databaseRealpath !== this.approval.databaseRealpath
       || typeof evidence.databaseSha256 !== 'string'
       || !/^[a-f0-9]{64}$/.test(evidence.databaseSha256)
       || evidence.sourceGeneration !== this.approval.sourceGenerationBefore) {
