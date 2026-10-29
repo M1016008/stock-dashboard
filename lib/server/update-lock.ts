@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
+import { jpOhlcvRepairBarrierDecision } from '@/lib/jp-ohlcv-repair-barrier'
 
 export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 45 * 60
 export const EXCLUSIVE_UPDATE_JOB_TYPES = [
@@ -19,6 +20,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'stage_transitions',
   'sector_structure',
   'large_holder_daily',
+  'jp_ohlcv_gap_repair',
 ] as const
 
 export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
@@ -227,6 +229,11 @@ export async function acquireUpdateLock(
   leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
   conflictingJobTypes: readonly string[] = [],
 ): Promise<UpdateLockHandle | null> {
+  const repairBarrier = jpOhlcvRepairBarrierDecision({ jobType })
+  if (repairBarrier.blocked) {
+    console.error(`Update lock ${jobType} deferred: ${repairBarrier.reason}:${repairBarrier.lockPath}`)
+    return null
+  }
   await ensureReady()
   const owner = makeOwner(jobType)
   const conflicts = [...new Set(conflictingJobTypes.filter((candidate) => candidate !== jobType))]

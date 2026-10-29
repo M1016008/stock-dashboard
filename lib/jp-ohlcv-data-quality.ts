@@ -48,6 +48,20 @@ export type JpOhlcvBackfillPlan = {
   planSha256: string
 }
 
+export type JpOhlcvMissingOnlyRepairScope = {
+  version: 1
+  date: string
+  status: 'READY' | 'HOLD'
+  conflictDisposition: 'PRESERVE_EXISTING_HOLD'
+  officialSha256: string
+  planSha256: string
+  missingRows: JpOfficialOhlcvValue[]
+  missingRowsSha256: string
+  preservedConflicts: JpOhlcvConflict[]
+  preservedConflictsSha256: string
+  reasons: string[]
+}
+
 export type JpDailyCoverageEvaluation = {
   status: 'PASS' | 'HOLD'
   providerRows: number
@@ -57,6 +71,15 @@ export type JpDailyCoverageEvaluation = {
   minimumRows: number
   ratio: number
   reasons: string[]
+}
+
+export type JpOhlcvConflictLineageAssessment = {
+  classification: 'RETROACTIVE_ADJUSTED_SERIES_REVISION' | 'UNRESOLVED_VALUE_CONFLICT'
+  disposition: 'PRESERVE_EXISTING_HOLD'
+  volumeMatches: boolean
+  laterCorporateActionObserved: boolean
+  priceRevisionConsistent: boolean
+  requiresFullHistoryRebase: boolean
 }
 
 function canonicalize(value: unknown): unknown {
@@ -219,6 +242,42 @@ export function buildJpOhlcvBackfillPlan(input: {
   return { ...body, planSha256: stableSha256(body) }
 }
 
+export function buildJpOhlcvMissingOnlyRepairScope(input: {
+  plan: JpOhlcvBackfillPlan
+  approvedConflictTickers: readonly string[]
+}): JpOhlcvMissingOnlyRepairScope {
+  const approved = [...new Set(input.approvedConflictTickers.map(normalizeTicker))].sort()
+  const conflicts = [...input.plan.conflicts].sort((left, right) => (
+    left.ticker.localeCompare(right.ticker) || left.reason.localeCompare(right.reason)
+  ))
+  const conflictTickers = [...new Set(conflicts.map((conflict) => normalizeTicker(conflict.ticker)))].sort()
+  const reasons: string[] = []
+  if (input.plan.missingRows.length === 0) reasons.push('missing_rows_empty')
+  if (conflicts.some((conflict) => conflict.reason !== 'EXISTING_VALUE_CONFLICT')) {
+    reasons.push('unsupported_conflict_kind')
+  }
+  if (JSON.stringify(conflictTickers) !== JSON.stringify(approved)) {
+    reasons.push('approved_conflict_set_mismatch')
+  }
+  if (conflicts.some((conflict) => !conflict.existing || !conflict.official)) {
+    reasons.push('conflict_evidence_incomplete')
+  }
+  const missingRows = sorted(input.plan.missingRows)
+  return {
+    version: 1,
+    date: input.plan.date,
+    status: reasons.length === 0 ? 'READY' : 'HOLD',
+    conflictDisposition: 'PRESERVE_EXISTING_HOLD',
+    officialSha256: input.plan.officialSha256,
+    planSha256: input.plan.planSha256,
+    missingRows,
+    missingRowsSha256: stableSha256(missingRows),
+    preservedConflicts: conflicts,
+    preservedConflictsSha256: stableSha256(conflicts),
+    reasons,
+  }
+}
+
 function median(values: readonly number[]): number {
   const ordered = values.filter((value) => Number.isSafeInteger(value) && value > 0).sort((a, b) => a - b)
   if (ordered.length === 0) return 0
@@ -265,6 +324,34 @@ export function findJpHistoricalCoverageGaps(input: {
   return input.tradingDates
     .map((date) => ({ date, actualRows: input.rowsByDate.get(date) ?? 0, expectedRows, minimumRows }))
     .filter((row) => row.actualRows < row.minimumRows)
+}
+
+export function assessJpOhlcvConflictLineage(input: {
+  existing: JpOhlcvValue
+  currentOfficial: JpOfficialOhlcvValue
+  laterAdjustmentFactors: readonly number[]
+}): JpOhlcvConflictLineageAssessment {
+  const volumeMatches = input.existing.volume === input.currentOfficial.volume
+  const laterCorporateActionObserved = input.laterAdjustmentFactors.some((factor) => (
+    Number.isFinite(factor) && factor > 0 && Math.abs(factor - 1) > Number.EPSILON
+  ))
+  const ratios = (['open', 'high', 'low', 'close'] as const).map((key) => (
+    input.existing[key] / input.currentOfficial[key]
+  ))
+  const priceRevisionConsistent = ratios.every((ratio) => Number.isFinite(ratio))
+    && Math.max(...ratios) - Math.min(...ratios) <= 1e-8
+    && input.laterAdjustmentFactors.some((factor) => Math.abs(ratios[0] - factor) <= 1e-8)
+  const classification = volumeMatches && laterCorporateActionObserved && priceRevisionConsistent
+    ? 'RETROACTIVE_ADJUSTED_SERIES_REVISION'
+    : 'UNRESOLVED_VALUE_CONFLICT'
+  return {
+    classification,
+    disposition: 'PRESERVE_EXISTING_HOLD',
+    volumeMatches,
+    laterCorporateActionObserved,
+    priceRevisionConsistent,
+    requiresFullHistoryRebase: classification === 'RETROACTIVE_ADJUSTED_SERIES_REVISION',
+  }
 }
 
 export function historicalCoverageDates(

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "targetDate": "2026-07-17",
+  "mode": "missing-only-with-preserved-conflicts",
+  "readServicePolicy": "hold-web-and-analog-during-data-and-derived-generation-publication",
+  "steps": [
+    "verify-approved-plan-and-official-hashes",
+    "acquire-external-repair-lock-and-jp-writer-lock",
+    "create-and-verify-sqlite-online-backup",
+    "insert-only-approved-missing-keys-in-one-transaction",
+    "verify-coverage-values-and-preserved-conflicts",
+    "rebuild-current-snapshots-and-main-chart-technicals",
+    "rebuild-current-six-stage-serving-projection",
+    "rebuild-stage-history-serving-data",
+    "rebuild-screener-serving-metrics",
+    "invalidate-and-rebuild-dashboard-and-history-caches",
+    "publish-source-and-serving-generation-evidence",
+    "verify-1306-7003-and-market-coverage",
+    "resume-read-services-after-health-pass"
+  ],
+  "sealedExclusions": [
+    "phase-3c",
+    "v6-outcome",
+    "validation",
+    "holdout",
+    "weekly-optimization"
+  ],
+  "failClosed": [
+    "plan-hash-change",
+    "official-hash-change",
+    "writer-conflict",
+    "backup-verification-failure",
+    "row-count-mismatch",
+    "new-or-changed-conflict",
+    "incomplete-journal",
+    "derived-generation-failure",
+    "serving-health-failure",
+    "rollback-identity-mismatch"
+  ]
+}

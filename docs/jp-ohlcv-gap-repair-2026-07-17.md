@@ -25,6 +25,17 @@ overwrite them:
 | 1447 | 273.5 / 284.9 / 266.8 / 270.2 | 273.7 / 285.1 / 267.0 / 270.4 | 1,049,400 |
 | 2164 | 112.8 / 112.8 / 104.8 / 108.2 | 113.0 / 113.0 / 105.0 / 108.3 | 82,100 |
 
+The current official series shows later corporate-action boundaries, but does
+not by itself prove how the older Production adjustment generation was derived.
+Code 1447 has a later
+`2026-09-11` adjustment factor `0.6675675675675675`; code 2164 has later
+`2026-08-07` factor `0.6686626746506986` (and an earlier `2026-06-24`
+boundary). The target-day volumes match, while the current official `Adj*`
+values differ from the older Production generation. The exact transformation
+lineage remains unresolved. Existing values therefore remain preserved and
+HOLD. A separately approved full-history lineage audit and corporate-action
+rebase is required before either row may be replaced.
+
 Price basis is `jquants-adjusted-ohlcv-v1`. No interpolation, previous-close
 substitution, or synthetic price is permitted.
 
@@ -60,6 +71,10 @@ Every gate is sequential. Failure stops the operation without continuing.
      writer is active.
    - Acquire the existing writer/process lock atomically and retain it through
      verification and generation publication.
+   - The external `repair.lock` is also a durable Writer Barrier. Normal lock
+     acquisition returns deferred while it exists, including after process
+     death. Only `jp_ohlcv_gap_repair` with the matching transaction ID may
+     acquire the database writer lock. Invalid or unreadable barriers block.
 3. Consistent backup
    - Capture a SQLite-consistent backup that includes the database, WAL state,
      schema identity, Source Generation, Serving Generation, and lineage.
@@ -87,6 +102,10 @@ Every gate is sequential. Failure stops the operation without continuing.
      old Source Generation.
    - Publish the Serving Generation atomically only after all required serving
      outputs validate. Never mix old and new generations.
+   - Hold Web and Analog during the data commit, serving rebuild and generation
+     publication. The current schema does not provide a universal pointer that
+     atomically covers every DB-backed derivative, so leaving readers online
+     would expose a mixed source/serving interval.
 8. Health and observation
    - Run freshness and serving health checks, then the approved 1306/7003 API
      and chart smoke checks.
@@ -123,6 +142,10 @@ being silently mixed with the new generation.
   while dependent artifacts may reference it.
 - An incomplete journal, hash mismatch, lock ownership ambiguity, or uncertain
   generation is Fail-Closed and requires operator adjudication.
+- Rollback is a separately hash-approved transaction. Its approval binds the
+  live journal hash, transaction ID, exact backup path/hash, database identity,
+  and old Source/Serving generations. Restored bytes must hash exactly to the
+  verified backup before the old serving generation can be accepted.
 
 ## Approval boundary
 
@@ -131,3 +154,9 @@ authorized. Production database writes, conflict adjudication, generation
 publication, derivative recomputation, cache publication, and Production job
 execution require a separate explicit approval after the final plan and backup
 identities are known.
+
+The Production transaction implementation pins the approval, official data,
+plan, missing rows, preserved conflicts and derived plan hashes. It writes an
+external fsynced journal before DB work, uses an exclusive writer adapter,
+requires a verified SQLite online backup, and leaves every crash or ambiguous
+stage in manual HOLD. Automatic retry and automatic cleanup are prohibited.
