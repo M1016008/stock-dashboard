@@ -459,8 +459,16 @@ export function shouldApplyJQuantsLegacyAdjustment(input: {
   })
 }
 
-export async function fetchJQuantsDailyByDateWithEvidence(date: string): Promise<JQuantsDailyByDateEvidence> {
+export async function fetchJQuantsDailyByDateWithEvidence(
+  date: string,
+  options: { timeoutMs?: number } = {},
+): Promise<JQuantsDailyByDateEvidence> {
   const apiKey = getApiKey()
+  const timeoutMs = options.timeoutMs ?? 0
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 15 * 60_000) {
+    throw new Error('jquants_daily_timeout_invalid')
+  }
+  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null
   const providerRows: JBarRow[] = []
   let paginationKey: string | undefined
   let pages = 0
@@ -469,9 +477,30 @@ export async function fetchJQuantsDailyByDateWithEvidence(date: string): Promise
   do {
     const params = new URLSearchParams({ date })
     if (paginationKey) params.set('pagination_key', paginationKey)
-    const res = await fetch(`${BASE_URL}/equities/bars/daily?${params}`, {
-      headers: { 'x-api-key': apiKey },
-    })
+    const remainingMs = deadline === null ? null : deadline - Date.now()
+    if (remainingMs !== null && remainingMs <= 0) {
+      throw new JQuantsRequestError({
+        endpoint: '/v2/equities/bars/daily',
+        httpStatus: null,
+        message: `J-Quants bars/daily date=${date} timed out`,
+      })
+    }
+    let res: Response
+    try {
+      res = await fetch(`${BASE_URL}/equities/bars/daily?${params}`, {
+        headers: { 'x-api-key': apiKey },
+        signal: remainingMs === null ? undefined : AbortSignal.timeout(Math.max(1, remainingMs)),
+      })
+    } catch (error) {
+      const message = error instanceof Error && error.name === 'TimeoutError'
+        ? `J-Quants bars/daily date=${date} timed out`
+        : `J-Quants bars/daily date=${date} network failure`
+      throw new JQuantsRequestError({
+        endpoint: '/v2/equities/bars/daily',
+        httpStatus: null,
+        message,
+      })
+    }
     if (!res.ok) {
       // Response bodies can contain provider diagnostics. Do not persist them because
       // they are not needed for retry classification and may contain request context.

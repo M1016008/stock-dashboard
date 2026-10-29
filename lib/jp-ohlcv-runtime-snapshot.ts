@@ -26,6 +26,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
 }
 
 export const JP_OHLCV_RUNTIME_SNAPSHOT_TTL_MS = 15 * 60_000
+export const JP_OHLCV_PREINSERT_MINIMUM_VALIDITY_MS = 6 * 60_000
 
 export type JpOhlcvSourceWatermark = {
   latestRunId: number
@@ -321,9 +322,10 @@ export function assertJpOhlcvRuntimeSnapshotUnchanged(input: {
   sealed: JpOhlcvRuntimeSnapshot
   current: JpOhlcvRuntimeSnapshot
   stage?: string
+  now?: Date
 }): void {
-  assertJpOhlcvRuntimeSnapshot({ snapshot: input.sealed, stage: input.stage })
-  assertJpOhlcvRuntimeSnapshot({ snapshot: input.current, stage: input.stage })
+  assertJpOhlcvRuntimeSnapshot({ snapshot: input.sealed, stage: input.stage, now: input.now })
+  assertJpOhlcvRuntimeSnapshot({ snapshot: input.current, stage: input.stage, now: input.now })
   if (input.sealed.configurationSha256 !== input.current.configurationSha256
     || input.sealed.officialSha256 !== input.current.officialSha256
     || input.sealed.officialSourceContractSha256 !== input.current.officialSourceContractSha256
@@ -332,5 +334,63 @@ export function assertJpOhlcvRuntimeSnapshotUnchanged(input: {
     || input.sealed.sourceWatermarkSha256 !== input.current.sourceWatermarkSha256
     || input.sealed.servingWatermarkSha256 !== input.current.servingWatermarkSha256) {
     throw new Error('repair_runtime_snapshot_changed_after_writer_hold')
+  }
+}
+
+export function assertJpOhlcvRuntimeSnapshotRenewal(input: {
+  previous: JpOhlcvRuntimeSnapshot
+  renewed: JpOhlcvRuntimeSnapshot
+  now?: Date
+}): void {
+  const previousCapturedAt = new Date(input.previous.capturedAt)
+  if (!Number.isFinite(previousCapturedAt.getTime())) {
+    throw new Error('repair_runtime_snapshot_renewal_previous_time_invalid')
+  }
+  // The previous proof may legitimately expire while the verified SQLite
+  // backup runs. Validate its original short-lived window without extending it.
+  assertJpOhlcvRuntimeSnapshot({
+    snapshot: input.previous,
+    now: previousCapturedAt,
+    stage: 'renewal_previous',
+  })
+  assertJpOhlcvRuntimeSnapshot({
+    snapshot: input.renewed,
+    now: input.now,
+    stage: 'renewal_current',
+  })
+  if (Date.parse(input.renewed.capturedAt) < previousCapturedAt.getTime()) {
+    throw new Error('repair_runtime_snapshot_renewal_time_regressed')
+  }
+  if (input.previous.configurationSha256 !== input.renewed.configurationSha256
+    || input.previous.officialSha256 !== input.renewed.officialSha256
+    || input.previous.officialSourceContractSha256 !== input.renewed.officialSourceContractSha256
+    || input.previous.approvedRepairKeysSha256 !== input.renewed.approvedRepairKeysSha256
+    || input.previous.runtimeScope.runtimeExistingSha256 !== input.renewed.runtimeScope.runtimeExistingSha256
+    || input.previous.sourceWatermarkSha256 !== input.renewed.sourceWatermarkSha256
+    || input.previous.servingWatermarkSha256 !== input.renewed.servingWatermarkSha256) {
+    throw new Error(
+      `repair_runtime_snapshot_renewal_state_changed:expectedExisting=`
+      + `${input.previous.runtimeScope.runtimeExistingSha256}:observedExisting=`
+      + `${input.renewed.runtimeScope.runtimeExistingSha256}:expectedSourceWatermark=`
+      + `${input.previous.sourceWatermarkSha256}:observedSourceWatermark=`
+      + `${input.renewed.sourceWatermarkSha256}:expectedServingWatermark=`
+      + `${input.previous.servingWatermarkSha256}:observedServingWatermark=`
+      + `${input.renewed.servingWatermarkSha256}`,
+    )
+  }
+}
+
+export function assertJpOhlcvRuntimeSnapshotPreinsertBudget(input: {
+  snapshot: JpOhlcvRuntimeSnapshot
+  now?: Date
+}): void {
+  const now = input.now ?? new Date()
+  assertJpOhlcvRuntimeSnapshot({ snapshot: input.snapshot, now, stage: 'pre_read_service_hold' })
+  const remainingMs = Date.parse(input.snapshot.expiresAt) - now.getTime()
+  if (remainingMs < JP_OHLCV_PREINSERT_MINIMUM_VALIDITY_MS) {
+    throw new Error(
+      `repair_runtime_snapshot_preinsert_budget_insufficient:${remainingMs}:`
+      + `${JP_OHLCV_PREINSERT_MINIMUM_VALIDITY_MS}`,
+    )
   }
 }

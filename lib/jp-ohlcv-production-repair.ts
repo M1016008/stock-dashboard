@@ -23,8 +23,10 @@ export type JpOhlcvRepairStage =
   | 'PREPARED'
   | 'WRITER_LOCKED'
   | 'BACKUP_VERIFIED'
+  | 'RUNTIME_SNAPSHOT_RENEWED'
   | 'READ_SERVICES_HOLDING'
   | 'READ_SERVICES_HELD'
+  | 'PREINSERT_SNAPSHOT_VERIFIED'
   | 'DATA_COMMITTING'
   | 'DATA_COMMITTED'
   | 'DATA_VERIFIED'
@@ -324,8 +326,11 @@ function holdOperatorAction(input: {
   stateDirectory: string
 }): string {
   const { stage, transactionId, databaseRealpath, stateDirectory } = input
-  if (['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED'].includes(stage)) {
+  if (['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED', 'RUNTIME_SNAPSHOT_RENEWED'].includes(stage)) {
     return 'No data mutation is recorded. Preserve the lock and journal, run the read-only status command, prove the writer lock absent or expired, and obtain an exact hash-bound ARCHIVE_PREWRITE_HOLD approval. A retry is a new transaction and approval.'
+  }
+  if (['READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', 'PREINSERT_SNAPSHOT_VERIFIED'].includes(stage)) {
+    return 'No database or Generation mutation is recorded, but Web/Analog hold state may be partial or active. Preserve the verified backup, renewed runtime-snapshot evidence, lock and journal. Do not roll back an unchanged database or restart services automatically. No automated recovery is implemented for this stage; require a separately reviewed, exact hash-bound procedure after read-only process, service and generation verification.'
   }
   if (stage === 'READ_SERVICES_RESUMING') {
     return 'The new Source and Serving generations were verified, but Web/Analog resume is uncertain. Preserve all artifacts and run status. Choose either exact hash-bound RESUME_READ_SERVICES after revalidating the promoted generation, or exact hash-bound ROLLBACK; never retry automatically.'
@@ -651,11 +656,22 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
             : 'ACTIVE_OR_INCOMPLETE'
   const terminal = latestTerminalJournal(paths.stateDirectory, path.basename(paths.journal))
   const backup = journal?.evidence.BACKUP_VERIFIED as { backupRealpath?: unknown; backupSha256?: unknown } | undefined
+  const renewedSnapshot = journal?.evidence.RUNTIME_SNAPSHOT_RENEWED as {
+    evidencePath?: unknown
+    evidenceFileSha256?: unknown
+    snapshotSha256?: unknown
+    providerRows?: unknown
+    acceptedRows?: unknown
+    rejectedRows?: unknown
+    noTradeRows?: unknown
+    unexpectedRejectedRows?: unknown
+    expiresAt?: unknown
+  } | undefined
   const effectiveJournalStage = journal?.stage === 'HOLD' && journal.failure
     ? journal.failure.originalStage
     : journal?.stage ?? null
   const readServicesMayBeHeld = effectiveJournalStage
-    ? ['READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', 'DATA_COMMITTING', 'DATA_COMMITTED', 'DATA_VERIFIED',
+    ? ['READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', 'PREINSERT_SNAPSHOT_VERIFIED', 'DATA_COMMITTING', 'DATA_COMMITTED', 'DATA_VERIFIED',
       'DERIVED_REBUILDING', 'DERIVED_VERIFIED', 'SERVING_VERIFIED', 'READ_SERVICES_RESUMING',
       'ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', 'ROLLBACK_DATA_RESTORED',
       'ROLLBACK_DERIVED_REBUILT', 'ROLLBACK_SERVING_VERIFIED', 'ROLLBACK_READ_SERVICES_RESUMING']
@@ -721,6 +737,23 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
         backupDirectory: journal.backupDirectory,
         verifiedBackup: typeof backup?.backupRealpath === 'string' ? backup.backupRealpath : null,
         verifiedBackupSha256: typeof backup?.backupSha256 === 'string' ? backup.backupSha256 : null,
+        renewedRuntimeSnapshot: typeof renewedSnapshot?.evidencePath === 'string'
+          ? renewedSnapshot.evidencePath
+          : null,
+        renewedRuntimeSnapshotFileSha256: typeof renewedSnapshot?.evidenceFileSha256 === 'string'
+          ? renewedSnapshot.evidenceFileSha256
+          : null,
+        renewedRuntimeSnapshotSha256: typeof renewedSnapshot?.snapshotSha256 === 'string'
+          ? renewedSnapshot.snapshotSha256
+          : null,
+        renewedProviderEnvelope: renewedSnapshot ? {
+          providerRows: renewedSnapshot.providerRows ?? null,
+          acceptedRows: renewedSnapshot.acceptedRows ?? null,
+          rejectedRows: renewedSnapshot.rejectedRows ?? null,
+          noTradeRows: renewedSnapshot.noTradeRows ?? null,
+          unexpectedRejectedRows: renewedSnapshot.unexpectedRejectedRows ?? null,
+          expiresAt: renewedSnapshot.expiresAt ?? null,
+        } : null,
         stateDirectory: paths.stateDirectory,
         journal: paths.journal,
         lock: paths.lock,
@@ -863,7 +896,13 @@ export class JpOhlcvProductionRepairTransaction {
     const writerEvidence = cleanup.writerLockEvidence
     const writerCheckedAt = Date.parse(writerEvidence?.checkedAt ?? '')
     const writerExpiresAt = Date.parse(writerEvidence?.expiresAt ?? '')
-    const allowedOriginalStages: JpOhlcvRepairStage[] = ['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED']
+    const allowedOriginalStages: JpOhlcvRepairStage[] = [
+      'PREPARING',
+      'PREPARED',
+      'WRITER_LOCKED',
+      'BACKUP_VERIFIED',
+      'RUNTIME_SNAPSHOT_RENEWED',
+    ]
     if (cleanup.version !== 1
       || cleanup.action !== 'ARCHIVE_PREWRITE_HOLD'
       || cleanup.repairApprovalSha256 !== input.approvalSha256
@@ -1234,7 +1273,13 @@ export class JpOhlcvProductionRepairTransaction {
     reason: string
   }): string {
     if (!this.journal || this.journal.stage !== 'HOLD' || !this.journal.failure
-      || !['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED'].includes(this.journal.failure.originalStage)) {
+      || ![
+        'PREPARING',
+        'PREPARED',
+        'WRITER_LOCKED',
+        'BACKUP_VERIFIED',
+        'RUNTIME_SNAPSHOT_RENEWED',
+      ].includes(this.journal.failure.originalStage)) {
       throw new Error(`repair_prewrite_cleanup_stage_invalid:${this.journal?.stage ?? 'missing'}`)
     }
     const archived = `${this.paths.journal}.aborted-prewrite-${this.transactionId}`

@@ -122,6 +122,9 @@ async function runChild(
         LC_ALL: process.env.LC_ALL,
         TZ: process.env.TZ,
         ...command.environment,
+        ...(process.env.JQUANTS_API_KEY
+          ? { JQUANTS_API_KEY: process.env.JQUANTS_API_KEY }
+          : {}),
         STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED:
           process.env.STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED!,
         STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_PATH: runtimeSnapshotPath,
@@ -277,7 +280,7 @@ async function main(): Promise<void> {
     rows: JpOfficialOhlcvValue[]
     proof: JpOhlcvRuntimeSnapshot['officialSourceProof']
   }> => {
-    const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate)
+    const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate, { timeoutMs: 2 * 60_000 })
     operatorOfficialSourceEvidence = {
       requestedAt: evidence.requestedAt,
       completedAt: evidence.completedAt,

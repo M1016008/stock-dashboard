@@ -150,8 +150,17 @@ assert.throws(() => assertRepairApproval({
 
 function adapter(approval: JpOhlcvRepairApproval, overrides: Partial<JpOhlcvRepairAdapter> = {}): JpOhlcvRepairAdapter {
   let rows = existing.map((row) => ({ ...row }))
+  let renewedEvidence: null | {
+    snapshotSha256: string
+    checkedAt: string
+    expiresAt: string
+  } = null
   return {
-    acquireWriterLock: async () => ({ owner: 'fixture-owner', release: async () => undefined }),
+    acquireWriterLock: async () => ({
+      owner: 'fixture-owner',
+      heartbeat: async () => undefined,
+      release: async () => undefined,
+    }),
     createAndVerifyConsistentBackup: async () => ({
       databaseRealpath: approval.databaseRealpath,
       databaseIdentitySha256: approval.databaseIdentitySha256,
@@ -162,6 +171,34 @@ function adapter(approval: JpOhlcvRepairApproval, overrides: Partial<JpOhlcvRepa
       servingGeneration: 'jp-serving-before',
     }),
     revalidatePlan: async () => runtimeScope,
+    renewRuntimeSnapshotAfterBackup: async () => {
+      const capturedAt = new Date()
+      const snapshotSha256 = stableSha256({ fixture: approval.targetDate, kind: 'renewed-snapshot' })
+      const expiresAt = new Date(capturedAt.getTime() + 900_000).toISOString()
+      const evidencePath = path.join(approval.stateDirectory, 'runtime-snapshot-renewed.json')
+      fs.mkdirSync(approval.stateDirectory, { recursive: true })
+      fs.writeFileSync(evidencePath, `${JSON.stringify({ snapshotSha256, capturedAt, expiresAt })}\n`)
+      renewedEvidence = { snapshotSha256, checkedAt: capturedAt.toISOString(), expiresAt }
+      return {
+        runtimeScope,
+        snapshotSha256,
+        capturedAt: capturedAt.toISOString(),
+        expiresAt,
+        officialSourceProofSha256: stableSha256({ fixture: approval.targetDate, kind: 'official-proof' }),
+        officialSourceContractSha256: stableSha256(approval.officialSourceContract),
+        providerRows: approval.officialSourceContract.providerRows,
+        acceptedRows: approval.officialSourceContract.acceptedRows,
+        rejectedRows: approval.officialSourceContract.rejectedRows,
+        noTradeRows: approval.officialSourceContract.noTradeRows,
+        unexpectedRejectedRows: approval.officialSourceContract.unexpectedRejectedRows,
+        evidencePath,
+        evidenceFileSha256: fileSha256(evidencePath),
+      }
+    },
+    assertPreinsertRuntimeSnapshot: async () => {
+      if (!renewedEvidence) throw new Error('fixture_renewed_snapshot_missing')
+      return { ...renewedEvidence, remainingValidityMs: 900_000 }
+    },
     holdReadServices: async () => ({
       web: 'HELD',
       analog: 'HELD',
@@ -311,7 +348,13 @@ async function main(): Promise<void> {
 
 for (const [name, override, expectedStage] of [
   ['backup-failure', { createAndVerifyConsistentBackup: async () => { throw new Error('backup_failed') } }, 'WRITER_LOCKED'],
+  ['snapshot-renewal-failure', {
+    renewRuntimeSnapshotAfterBackup: async () => { throw new Error('snapshot_renewal_failed') },
+  }, 'BACKUP_VERIFIED'],
   ['service-hold-failure', { holdReadServices: async () => { throw new Error('service_hold_failed') } }, 'READ_SERVICES_HOLDING'],
+  ['post-service-hold-snapshot-expired', {
+    assertPreinsertRuntimeSnapshot: async () => { throw new Error('repair_runtime_snapshot_expired:post_read_service_hold') },
+  }, 'READ_SERVICES_HELD'],
   ['insert-crash', { insertMissingRowsAtomically: async () => { throw new Error('SIGKILL_fixture') } }, 'DATA_COMMITTING'],
   ['derived-failure', { rebuildDerivedServing: async () => { throw new Error('derived_failed') } }, 'DERIVED_REBUILDING'],
   ['service-resume-failure', { resumeReadServices: async () => { throw new Error('service_resume_failed') } }, 'READ_SERVICES_RESUMING'],
@@ -328,6 +371,37 @@ for (const [name, override, expectedStage] of [
   const journal = JSON.parse(fs.readFileSync(paths(name).journal, 'utf8'))
   assert.equal(journal.stage, 'HOLD')
   assert.equal(journal.failure.originalStage, expectedStage)
+  if (name === 'post-service-hold-snapshot-expired') {
+    assert.match(journal.operatorAction, /No database or Generation mutation is recorded/)
+    assert.match(journal.operatorAction, /Web\/Analog hold state may be partial or active/)
+    assert.match(journal.operatorAction, /No automated recovery is implemented for this stage/)
+  }
+  if (name === 'service-hold-failure') {
+    const status = inspectJpOhlcvProductionRepair(paths(name)) as {
+      journal?: { protectedResources?: {
+        renewedRuntimeSnapshot?: unknown
+        renewedRuntimeSnapshotFileSha256?: unknown
+        renewedProviderEnvelope?: {
+          providerRows?: unknown
+          acceptedRows?: unknown
+          rejectedRows?: unknown
+          noTradeRows?: unknown
+          unexpectedRejectedRows?: unknown
+        }
+      } }
+    }
+    assert.equal(status.journal?.protectedResources?.renewedRuntimeSnapshot,
+      path.join(approval.stateDirectory, 'runtime-snapshot-renewed.json'))
+    assert.match(String(status.journal?.protectedResources?.renewedRuntimeSnapshotFileSha256), /^[a-f0-9]{64}$/)
+    assert.deepEqual(status.journal?.protectedResources?.renewedProviderEnvelope, {
+      providerRows: approval.officialSourceContract.providerRows,
+      acceptedRows: approval.officialSourceContract.acceptedRows,
+      rejectedRows: approval.officialSourceContract.rejectedRows,
+      noTradeRows: approval.officialSourceContract.noTradeRows,
+      unexpectedRejectedRows: approval.officialSourceContract.unexpectedRejectedRows,
+      expiresAt: journal.evidence.RUNTIME_SNAPSHOT_RENEWED.expiresAt,
+    })
+  }
   assert.throws(() => assertNoIncompleteRepair(paths(name)), /manual_recovery/)
 }
 
@@ -341,6 +415,7 @@ for (const [name, override, expectedStage] of [
     adapter: adapter(approval, {
       acquireWriterLock: async () => ({
         owner: 'fixture-owner',
+        heartbeat: async () => undefined,
         release: async () => { throw new Error('writer_release_failed') },
       }),
     }),
@@ -415,6 +490,7 @@ for (const [name, override, expectedStage] of [
     adapter: adapter(approval, {
       acquireWriterLock: async () => ({
         owner: 'fixture-retained-writer',
+        heartbeat: async () => undefined,
         release: async () => { releases += 1 },
       }),
       insertMissingRowsAtomically: async () => { throw new Error('SIGKILL_after_sqlite_commit_unknown') },

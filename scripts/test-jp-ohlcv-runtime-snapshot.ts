@@ -13,6 +13,8 @@ import {
 } from '@/lib/jp-ohlcv-data-quality'
 import {
   assertJpOhlcvRuntimeSnapshot,
+  assertJpOhlcvRuntimeSnapshotPreinsertBudget,
+  assertJpOhlcvRuntimeSnapshotRenewal,
   assertJpOhlcvRuntimeSnapshotUnchanged,
   captureJpOhlcvRuntimeSnapshot,
 } from '@/lib/jp-ohlcv-runtime-snapshot'
@@ -214,6 +216,30 @@ assert.throws(() => assertJpOhlcvRuntimeSnapshot({
   now: new Date('2026-10-29T00:15:00.001Z'),
 }), /runtime_snapshot_expired/)
 
+const afterLongBackup = new Date('2026-10-29T00:16:00.000Z')
+const renewedAfterLongBackup = captureJpOhlcvRuntimeSnapshot({
+  databasePath,
+  configurationSha256: 'a'.repeat(64),
+  approvalScope,
+  officialRows: official,
+  officialSourceProof: sourceProof(afterLongBackup),
+  officialSourceContract: sourceContract,
+  now: afterLongBackup,
+})
+assert.doesNotThrow(() => assertJpOhlcvRuntimeSnapshotRenewal({
+  previous: fixed,
+  renewed: renewedAfterLongBackup,
+  now: afterLongBackup,
+}))
+assert.doesNotThrow(() => assertJpOhlcvRuntimeSnapshotPreinsertBudget({
+  snapshot: renewedAfterLongBackup,
+  now: afterLongBackup,
+}))
+assert.throws(() => assertJpOhlcvRuntimeSnapshotPreinsertBudget({
+  snapshot: renewedAfterLongBackup,
+  now: new Date('2026-10-29T00:25:00.001Z'),
+}), /preinsert_budget_insufficient/)
+
 const staleProofCapturedAt = new Date('2026-10-29T01:00:00.000Z')
 const staleProofAt = new Date(staleProofCapturedAt.getTime() - 900_001)
 const staleOfficialProof = captureJpOhlcvRuntimeSnapshot({
@@ -284,6 +310,14 @@ const { snapshotSha256: _acceptedHash, ...changedAcceptedBody } = changedAccepte
 changedAccepted.snapshotSha256 = stableSha256(changedAcceptedBody)
 assert.throws(
   () => assertJpOhlcvRuntimeSnapshot({ snapshot: changedAccepted, now: fixedAt }),
+  /accepted_content_mismatch/,
+)
+assert.throws(
+  () => assertJpOhlcvRuntimeSnapshotRenewal({
+    previous: fixed,
+    renewed: changedAccepted,
+    now: fixedAt,
+  }),
   /accepted_content_mismatch/,
 )
 

@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 import type {
   JpOhlcvMissingOnlyRepairScope,
   JpOhlcvRuntimeRepairScope,
 } from '@/lib/jp-ohlcv-data-quality'
+import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
   assertRepairApproval,
   JpOhlcvProductionRepairTransaction,
@@ -17,6 +20,10 @@ import {
   withJpOhlcvRepairBarrierOwner,
 } from '@/lib/jp-ohlcv-repair-barrier'
 import { assertJpOhlcvRepairExecutionActive } from '@/lib/jp-ohlcv-repair-process-supervisor'
+
+function fileSha256(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+}
 
 export type JpOhlcvRepairExecutionContext = {
   transactionId: string
@@ -33,7 +40,11 @@ export type JpOhlcvRepairExecutionContext = {
 }
 
 export type JpOhlcvRepairAdapter = {
-  acquireWriterLock: (context: JpOhlcvRepairExecutionContext) => Promise<{ owner: string; release: () => Promise<void> }>
+  acquireWriterLock: (context: JpOhlcvRepairExecutionContext) => Promise<{
+    owner: string
+    heartbeat: () => Promise<void>
+    release: () => Promise<void>
+  }>
   createAndVerifyConsistentBackup: (context: JpOhlcvRepairExecutionContext) => Promise<{
     databaseRealpath: string
     databaseIdentitySha256: string
@@ -44,6 +55,29 @@ export type JpOhlcvRepairAdapter = {
     servingGeneration: string
   }>
   revalidatePlan: (context: JpOhlcvRepairExecutionContext) => Promise<JpOhlcvRuntimeRepairScope>
+  renewRuntimeSnapshotAfterBackup: (
+    context: JpOhlcvRepairExecutionContext,
+  ) => Promise<{
+    runtimeScope: JpOhlcvRuntimeRepairScope
+    snapshotSha256: string
+    capturedAt: string
+    expiresAt: string
+    officialSourceProofSha256: string
+    officialSourceContractSha256: string
+    providerRows: number
+    acceptedRows: number
+    rejectedRows: number
+    noTradeRows: number
+    unexpectedRejectedRows: number
+    evidencePath: string
+    evidenceFileSha256: string
+  }>
+  assertPreinsertRuntimeSnapshot: (context: JpOhlcvRepairExecutionContext) => Promise<{
+    snapshotSha256: string
+    checkedAt: string
+    expiresAt: string
+    remainingValidityMs: number
+  }>
   holdReadServices: (context: JpOhlcvRepairExecutionContext) => Promise<{
     web: 'HELD'
     analog: 'HELD'
@@ -82,6 +116,7 @@ function stageMayContainDataMutation(stage: ReturnType<JpOhlcvProductionRepairTr
     'READ_SERVICES_HOLDING',
     'DATA_COMMITTING',
     'READ_SERVICES_HELD',
+    'PREINSERT_SNAPSHOT_VERIFIED',
     'DATA_COMMITTED',
     'DATA_VERIFIED',
     'DERIVED_REBUILDING',
@@ -212,7 +247,46 @@ export async function runJpOhlcvProductionRepair(input: {
         throw new Error('repair_backup_evidence_mismatch')
       }
       transaction.advance('WRITER_LOCKED', 'BACKUP_VERIFIED', backup)
-      transaction.advance('BACKUP_VERIFIED', 'READ_SERVICES_HOLDING', {
+      await writer.heartbeat()
+      context.assertExecutionActive()
+      const renewed = await input.adapter.renewRuntimeSnapshotAfterBackup(context)
+      context.assertExecutionActive()
+      await writer.heartbeat()
+      context.assertExecutionActive()
+      const evidencePath = path.resolve(renewed.evidencePath)
+      const stateDirectory = fs.realpathSync(input.approval.stateDirectory)
+      const evidenceStat = fs.lstatSync(evidencePath)
+      if (stableSha256(renewed.runtimeScope) !== stableSha256(revalidated)
+        || !/^[a-f0-9]{64}$/.test(renewed.snapshotSha256)
+        || !/^[a-f0-9]{64}$/.test(renewed.officialSourceProofSha256)
+        || !/^[a-f0-9]{64}$/.test(renewed.officialSourceContractSha256)
+        || !/^[a-f0-9]{64}$/.test(renewed.evidenceFileSha256)
+        || evidenceStat.isSymbolicLink()
+        || !evidenceStat.isFile()
+        || path.dirname(fs.realpathSync(evidencePath)) !== stateDirectory
+        || fileSha256(evidencePath) !== renewed.evidenceFileSha256
+        || renewed.providerRows !== renewed.acceptedRows + renewed.rejectedRows
+        || renewed.rejectedRows !== renewed.noTradeRows
+        || renewed.unexpectedRejectedRows !== 0) {
+        throw new Error('repair_runtime_snapshot_renewal_evidence_mismatch')
+      }
+      transaction.advance('BACKUP_VERIFIED', 'RUNTIME_SNAPSHOT_RENEWED', {
+        writerLockOwner: writer.owner,
+        backupSha256: backup.backupSha256,
+        snapshotSha256: renewed.snapshotSha256,
+        capturedAt: renewed.capturedAt,
+        expiresAt: renewed.expiresAt,
+        officialSourceProofSha256: renewed.officialSourceProofSha256,
+        officialSourceContractSha256: renewed.officialSourceContractSha256,
+        providerRows: renewed.providerRows,
+        acceptedRows: renewed.acceptedRows,
+        rejectedRows: renewed.rejectedRows,
+        noTradeRows: renewed.noTradeRows,
+        unexpectedRejectedRows: renewed.unexpectedRejectedRows,
+        evidencePath: renewed.evidencePath,
+        evidenceFileSha256: renewed.evidenceFileSha256,
+      })
+      transaction.advance('RUNTIME_SNAPSHOT_RENEWED', 'READ_SERVICES_HOLDING', {
         requestedAt: new Date().toISOString(),
       })
       const held = await input.adapter.holdReadServices(context)
@@ -221,25 +295,33 @@ export async function runJpOhlcvProductionRepair(input: {
         throw new Error('repair_read_service_hold_evidence_mismatch')
       }
       transaction.advance('READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', held)
-      transaction.advance('READ_SERVICES_HELD', 'DATA_COMMITTING', {
-        approvedMissingRows: input.approval.expectedMissingRows,
-        alreadySatisfiedExactRows: revalidated.alreadySatisfiedRows.length,
-        residualMissingRows: revalidated.missingRows.length,
-        missingRows: revalidated.missingRows.length,
-        missingRowsSha256: revalidated.missingRowsSha256,
-      })
-      const dataCommit = await input.adapter.insertMissingRowsAtomically(revalidated, context)
+      const preinsert = await input.adapter.assertPreinsertRuntimeSnapshot(context)
       context.assertExecutionActive()
-      if (dataCommit.insertedRows !== revalidated.missingRows.length
-        || dataCommit.missingRowsSha256 !== revalidated.missingRowsSha256
+      if (preinsert.snapshotSha256 !== renewed.snapshotSha256
+        || preinsert.expiresAt !== renewed.expiresAt
+        || preinsert.remainingValidityMs <= 0) {
+        throw new Error('repair_preinsert_runtime_snapshot_evidence_mismatch')
+      }
+      transaction.advance('READ_SERVICES_HELD', 'PREINSERT_SNAPSHOT_VERIFIED', preinsert)
+      transaction.advance('PREINSERT_SNAPSHOT_VERIFIED', 'DATA_COMMITTING', {
+        approvedMissingRows: input.approval.expectedMissingRows,
+        alreadySatisfiedExactRows: renewed.runtimeScope.alreadySatisfiedRows.length,
+        residualMissingRows: renewed.runtimeScope.missingRows.length,
+        missingRows: renewed.runtimeScope.missingRows.length,
+        missingRowsSha256: renewed.runtimeScope.missingRowsSha256,
+      })
+      const dataCommit = await input.adapter.insertMissingRowsAtomically(renewed.runtimeScope, context)
+      context.assertExecutionActive()
+      if (dataCommit.insertedRows !== renewed.runtimeScope.missingRows.length
+        || dataCommit.missingRowsSha256 !== renewed.runtimeScope.missingRowsSha256
         || dataCommit.sourceGeneration !== input.approval.sourceGenerationAfter) {
         throw new Error('repair_data_commit_evidence_mismatch')
       }
       transaction.advance('DATA_COMMITTING', 'DATA_COMMITTED', dataCommit)
-      const dataVerification = await input.adapter.verifyData(revalidated, context)
+      const dataVerification = await input.adapter.verifyData(renewed.runtimeScope, context)
       context.assertExecutionActive()
       if (dataVerification.missingRows !== 0
-        || dataVerification.preservedConflictsSha256 !== revalidated.preservedConflictsSha256
+        || dataVerification.preservedConflictsSha256 !== renewed.runtimeScope.preservedConflictsSha256
         || dataVerification.sourceGeneration !== input.approval.sourceGenerationAfter) {
         throw new Error('repair_data_verification_evidence_mismatch')
       }
@@ -280,7 +362,7 @@ export async function runJpOhlcvProductionRepair(input: {
         dayFullyRepaired: false,
         conflictsStillHold: [...input.approval.approvedConflictTickers],
         approvedRepairKeys: input.approval.expectedMissingRows,
-        alreadySatisfiedExact: revalidated.alreadySatisfiedRows.length,
+        alreadySatisfiedExact: renewed.runtimeScope.alreadySatisfiedRows.length,
         insertedRows: dataCommit.insertedRows,
       }
     } catch (error) {

@@ -35,6 +35,7 @@ Object.assign(process.env, {
   STOCKBOARD_DB_PATH: database,
   STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
   SKIP_SCHEMA_ENSURE: '1',
+  JQUANTS_API_KEY: 'fixture-command-adapter-secret-must-not-appear',
 })
 
 const officialRows: JpOfficialOhlcvValue[] = [
@@ -45,6 +46,42 @@ const officialRows: JpOfficialOhlcvValue[] = [
 const existingRows: JpOhlcvValue[] = [
   { ticker: '1447', date: '2026-07-17', open: 273.5, high: 284.9, low: 266.8, close: 270.2, volume: 30 },
 ]
+const noTradeRows = Array.from({ length: 224 }, (_, index) => ({
+  code: `N${String(index).padStart(4, '0')}`,
+  date: '2026-07-17',
+  reason: 'ALL_OHLCV_FIELDS_NULL' as const,
+  adjustmentFactor: 1,
+  upperLimit: 0,
+  lowerLimit: 0,
+  open: null,
+  high: null,
+  low: null,
+  close: null,
+  volume: null,
+  value: null,
+  adjustedOpen: null,
+  adjustedHigh: null,
+  adjustedLow: null,
+  adjustedClose: null,
+  adjustedVolume: null,
+}))
+const sourceContract = {
+  version: 1 as const,
+  endpoint: '/v2/equities/bars/daily' as const,
+  requestedDate: '2026-07-17',
+  providerRows: officialRows.length + noTradeRows.length,
+  acceptedRows: officialRows.length,
+  rejectedRows: noTradeRows.length,
+  noTradeRows: noTradeRows.length,
+  unexpectedRejectedRows: 0 as const,
+  contentSha256: buildJpOhlcvBackfillPlan({
+    date: '2026-07-17',
+    officialRows,
+    existingRows: [],
+  }).officialSha256,
+  rejectedRowsSha256: stableSha256(noTradeRows),
+  rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL' as const,
+}
 const dryRun = buildJpOhlcvBackfillPlan({ date: '2026-07-17', officialRows, existingRows })
 const scope = buildJpOhlcvMissingOnlyRepairScope({ plan: dryRun, approvedConflictTickers: ['1447'] })
 
@@ -139,19 +176,7 @@ async function main(): Promise<void> {
     approvedRepairKeysSha256: jpOhlcvApprovedRepairKeysSha256(scope.missingRows),
     runtimeDriftPolicy: 'ALLOW_APPROVED_KEYS_TO_BECOME_EXACT_MATCH_ONLY',
     runtimeSnapshotTtlMs: 900000,
-    officialSourceContract: {
-      version: 1,
-      endpoint: '/v2/equities/bars/daily',
-      requestedDate: '2026-07-17',
-      providerRows: officialRows.length,
-      acceptedRows: officialRows.length,
-      rejectedRows: 0,
-      noTradeRows: 0,
-      unexpectedRejectedRows: 0,
-      contentSha256: scope.officialSha256,
-      rejectedRowsSha256: stableSha256([]),
-      rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL',
-    },
+    officialSourceContract: sourceContract,
     preservedConflictsSha256: scope.preservedConflictsSha256,
     expectedOfficialRows: 3,
     expectedExistingRows: 1,
@@ -171,25 +196,43 @@ async function main(): Promise<void> {
   }
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
   const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
+  const initialNow = new Date('2026-10-29T00:00:00.000Z')
+  let logicalNow = initialNow
+  const sourceProof = (at: Date) => ({
+    requestedAt: at.toISOString(),
+    completedAt: at.toISOString(),
+    providerRows: sourceContract.providerRows,
+    acceptedRows: sourceContract.acceptedRows,
+    rejectedRows: sourceContract.rejectedRows,
+    noTradeRows: sourceContract.noTradeRows,
+    unexpectedRejectedRows: 0,
+    contentSha256: scope.officialSha256,
+    rejectedRowsSha256: sourceContract.rejectedRowsSha256,
+  })
   const runtimeSnapshot = captureJpOhlcvRuntimeSnapshot({
     databasePath: database,
     configurationSha256: stableSha256({ fixture: 'configuration' }),
     approvalScope: scope,
     officialRows,
-    officialSourceProof: {
-      requestedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      providerRows: officialRows.length,
-      acceptedRows: officialRows.length,
-      rejectedRows: 0,
-      noTradeRows: 0,
-      unexpectedRejectedRows: 0,
-      contentSha256: scope.officialSha256,
-      rejectedRowsSha256: stableSha256([]),
-    },
+    officialSourceProof: sourceProof(initialNow),
     officialSourceContract: approval.officialSourceContract,
+    now: initialNow,
   })
-  const adapters = createJpOhlcvCommandAdapters({ approval, plan, runtimeSnapshot })
+  const adapters = createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    runtimeSnapshot,
+    now: () => new Date(logicalNow),
+    refreshOfficialSource: async () => {
+      logicalNow = new Date(initialNow.getTime() + 16 * 60_000)
+      return {
+        rows: officialRows,
+        rejectedRows: noTradeRows,
+        proof: sourceProof(logicalNow),
+        contract: sourceContract,
+      }
+    },
+  })
   const result = await runJpOhlcvProductionRepair({
     approval,
     approvalSha256: repairApprovalSha256(approval),
@@ -211,8 +254,22 @@ async function main(): Promise<void> {
   ])
   assert.deepEqual(result.conflictsStillHold, ['1447'])
   const committedJournal = JSON.parse(fs.readFileSync(result.archivedJournal, 'utf8')) as {
-    evidence: { DATA_COMMITTING: Record<string, unknown>; DATA_COMMITTED: Record<string, unknown> }
+    evidence: {
+      RUNTIME_SNAPSHOT_RENEWED: Record<string, unknown>
+      DATA_COMMITTING: Record<string, unknown>
+      DATA_COMMITTED: Record<string, unknown>
+    }
   }
+  assert.equal(committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.officialSourceContractSha256, stableSha256(sourceContract))
+  const renewedEvidencePath = String(committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.evidencePath)
+  assert.doesNotMatch(fs.readFileSync(result.archivedJournal, 'utf8'), /fixture-command-adapter-secret-must-not-appear/)
+  assert.doesNotMatch(fs.readFileSync(renewedEvidencePath, 'utf8'), /fixture-command-adapter-secret-must-not-appear/)
+  const renewedEvidence = JSON.parse(fs.readFileSync(renewedEvidencePath, 'utf8')) as {
+    rejectedRows: unknown[]
+    snapshot: { capturedAt: string }
+  }
+  assert.equal(renewedEvidence.rejectedRows.length, 224)
+  assert.equal(renewedEvidence.snapshot.capturedAt, logicalNow.toISOString())
   assert.deepEqual(committedJournal.evidence.DATA_COMMITTING, {
     approvedMissingRows: 2,
     alreadySatisfiedExactRows: 1,
@@ -236,6 +293,78 @@ async function main(): Promise<void> {
     recordStageProcessStopped: () => {},
     assertExecutionActive: () => {},
   }
+  const postCommitNow = new Date(logicalNow)
+  const postCommitSnapshot = captureJpOhlcvRuntimeSnapshot({
+    databasePath: database,
+    configurationSha256: runtimeSnapshot.configurationSha256,
+    approvalScope: scope,
+    officialRows,
+    officialSourceProof: sourceProof(postCommitNow),
+    officialSourceContract: sourceContract,
+    now: postCommitNow,
+  })
+  const changedOfficialRows = officialRows.map((row) => (
+    row.ticker === '7003' ? { ...row, close: row.close + 1 } : row
+  ))
+  const changedOfficialHash = buildJpOhlcvBackfillPlan({
+    date: '2026-07-17',
+    officialRows: changedOfficialRows,
+    existingRows: [],
+  }).officialSha256
+  const revisedSourceAdapter = createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    runtimeSnapshot: postCommitSnapshot,
+    now: () => postCommitNow,
+    refreshOfficialSource: async () => ({
+      rows: changedOfficialRows,
+      rejectedRows: noTradeRows,
+      contract: { ...sourceContract, contentSha256: changedOfficialHash },
+      proof: { ...sourceProof(postCommitNow), contentSha256: changedOfficialHash },
+    }),
+  }).forward
+  await revisedSourceAdapter.revalidatePlan(context)
+  await assert.rejects(
+    revisedSourceAdapter.renewRuntimeSnapshotAfterBackup(context),
+    /provider_envelope_changed:expectedProvider=.*:observedContent=/,
+  )
+  assert.equal(fs.existsSync(path.join(stateDirectory, `runtime-snapshot-renewed-${context.transactionId}.json`)), false)
+
+  const expandedNoTradeRows = [
+    ...noTradeRows,
+    { ...noTradeRows[0], code: 'N9999' },
+  ]
+  const expandedEnvelope = {
+    ...sourceContract,
+    providerRows: sourceContract.providerRows + 1,
+    rejectedRows: sourceContract.rejectedRows + 1,
+    noTradeRows: sourceContract.noTradeRows + 1,
+    rejectedRowsSha256: stableSha256(expandedNoTradeRows),
+  }
+  const envelopeDriftAdapter = createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    runtimeSnapshot: postCommitSnapshot,
+    now: () => postCommitNow,
+    refreshOfficialSource: async () => ({
+      rows: officialRows,
+      rejectedRows: expandedNoTradeRows,
+      contract: expandedEnvelope,
+      proof: {
+        ...sourceProof(postCommitNow),
+        providerRows: expandedEnvelope.providerRows,
+        rejectedRows: expandedEnvelope.rejectedRows,
+        noTradeRows: expandedEnvelope.noTradeRows,
+        rejectedRowsSha256: expandedEnvelope.rejectedRowsSha256,
+      },
+    }),
+  }).forward
+  await envelopeDriftAdapter.revalidatePlan(context)
+  await assert.rejects(
+    envelopeDriftAdapter.renewRuntimeSnapshotAfterBackup(context),
+    /provider_envelope_changed:expectedProvider=.*:observedProvider=/,
+  )
+
   const expectCreateBackupFailure = async (mutate: (candidate: JpOhlcvRepairExecutionPlan) => void, pattern: RegExp) => {
     const candidate = structuredClone(plan)
     mutate(candidate)

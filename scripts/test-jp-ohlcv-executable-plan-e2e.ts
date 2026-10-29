@@ -34,6 +34,7 @@ import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 import { runJpOhlcvProductionRepair } from '@/lib/jp-ohlcv-repair-runner'
 import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
+import type { JQuantsRejectedDailyRowEvidence } from '@/lib/jquants'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
@@ -142,6 +143,28 @@ function officialRows(): JpOfficialOhlcvValue[] {
     })
   }
   return [...required.values()].sort((left, right) => left.ticker.localeCompare(right.ticker))
+}
+
+function noTradeRows(): JQuantsRejectedDailyRowEvidence[] {
+  return Array.from({ length: 224 }, (_, index) => ({
+    code: `N${String(index).padStart(4, '0')}`,
+    date: TARGET_DATE,
+    reason: 'ALL_OHLCV_FIELDS_NULL',
+    adjustmentFactor: 1,
+    upperLimit: 0,
+    lowerLimit: 0,
+    open: null,
+    high: null,
+    low: null,
+    close: null,
+    volume: null,
+    value: null,
+    adjustedOpen: null,
+    adjustedHigh: null,
+    adjustedLow: null,
+    adjustedClose: null,
+    adjustedVolume: null,
+  }))
 }
 
 function existingRows(official: JpOfficialOhlcvValue[]): JpOhlcvValue[] {
@@ -268,23 +291,35 @@ function writeDerivedFixtureScript(): string {
   return file
 }
 
-function fakeWriterDriver(writer: ReturnType<typeof service>): WriterHoldDriver {
-  let loaded = true
+function fakeWriterDriver(
+  writers: ReturnType<typeof service>[],
+  initiallyLoaded: ReadonlySet<string>,
+): WriterHoldDriver {
+  const loaded = new Map(writers.map((writer) => [writer.label, initiallyLoaded.has(writer.label)]))
   let now = Date.now()
-  const observed = (): WriterRuntimeIdentity => ({
+  const writerFor = (label: string) => {
+    const writer = writers.find((candidate) => candidate.label === label)
+    if (!writer) throw new Error(`fixture_writer_unknown:${label}`)
+    return writer
+  }
+  const observed = (label: string): WriterRuntimeIdentity => {
+    const writer = writerFor(label)
+    const active = loaded.get(label) === true
+    return {
     label: writer.label,
     definitionSha256: writer.definitionSha256,
     program: writer.program,
-    loaded,
+    loaded: active,
     disabled: false,
-    instances: loaded ? 1 : 0,
+    instances: active ? 1 : 0,
     pid: null,
     processGroupId: null,
-  })
+    }
+  }
   return {
-    observe: async () => observed(),
-    bootout: async () => { loaded = false },
-    bootstrap: async () => { loaded = true },
+    observe: async (label) => observed(label),
+    bootout: async (label) => { loaded.set(label, false) },
+    bootstrap: async (label) => { loaded.set(label, true) },
     processGroupAlive: async () => false,
     sleep: async (milliseconds) => { now += milliseconds },
     now: () => now,
@@ -309,7 +344,16 @@ async function main(): Promise<void> {
   assert.equal(isHealthyJpOhlcvRepairResponseBody('{"status":"healthy"}'), true)
   assert.equal(isHealthyJpOhlcvRepairResponseBody('{"status":"unhealthy"}'), false)
   assert.equal(isHealthyJpOhlcvRepairResponseBody('not healthy'), false)
+  const orchestratorSource = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/orchestrate-jp-ohlcv-production-repair.ts'),
+    'utf8',
+  )
+  const preHoldSourceCheck = orchestratorSource.indexOf('const preHoldOfficial = await fetchCurrentOfficial()')
+  const writerDriverCreation = orchestratorSource.indexOf('const driver = createLaunchdWriterHoldDriver')
+  assert.ok(preHoldSourceCheck >= 0 && writerDriverCreation > preHoldSourceCheck,
+    'provider-envelope validation must complete before writer hold driver creation')
   const official = officialRows()
+  const rejectedNoTrade = noTradeRows()
   const existing = existingRows(official)
   assert.equal(official.length, 4_218)
   assert.equal(existing.length, 151)
@@ -317,7 +361,12 @@ async function main(): Promise<void> {
   const scope = buildJpOhlcvMissingOnlyRepairScope({ plan: dryRun, approvedConflictTickers: ['1447', '2164'] })
   assert.equal(scope.status, 'READY')
   assert.equal(scope.missingRows.length, 4_067)
-  initializeDatabase(existing)
+  const alreadySatisfied = scope.missingRows
+    .filter((row) => !['1306', '7003'].includes(row.ticker))
+    .slice(0, 6)
+    .map(({ adjustmentFactor: _factor, ...row }) => row)
+  const existingAtExecution = [...existing, ...alreadySatisfied]
+  initializeDatabase(existingAtExecution)
   const beforeDb = new DatabaseSync(databasePath, { readOnly: true })
   const beforeRows = exactDateRows(beforeDb)
   const beforeRowsSha256 = stableSha256(beforeRows)
@@ -341,7 +390,11 @@ async function main(): Promise<void> {
   const baselineLineage = { ...lineage, repairStatus: 'BASELINE' as const }
   writeJson(sourcePointer, { version: 1, generation: 'jp-source-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
   writeJson(servingPointer, { version: 1, generation: 'jp-serving-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
-  const writer = service('com.stockboard.fixture-writer', 'WRITER')
+  const writers = Array.from({ length: 16 }, (_, index) => service(
+    `com.stockboard.fixture-writer-${String(index + 1).padStart(2, '0')}`,
+    'WRITER',
+  ))
+  const loadedWriterLabels = new Set(writers.slice(0, 13).map((writer) => writer.label))
   const web = service('com.stockboard.fixture-web', 'READ_SERVICE')
   const analog = service('com.stockboard.fixture-analog', 'READ_SERVICE')
   writeJson(`${serviceSnapshotPath}.fixture-runtime.json`, {
@@ -408,7 +461,7 @@ async function main(): Promise<void> {
       servingGenerationPointer: servingPointer,
       triggerRepairEvidencePath,
       serviceSnapshotPath,
-      writerServices: [writer],
+      writerServices: writers,
       readServices: [web, analog],
       healthUrls: { web: webHealth.url, analog: analogHealth.url },
       requiredTickers: ['1306', '7003'],
@@ -701,13 +754,13 @@ async function main(): Promise<void> {
         version: 1,
         endpoint: '/v2/equities/bars/daily',
         requestedDate: TARGET_DATE,
-        providerRows: official.length,
+        providerRows: official.length + rejectedNoTrade.length,
         acceptedRows: official.length,
-        rejectedRows: 0,
-        noTradeRows: 0,
+        rejectedRows: rejectedNoTrade.length,
+        noTradeRows: rejectedNoTrade.length,
         unexpectedRejectedRows: 0,
         contentSha256: scope.officialSha256,
-        rejectedRowsSha256: stableSha256([]),
+        rejectedRowsSha256: stableSha256(rejectedNoTrade),
         rejectionPolicy: 'ALLOW_ONLY_ALL_OHLCV_FIELDS_NULL',
       },
       preservedConflictsSha256: scope.preservedConflictsSha256,
@@ -746,21 +799,45 @@ async function main(): Promise<void> {
       officialSourceProof: {
         requestedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
-        providerRows: official.length,
+        providerRows: official.length + rejectedNoTrade.length,
         acceptedRows: official.length,
-        rejectedRows: 0,
-        noTradeRows: 0,
+        rejectedRows: rejectedNoTrade.length,
+        noTradeRows: rejectedNoTrade.length,
         unexpectedRejectedRows: 0,
         contentSha256: scope.officialSha256,
-        rejectedRowsSha256: stableSha256([]),
+        rejectedRowsSha256: stableSha256(rejectedNoTrade),
       },
       officialSourceContract: approval.officialSourceContract,
     })
-    const adapters = createJpOhlcvCommandAdapters({ approval, plan, runtimeSnapshot })
+    const adapters = createJpOhlcvCommandAdapters({
+      approval,
+      plan,
+      runtimeSnapshot,
+      refreshOfficialSource: async () => {
+        const at = new Date()
+        return {
+          rows: official,
+          rejectedRows: rejectedNoTrade,
+          contract: approval.officialSourceContract,
+          proof: {
+            requestedAt: at.toISOString(),
+            completedAt: at.toISOString(),
+            providerRows: official.length + rejectedNoTrade.length,
+            acceptedRows: official.length,
+            rejectedRows: rejectedNoTrade.length,
+            noTradeRows: rejectedNoTrade.length,
+            unexpectedRejectedRows: 0,
+            contentSha256: scope.officialSha256,
+            rejectedRowsSha256: stableSha256(rejectedNoTrade),
+          },
+        }
+      },
+    })
     const paths = { stateDirectory, journal: path.join(stateDirectory, 'repair-journal.json'), lock: path.join(stateDirectory, 'repair.lock') }
+    let committedJournalPath = ''
     const orchestration = await runJpOhlcvMaintenanceOrchestrator({
       config,
-      driver: fakeWriterDriver(writer),
+      driver: fakeWriterDriver(writers, loadedWriterLabels),
       assertOnlyApprovedReaderHandles: async () => undefined,
       runTransaction: async (assertWriterHoldValid) => {
         await assertWriterHoldValid()
@@ -772,6 +849,10 @@ async function main(): Promise<void> {
           adapter: adapters.forward,
           transactionId: 'fixture-e2e-success',
         })
+        committedJournalPath = result.archivedJournal
+        assert.equal(result.approvedRepairKeys, 4_067)
+        assert.equal(result.alreadySatisfiedExact, 6)
+        assert.equal(result.insertedRows, 4_061)
         return { status: result.status, archivedJournal: result.archivedJournal, transactionId: 'fixture-e2e-success' }
       },
       assertCommittedState: async () => {
@@ -782,7 +863,48 @@ async function main(): Promise<void> {
       },
     })
     assert.equal(orchestration.result.status, 'COMMITTED')
-    assert.deepEqual(orchestration.writerHold.restoredLabels, [writer.label])
+    const committedJournal = JSON.parse(fs.readFileSync(committedJournalPath, 'utf8')) as {
+      evidence: {
+        RUNTIME_SNAPSHOT_RENEWED: {
+          providerRows: number
+          acceptedRows: number
+          rejectedRows: number
+          noTradeRows: number
+          unexpectedRejectedRows: number
+          evidencePath: string
+          evidenceFileSha256: string
+        }
+        DATA_COMMITTING: {
+          approvedMissingRows: number
+          alreadySatisfiedExactRows: number
+          residualMissingRows: number
+        }
+      }
+    }
+    assert.deepEqual(committedJournal.evidence.DATA_COMMITTING, {
+      approvedMissingRows: 4_067,
+      alreadySatisfiedExactRows: 6,
+      residualMissingRows: 4_061,
+      missingRows: 4_061,
+      missingRowsSha256: stableSha256(scope.missingRows.filter((row) => (
+        !alreadySatisfied.some((satisfied) => satisfied.ticker === row.ticker && satisfied.date === row.date)
+      ))),
+    })
+    assert.deepEqual({
+      providerRows: committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.providerRows,
+      acceptedRows: committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.acceptedRows,
+      rejectedRows: committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.rejectedRows,
+      noTradeRows: committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.noTradeRows,
+      unexpectedRejectedRows: committedJournal.evidence.RUNTIME_SNAPSHOT_RENEWED.unexpectedRejectedRows,
+    }, {
+      providerRows: 4_442,
+      acceptedRows: 4_218,
+      rejectedRows: 224,
+      noTradeRows: 224,
+      unexpectedRejectedRows: 0,
+    })
+    assert.deepEqual(orchestration.writerHold.restoredLabels, writers.slice(0, 13).map((writer) => writer.label).reverse())
+    assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, writers.slice(13).map((writer) => writer.label))
     assert.equal(fs.existsSync(path.join(backupDirectory, 'fixture-e2e-success.sqlite-wal')), false)
     assert.equal(fs.existsSync(path.join(backupDirectory, 'fixture-e2e-success.sqlite-shm')), false)
 
@@ -871,8 +993,10 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({
       status: 'PASS',
       officialRows: 4_218,
-      insertedRows: 4_067,
-      preservedExistingRows: 151,
+      approvedRows: 4_067,
+      alreadySatisfiedRows: 6,
+      insertedRows: 4_061,
+      preservedExistingRows: 157,
       preservedConflicts: ['1447', '2164'],
       sourceGeneration: config.sourceGenerationAfter,
       servingGeneration: config.servingGenerationAfter,

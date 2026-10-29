@@ -18,10 +18,20 @@ import type {
 } from '@/lib/jp-ohlcv-repair-runner'
 import type { JpOhlcvRepairApproval, JpOhlcvRepairRollbackApproval } from '@/lib/jp-ohlcv-production-repair'
 import {
+  assertJpOhlcvRuntimeSnapshotPreinsertBudget,
+  assertJpOhlcvRuntimeSnapshotRenewal,
   assertJpOhlcvRuntimeSnapshotUnchanged,
   captureJpOhlcvRuntimeSnapshot,
+  type JpOhlcvOfficialSourceProof,
   type JpOhlcvRuntimeSnapshot,
 } from '@/lib/jp-ohlcv-runtime-snapshot'
+import {
+  assertJQuantsRejectedDailyRowEvidence,
+  fetchJQuantsDailyByDateWithEvidence,
+  jQuantsDailyByDateSourceContract,
+  type JQuantsDailyByDateSourceContract,
+  type JQuantsRejectedDailyRowEvidence,
+} from '@/lib/jquants'
 import {
   assertJpOhlcvRepairExecutionActive,
   clearActiveStageProcess,
@@ -95,6 +105,28 @@ function sha256File(file: string): string {
     fs.closeSync(descriptor)
   }
   return hash.digest('hex')
+}
+
+function atomicJson(file: string, payload: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const temporary = `${file}.tmp-${process.pid}-${crypto.randomUUID()}`
+  const descriptor = fs.openSync(temporary, 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify(payload, null, 2)}\n`)
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  fs.renameSync(temporary, file)
+  const directory = fs.openSync(path.dirname(file), 'r')
+  try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
+}
+
+type JpOhlcvOfficialSourceRefresh = {
+  rows: JpOfficialOhlcvValue[]
+  rejectedRows: JQuantsRejectedDailyRowEvidence[]
+  proof: JpOhlcvOfficialSourceProof
+  contract: JQuantsDailyByDateSourceContract
 }
 
 function stageFailureDetail(value: string): string {
@@ -454,9 +486,33 @@ export function createJpOhlcvCommandAdapters(input: {
   plan: JpOhlcvRepairExecutionPlan
   rollbackApproval?: JpOhlcvRepairRollbackApproval
   runtimeSnapshot?: JpOhlcvRuntimeSnapshot
+  now?: () => Date
+  refreshOfficialSource?: (targetDate: string) => Promise<JpOhlcvOfficialSourceRefresh>
 }): { forward: JpOhlcvRepairAdapter; rollback: JpOhlcvRepairRollbackAdapter } {
   assertPlan(input)
   let verifiedScope: JpOhlcvRuntimeRepairScope | null = null
+  let activeRuntimeSnapshot = input.runtimeSnapshot ?? null
+  const now = input.now ?? (() => new Date())
+  const refreshOfficialSource = input.refreshOfficialSource ?? (async (targetDate) => {
+    const evidence = await fetchJQuantsDailyByDateWithEvidence(targetDate, { timeoutMs: 2 * 60_000 })
+    const contract = jQuantsDailyByDateSourceContract(evidence)
+    return {
+      rows: evidence.rows,
+      rejectedRows: evidence.rejectedRowEvidence,
+      contract,
+      proof: {
+        requestedAt: evidence.requestedAt,
+        completedAt: evidence.completedAt,
+        providerRows: evidence.providerRows,
+        acceptedRows: evidence.acceptedRows,
+        rejectedRows: evidence.rejectedRows,
+        noTradeRows: evidence.noTradeRows,
+        unexpectedRejectedRows: evidence.unexpectedRejectedRows,
+        contentSha256: evidence.contentSha256,
+        rejectedRowsSha256: evidence.rejectedRowsSha256,
+      },
+    }
+  })
   const acquireWriterLock = async (context: JpOhlcvRepairExecutionContext) => {
     const { acquireUpdateLock, EXCLUSIVE_UPDATE_JOB_TYPES } = await import('@/lib/server/update-lock')
     const lock = await acquireUpdateLock(
@@ -496,18 +552,121 @@ export function createJpOhlcvCommandAdapters(input: {
       return evidence
     },
     revalidatePlan: async () => {
-      if (!input.runtimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      if (!activeRuntimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      const checkedAt = now()
       const current = captureJpOhlcvRuntimeSnapshot({
         databasePath: input.approval.databaseRealpath,
-        configurationSha256: input.runtimeSnapshot.configurationSha256,
+        configurationSha256: activeRuntimeSnapshot.configurationSha256,
         approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
-        officialSourceProof: input.runtimeSnapshot.officialSourceProof,
-        officialSourceContract: input.runtimeSnapshot.officialSourceContract,
+        officialSourceProof: activeRuntimeSnapshot.officialSourceProof,
+        officialSourceContract: activeRuntimeSnapshot.officialSourceContract,
+        now: checkedAt,
       })
-      assertJpOhlcvRuntimeSnapshotUnchanged({ sealed: input.runtimeSnapshot, current, stage: 'pre_backup' })
+      assertJpOhlcvRuntimeSnapshotUnchanged({
+        sealed: activeRuntimeSnapshot,
+        current,
+        stage: 'pre_backup',
+        now: checkedAt,
+      })
       verifiedScope = current.runtimeScope
       return verifiedScope
+    },
+    renewRuntimeSnapshotAfterBackup: async (context) => {
+      if (!activeRuntimeSnapshot || !verifiedScope) throw new Error('repair_runtime_snapshot_required')
+      const refreshedSource = await refreshOfficialSource(input.approval.targetDate)
+      assertJQuantsRejectedDailyRowEvidence(refreshedSource.rejectedRows, refreshedSource.contract)
+      if (stableSha256(refreshedSource.contract) !== stableSha256(input.approval.officialSourceContract)) {
+        throw new Error(
+          `repair_runtime_snapshot_renewal_provider_envelope_changed:expectedProvider=`
+          + `${input.approval.officialSourceContract.providerRows}:observedProvider=${refreshedSource.contract.providerRows}:`
+          + `expectedAccepted=${input.approval.officialSourceContract.acceptedRows}:`
+          + `observedAccepted=${refreshedSource.contract.acceptedRows}:expectedRejected=`
+          + `${input.approval.officialSourceContract.rejectedRows}:observedRejected=`
+          + `${refreshedSource.contract.rejectedRows}:expectedUnexpected=`
+          + `${input.approval.officialSourceContract.unexpectedRejectedRows}:observedUnexpected=`
+          + `${refreshedSource.contract.unexpectedRejectedRows}:expectedContent=`
+          + `${input.approval.officialSourceContract.contentSha256}:observedContent=`
+          + `${refreshedSource.contract.contentSha256}:expectedRejectedHash=`
+          + `${input.approval.officialSourceContract.rejectedRowsSha256}:observedRejectedHash=`
+          + `${refreshedSource.contract.rejectedRowsSha256}`,
+        )
+      }
+      const renewedAt = now()
+      const renewed = captureJpOhlcvRuntimeSnapshot({
+        databasePath: input.approval.databaseRealpath,
+        configurationSha256: activeRuntimeSnapshot.configurationSha256,
+        approvalScope: input.plan.approvalScope,
+        officialRows: refreshedSource.rows,
+        officialSourceProof: refreshedSource.proof,
+        officialSourceContract: refreshedSource.contract,
+        now: renewedAt,
+      })
+      assertJpOhlcvRuntimeSnapshotRenewal({
+        previous: activeRuntimeSnapshot,
+        renewed,
+        now: renewedAt,
+      })
+      assertJpOhlcvRuntimeSnapshotPreinsertBudget({ snapshot: renewed, now: renewedAt })
+      if (stableSha256(renewed.runtimeScope) !== stableSha256(verifiedScope)) {
+        throw new Error(
+          `repair_runtime_snapshot_renewal_scope_changed:expected=${stableSha256(verifiedScope)}:`
+          + `observed=${stableSha256(renewed.runtimeScope)}`,
+        )
+      }
+      const evidencePath = path.join(
+        input.approval.stateDirectory,
+        `runtime-snapshot-renewed-${context.transactionId}.json`,
+      )
+      atomicJson(evidencePath, {
+        version: 1,
+        transactionId: context.transactionId,
+        renewedAt: renewed.capturedAt,
+        snapshot: renewed,
+        rejectedRows: refreshedSource.rejectedRows,
+      })
+      activeRuntimeSnapshot = renewed
+      verifiedScope = renewed.runtimeScope
+      return {
+        runtimeScope: renewed.runtimeScope,
+        snapshotSha256: renewed.snapshotSha256,
+        capturedAt: renewed.capturedAt,
+        expiresAt: renewed.expiresAt,
+        officialSourceProofSha256: renewed.officialSourceProofSha256,
+        officialSourceContractSha256: renewed.officialSourceContractSha256,
+        providerRows: renewed.officialSourceProof.providerRows,
+        acceptedRows: renewed.officialSourceProof.acceptedRows,
+        rejectedRows: renewed.officialSourceProof.rejectedRows,
+        noTradeRows: renewed.officialSourceProof.noTradeRows,
+        unexpectedRejectedRows: renewed.officialSourceProof.unexpectedRejectedRows,
+        evidencePath,
+        evidenceFileSha256: sha256File(evidencePath),
+      }
+    },
+    assertPreinsertRuntimeSnapshot: async () => {
+      if (!activeRuntimeSnapshot || !verifiedScope) throw new Error('repair_runtime_snapshot_required')
+      const checkedAt = now()
+      const current = captureJpOhlcvRuntimeSnapshot({
+        databasePath: input.approval.databaseRealpath,
+        configurationSha256: activeRuntimeSnapshot.configurationSha256,
+        approvalScope: input.plan.approvalScope,
+        officialRows: input.plan.officialRows,
+        officialSourceProof: activeRuntimeSnapshot.officialSourceProof,
+        officialSourceContract: activeRuntimeSnapshot.officialSourceContract,
+        now: checkedAt,
+      })
+      assertJpOhlcvRuntimeSnapshotUnchanged({
+        sealed: activeRuntimeSnapshot,
+        current,
+        stage: 'post_read_service_hold',
+        now: checkedAt,
+      })
+      return {
+        snapshotSha256: activeRuntimeSnapshot.snapshotSha256,
+        checkedAt: checkedAt.toISOString(),
+        expiresAt: activeRuntimeSnapshot.expiresAt,
+        remainingValidityMs: Date.parse(activeRuntimeSnapshot.expiresAt) - checkedAt.getTime(),
+      }
     },
     holdReadServices: async (context) => {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
@@ -518,19 +677,22 @@ export function createJpOhlcvCommandAdapters(input: {
       if (!verifiedScope || stableSha256(verifiedScope) !== stableSha256(scope)) {
         throw new Error('repair_insert_scope_not_revalidated')
       }
-      if (!input.runtimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      if (!activeRuntimeSnapshot) throw new Error('repair_runtime_snapshot_required')
+      const checkedAt = now()
       const beforeInsertSnapshot = captureJpOhlcvRuntimeSnapshot({
         databasePath: input.approval.databaseRealpath,
-        configurationSha256: input.runtimeSnapshot.configurationSha256,
+        configurationSha256: activeRuntimeSnapshot.configurationSha256,
         approvalScope: input.plan.approvalScope,
         officialRows: input.plan.officialRows,
-        officialSourceProof: input.runtimeSnapshot.officialSourceProof,
-        officialSourceContract: input.runtimeSnapshot.officialSourceContract,
+        officialSourceProof: activeRuntimeSnapshot.officialSourceProof,
+        officialSourceContract: activeRuntimeSnapshot.officialSourceContract,
+        now: checkedAt,
       })
       assertJpOhlcvRuntimeSnapshotUnchanged({
-        sealed: input.runtimeSnapshot,
+        sealed: activeRuntimeSnapshot,
         current: beforeInsertSnapshot,
         stage: 'pre_insert',
+        now: checkedAt,
       })
       const { client } = await import('@/lib/db/client')
       const transaction = await client.transaction('write')
