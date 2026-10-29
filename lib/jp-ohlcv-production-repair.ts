@@ -114,8 +114,7 @@ function recordedRowAccounting(journal: JpOhlcvRepairJournal | null): Record<str
   const verified = journal.evidence.DATA_VERIFIED as Record<string, unknown> | undefined
   if (!committing && !committed && !verified) return null
   const numberOrNull = (value: unknown): number | null => {
-    const parsed = typeof value === 'number' ? value : Number(value)
-    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
   }
   const approvedMissingRows = numberOrNull(committing?.approvedMissingRows)
   const alreadySatisfiedExactRows = numberOrNull(committing?.alreadySatisfiedExactRows)

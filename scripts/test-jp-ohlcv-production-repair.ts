@@ -1058,6 +1058,16 @@ for (const [name, override, expectedStage] of [
       note: 'Recorded journal evidence only. Revalidate the database and generations before recovery or operator action.',
     },
   )
+  const terminalPath = (inspection.lastTerminalTransaction as { path: string }).path
+  const malformed = JSON.parse(fs.readFileSync(terminalPath, 'utf8'))
+  malformed.evidence.DATA_VERIFIED.missingRows = null
+  fs.writeFileSync(terminalPath, `${JSON.stringify(malformed, null, 2)}\n`)
+  const malformedInspection = inspectJpOhlcvProductionRepair(repairPaths)
+  const malformedAccounting = (malformedInspection.lastTerminalTransaction as {
+    rowAccounting: { remainingMissingRows: number | null; accountingConsistent: boolean | null }
+  }).rowAccounting
+  assert.equal(malformedAccounting.remainingMissingRows, null)
+  assert.equal(malformedAccounting.accountingConsistent, null)
 }
 
 {
