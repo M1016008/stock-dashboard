@@ -107,6 +107,42 @@ export type JpOhlcvRepairJournal = {
   }
 }
 
+function recordedRowAccounting(journal: JpOhlcvRepairJournal | null): Record<string, unknown> | null {
+  if (!journal) return null
+  const committing = journal.evidence.DATA_COMMITTING as Record<string, unknown> | undefined
+  const committed = journal.evidence.DATA_COMMITTED as Record<string, unknown> | undefined
+  const verified = journal.evidence.DATA_VERIFIED as Record<string, unknown> | undefined
+  if (!committing && !committed && !verified) return null
+  const numberOrNull = (value: unknown): number | null => {
+    const parsed = typeof value === 'number' ? value : Number(value)
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+  }
+  const approvedMissingRows = numberOrNull(committing?.approvedMissingRows)
+  const alreadySatisfiedExactRows = numberOrNull(committing?.alreadySatisfiedExactRows)
+  const residualMissingRows = numberOrNull(committing?.residualMissingRows)
+  const insertedRows = numberOrNull(committed?.insertedRows)
+  const remainingMissingRows = numberOrNull(verified?.missingRows)
+  const complete = approvedMissingRows !== null
+    && alreadySatisfiedExactRows !== null
+    && residualMissingRows !== null
+    && insertedRows !== null
+    && remainingMissingRows !== null
+  return {
+    status: journal.stage === 'COMMITTED' ? 'RECORDED_COMMITTED' : 'RECORDED_UNVERIFIED',
+    approvedMissingRows,
+    alreadySatisfiedExactRows,
+    residualMissingRows,
+    insertedRows,
+    remainingMissingRows,
+    accountingConsistent: complete
+      ? approvedMissingRows === alreadySatisfiedExactRows + insertedRows
+        && residualMissingRows === insertedRows
+        && remainingMissingRows === 0
+      : null,
+    note: 'Recorded journal evidence only. Revalidate the database and generations before recovery or operator action.',
+  }
+}
+
 export type JpOhlcvRepairStaleProcessRecovery = {
   pid: number
   processGroupId: number
@@ -676,6 +712,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
         allProtectedPaths: journal.protectedPaths,
       } : null,
       preservedConflicts: journal?.preservedConflicts ?? null,
+      rowAccounting: recordedRowAccounting(journal),
       parseFailure: journalParseFailure,
     } : null,
     transactionMatches,
@@ -691,6 +728,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       sourceGeneration: terminal.journal?.sourceGeneration ?? null,
       servingGeneration: terminal.journal?.servingGeneration ?? null,
       preservedConflicts: terminal.journal?.preservedConflicts ?? null,
+      rowAccounting: recordedRowAccounting(terminal.journal),
       dayFullyRepaired: terminal.journal?.preservedConflicts
         ? terminal.journal.preservedConflicts.tickers.length === 0
         : null,

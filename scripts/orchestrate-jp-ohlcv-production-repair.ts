@@ -416,6 +416,7 @@ async function main(): Promise<void> {
     preservedConflicts: config.preservedConflictTickers,
     unresolvedConflictCount: config.preservedConflictTickers.length,
     dataQualityStatus: 'MISSING_ROWS_REPAIRED_EXISTING_CONFLICTS_HOLD',
+    existingRowsEvidenceKind: operatorConfig.existingEvidence.kind,
     dayFullyRepaired: false,
     derivedDataNote: finalEvidence.insertedRows === 0
       ? 'All approved missing keys were already present with exact sealed official values. No OHLCV row was inserted; generation publication and derived serving rebuild were still verified. Preserved conflicts retain their pre-repair values.'
@@ -457,7 +458,9 @@ function holdClass(error: unknown): HoldClass {
     || message.includes('approved_key_official_value_changed')) return 'SOURCE_REVISED'
   const summaryStart = message.indexOf('repair_runtime_snapshot_scope_hold:')
   if (summaryStart >= 0) {
-    const encoded = message.slice(summaryStart + 'repair_runtime_snapshot_scope_hold:'.length)
+    const encoded = message
+      .slice(summaryStart + 'repair_runtime_snapshot_scope_hold:'.length)
+      .split(/\r?\n/, 1)[0]
     try {
       const parsed = JSON.parse(encoded) as { holdClass?: unknown }
       if (parsed.holdClass === 'PRICE_CONFLICT') return 'PRICE_CONFLICT'
@@ -511,6 +514,7 @@ main().catch(async (error) => {
     productionMutationState: operatorMutationState,
     error: redactedError(error),
     holdClass: holdClass(error),
+    existingRowsEvidenceKind: operatorConfig?.existingEvidence.kind ?? null,
     intendedScope: operatorConfig ? {
       approvedRepairKeys: operatorConfig.repairScope.missingRows,
       approvedExistingRows: operatorConfig.repairScope.existingRows,

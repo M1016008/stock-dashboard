@@ -237,13 +237,15 @@ export function assertJpOhlcvRuntimeSnapshot(input: {
   const proofCompleted = Date.parse(snapshot.officialSourceProof.completedAt)
   if (!Number.isFinite(proofRequested) || !Number.isFinite(proofCompleted)
     || proofRequested > proofCompleted || proofCompleted > captured
-    || captured - proofCompleted > JP_OHLCV_RUNTIME_SNAPSHOT_TTL_MS
     || snapshot.officialSourceProof.providerRows !== snapshot.officialRows
     || snapshot.officialSourceProof.acceptedRows !== snapshot.officialRows
     || snapshot.officialSourceProof.rejectedRows !== 0
     || !/^[a-f0-9]{64}$/.test(snapshot.officialSourceProof.contentSha256)
     || snapshot.officialSourceProofSha256 !== stableSha256(snapshot.officialSourceProof)) {
     throw new Error('repair_runtime_snapshot_official_source_proof_invalid')
+  }
+  if (captured - proofCompleted > JP_OHLCV_RUNTIME_SNAPSHOT_TTL_MS) {
+    throw new Error(`repair_runtime_snapshot_expired:${input.stage ?? 'unspecified'}:official_source_proof`)
   }
   if (snapshot.sourceWatermark.latestRunId <= 0
     || snapshot.sourceWatermark.latestPublishableRunId !== snapshot.sourceWatermark.latestRunId

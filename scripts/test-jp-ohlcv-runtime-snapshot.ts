@@ -196,6 +196,21 @@ assert.throws(() => assertJpOhlcvRuntimeSnapshot({
   now: new Date('2026-10-29T00:15:00.001Z'),
 }), /runtime_snapshot_expired/)
 
+const staleProofCapturedAt = new Date('2026-10-29T01:00:00.000Z')
+const staleProofAt = new Date(staleProofCapturedAt.getTime() - 900_001)
+const staleOfficialProof = captureJpOhlcvRuntimeSnapshot({
+  databasePath,
+  configurationSha256: 'a'.repeat(64),
+  approvalScope,
+  officialRows: official,
+  officialSourceProof: sourceProof(staleProofAt),
+  now: staleProofCapturedAt,
+})
+assert.throws(() => assertJpOhlcvRuntimeSnapshot({
+  snapshot: staleOfficialProof,
+  now: staleProofCapturedAt,
+}), /runtime_snapshot_expired/)
+
 const sealedAt = new Date()
 const sealed = captureJpOhlcvRuntimeSnapshot({
   databasePath,

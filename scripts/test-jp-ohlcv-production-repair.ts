@@ -1045,6 +1045,19 @@ for (const [name, override, expectedStage] of [
     (inspection.lastTerminalTransaction as { preservedConflicts: { tickers: string[] } }).preservedConflicts.tickers,
     ['1447'],
   )
+  assert.deepEqual(
+    (inspection.lastTerminalTransaction as { rowAccounting: Record<string, unknown> }).rowAccounting,
+    {
+      status: 'RECORDED_COMMITTED',
+      approvedMissingRows: 2,
+      alreadySatisfiedExactRows: 0,
+      residualMissingRows: 2,
+      insertedRows: 2,
+      remainingMissingRows: 0,
+      accountingConsistent: true,
+      note: 'Recorded journal evidence only. Revalidate the database and generations before recovery or operator action.',
+    },
+  )
 }
 
 {
