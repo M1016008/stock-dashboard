@@ -345,6 +345,11 @@ export class WebAnalogReleaseTransaction {
     this.update('COMMITTED')
     const archived = `${this.paths.journal}.committed-${this.transactionId}`
     renameAndSync(this.paths.journal, archived)
+    // These are the generation older than the newly preserved rollback. They
+    // are no longer recoverable state after COMMITTED and must not pollute the
+    // next release baseline.
+    removeIfExists(this.retiredArtifact())
+    removeIfExists(this.retiredRuntime())
     removeIfExists(this.paths.lock)
     syncDirectory(this.paths.releaseRoot)
     syncDirectory(path.dirname(this.paths.lock))

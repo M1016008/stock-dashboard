@@ -47,7 +47,7 @@
     "test:sma-dynamics-daily-scenario": "tsx scripts/test-sma-dynamics-daily-scenario.ts",
     "test:sma-dynamics:all": "npm run test:sma-dynamics-polish && npm run test:sma-dynamics && npm run test:sma-dynamics-timeframes && npm run test:sma-dynamics-lab && npm run test:sma-dynamics-scenario && npm run test:sma-dynamics-solver-ux && npm run test:sma-dynamics-scope && npm run test:sma-dynamics-insight && npm run test:sma-dynamics-ui && npm run test:sma-dynamics-preview-isolation && npm run test:sma-dynamics-scenario-evidence && npm run test:sma-dynamics-link && npm run test:sma-dynamics-crossing && npm run test:sma-dynamics-shape-ui && npm run test:sma-dynamics-daily-scenario",
     "release:web-analog-only": "tsx scripts/deploy-web-analog-only.ts",
-    "test:web-analog-release": "tsx scripts/test-web-analog-release.ts && tsx scripts/test-sma-release-preflight.ts && tsx scripts/test-sma-release-transaction.ts",
+    "test:web-analog-release": "tsx scripts/test-web-analog-release.ts && tsx scripts/test-sma-release-preflight.ts && tsx scripts/test-sma-release-transaction.ts && tsx scripts/test-sma-release-root-baseline.ts",
     "benchmark:sma-dynamics-release": "tsx scripts/benchmark-sma-dynamics-release.ts",
     "release:sma-manifest": "tsx scripts/create-sma-release-manifest.ts",
     "test:two-year-chart": "tsx scripts/test-two-year-candles.ts && tsx scripts/test-two-year-line-registry.ts && tsx scripts/test-two-year-line-search.ts && tsx scripts/test-two-year-line-display.ts",

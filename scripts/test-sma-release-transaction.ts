@@ -107,6 +107,7 @@ if (process.argv[2] === '--crash-child') {
   assert.equal(path.resolve(run.root, fs.readlinkSync(run.paths.runtimePrevious)), run.oldRuntime)
   assert.equal(fs.existsSync(run.paths.journal), false)
   assert.equal(fs.existsSync(run.paths.lock), false)
+  assert.equal(fs.readdirSync(run.root).some((name) => name.includes('.retired-')), false)
   assert.ok(fs.readdirSync(run.root).some((name) => name.startsWith('.sma-release-journal.json.committed-')))
   fs.rmSync(run.root, { recursive: true })
 }
