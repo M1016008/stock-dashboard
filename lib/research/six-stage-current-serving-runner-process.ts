@@ -15,7 +15,8 @@ function processGroupExists(pid: number): boolean {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH' || code === 'EPERM') return false
     throw error
   }
 }
