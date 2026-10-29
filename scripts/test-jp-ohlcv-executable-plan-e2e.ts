@@ -14,16 +14,23 @@ import {
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  assertJpOhlcvProductionExecutionConfiguration,
+  assertJpOhlcvProductionExecutionPackage,
   databaseFileObjectIdentitySha256,
   databaseSchemaIdentitySha256,
   executionConfigurationSha256,
   isHealthyJpOhlcvRepairResponseBody,
+  assertJpOhlcvStorageIdentityEnvironment,
+  jpOhlcvStorageIdentityEnvironment,
+  jpOhlcvStorageIdentitySha256,
   sha256File,
   type JpOhlcvProductionExecutionConfiguration,
+  type JpOhlcvProductionExecutionPackage,
 } from '@/lib/jp-ohlcv-executable-plan'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
 import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-orchestrator'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 import { runJpOhlcvProductionRepair } from '@/lib/jp-ohlcv-repair-runner'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
@@ -356,6 +363,13 @@ async function main(): Promise<void> {
       stateDirectory,
       backupDirectory,
       minimumPostBackupFreeBytes: 1_000_000,
+      storageIdentity: {
+        mountPath: fs.realpathSync(root),
+        volumeUuid: 'fixture-volume-identity',
+        minFreeBytes: 0,
+        minFreePercent: 0,
+      },
+      storageIdentitySha256: '',
       sqliteExecutable,
       sqliteExecutableSha256: sha256File(sqliteExecutable),
       sourceGenerationBefore: 'jp-source-before',
@@ -396,8 +410,187 @@ async function main(): Promise<void> {
       lineage,
       ...createIntegrationIdentity(),
     }
+    config.storageIdentitySha256 = jpOhlcvStorageIdentitySha256(config.storageIdentity)
     fs.mkdirSync(stateDirectory, { recursive: true })
     writeJson(configPath, config)
+    const storageEnvironment = jpOhlcvStorageIdentityEnvironment(config)
+    assert.doesNotThrow(() => assertJpOhlcvStorageIdentityEnvironment(config, storageEnvironment))
+    assert.throws(
+      () => assertJpOhlcvStorageIdentityEnvironment(config, { ...storageEnvironment, STOCK_DATA_VOLUME_UUID: 'tampered-volume' }),
+      /repair_storage_identity_environment_mismatch:STOCK_DATA_VOLUME_UUID/,
+    )
+    assert.throws(
+      () => assertJpOhlcvStorageIdentityEnvironment(config, { ...storageEnvironment, STOCK_DATA_MOUNT_PATH: undefined }),
+      /repair_storage_identity_environment_mismatch:STOCK_DATA_MOUNT_PATH/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({ ...config, storageIdentity: undefined as never }),
+      /repair_execution_configuration_storage_identity_invalid/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({
+        ...config,
+        nestedCommands: config.nestedCommands.map((command, index) => index === 0
+          ? { ...command, environment: { ...command.environment, STOCK_DATA_VOLUME_UUID: 'override' } }
+          : command),
+      }),
+      /repair_nested_command_storage_environment_forbidden/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({ ...config, storageIdentitySha256: '0'.repeat(64) }),
+      /repair_execution_configuration_storage_identity_invalid/,
+    )
+    const unrelatedMount = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jp-ohlcv-unrelated-mount-')))
+    const unrelatedIdentity = { ...config.storageIdentity, mountPath: unrelatedMount }
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({
+        ...config,
+        storageIdentity: unrelatedIdentity,
+        storageIdentitySha256: jpOhlcvStorageIdentitySha256(unrelatedIdentity),
+      }),
+      /repair_execution_configuration_storage_identity_invalid/,
+    )
+    const productionThresholdConfig = {
+      ...config,
+      mode: 'PRODUCTION' as const,
+      minimumPostBackupFreeBytes: 150_000_000_000,
+    }
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({
+        ...productionThresholdConfig,
+        storageIdentity: { ...config.storageIdentity, minFreeBytes: 50 * 1024 ** 3 - 1 },
+        storageIdentitySha256: jpOhlcvStorageIdentitySha256({
+          ...config.storageIdentity,
+          minFreeBytes: 50 * 1024 ** 3 - 1,
+        }),
+      }),
+      /repair_execution_configuration_storage_identity_invalid/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionConfiguration({
+        ...productionThresholdConfig,
+        storageIdentity: { ...config.storageIdentity, minFreeBytes: 50 * 1024 ** 3, minFreePercent: 4 },
+        storageIdentitySha256: jpOhlcvStorageIdentitySha256({
+          ...config.storageIdentity,
+          minFreeBytes: 50 * 1024 ** 3,
+          minFreePercent: 4,
+        }),
+      }),
+      /repair_execution_configuration_storage_identity_invalid/,
+    )
+    const packageApprovalPath = path.join(root, 'package-approval.json')
+    const packagePlanPath = path.join(root, 'package-plan.json')
+    const packageOrchestratorPath = path.join(root, 'package-orchestrator.mjs')
+    writeJson(packageApprovalPath, { fixture: 'approval' })
+    writeJson(packagePlanPath, { fixture: 'plan' })
+    fs.writeFileSync(packageOrchestratorPath, 'export {}\n')
+    const fixturePackage: JpOhlcvProductionExecutionPackage = {
+      version: 1,
+      targetDate: TARGET_DATE,
+      preparedAt: new Date().toISOString(),
+      configurationPath: configPath,
+      configurationSha256: sha256File(configPath),
+      approvalBundlePath: packageApprovalPath,
+      approvalBundleSha256: sha256File(packageApprovalPath),
+      executionPlanPath: packagePlanPath,
+      executionPlanSha256: sha256File(packagePlanPath),
+      orchestratorScriptPath: packageOrchestratorPath,
+      orchestratorScriptSha256: sha256File(packageOrchestratorPath),
+      runner: {
+        id: 'production-repair-runner',
+        executable: process.execPath,
+        executableSha256: sha256File(process.execPath),
+        args: ['fixture-runner', '--execution-configuration', configPath],
+        workingDirectory: root,
+        sealedFiles: [{ path: configPath, sha256: sha256File(configPath) }],
+        timeoutMs: 60_000,
+        environment: {
+          ...storageEnvironment,
+          STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
+        },
+        rollback: false,
+        publishesServingGeneration: false,
+      },
+      productionMutationAuthorized: false,
+      requiredApproval: 'EXACT_PACKAGE_AND_REPAIR_APPROVAL_HASHES',
+    }
+    assert.doesNotThrow(() => assertJpOhlcvProductionExecutionPackage(fixturePackage))
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionPackage({
+        ...fixturePackage,
+        runner: {
+          ...fixturePackage.runner,
+          environment: { ...fixturePackage.runner.environment, STOCK_DATA_VOLUME_UUID: 'tampered' },
+        },
+      }),
+      /repair_storage_identity_environment_mismatch:STOCK_DATA_VOLUME_UUID/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionPackage({
+        ...fixturePackage,
+        runner: {
+          ...fixturePackage.runner,
+          environment: {
+            ...fixturePackage.runner.environment,
+            STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: '0'.repeat(64),
+          },
+        },
+      }),
+      /repair_execution_package_runner_configuration_hash_contract_invalid/,
+    )
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionPackage({
+        ...fixturePackage,
+        runner: { ...fixturePackage.runner, args: ['fixture-runner'] },
+      }),
+      /repair_execution_package_runner_configuration_contract_invalid/,
+    )
+    const staleConfigPath = path.join(root, 'stale-execution-config.json')
+    const { storageIdentity: _storageIdentity, storageIdentitySha256: _storageIdentitySha256, ...staleConfig } = config
+    writeJson(staleConfigPath, staleConfig)
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionPackage({
+        ...fixturePackage,
+        configurationPath: staleConfigPath,
+        configurationSha256: sha256File(staleConfigPath),
+        runner: {
+          ...fixturePackage.runner,
+          args: ['fixture-runner', '--execution-configuration', staleConfigPath],
+          sealedFiles: [{ path: staleConfigPath, sha256: sha256File(staleConfigPath) }],
+          environment: {
+            ...fixturePackage.runner.environment,
+            STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(staleConfigPath),
+          },
+        },
+      }),
+      /repair_execution_package_stale_storage_identity_regenerate_required/,
+    )
+    const restoreIdentity = {
+      version: 1 as const,
+      configurationSha256: stableSha256(config),
+      transactionId: 'fixture-rollback',
+      databaseRealpath: config.databaseRealpath,
+      backupRealpath: path.join(root, 'backup.sqlite'),
+      backupSha256: 'a'.repeat(64),
+      temporaryPath: `${config.databaseRealpath}.restore-fixture-rollback`,
+      failedPath: `${config.databaseRealpath}.failed-fixture-rollback`,
+    }
+    assert.doesNotThrow(() => assertIncompleteJpOhlcvRestoreState({
+      ...restoreIdentity,
+      phase: 'PRIMARY_ARCHIVED',
+      updatedAt: new Date().toISOString(),
+    }, restoreIdentity))
+    assert.throws(() => assertIncompleteJpOhlcvRestoreState({
+      ...restoreIdentity,
+      phase: 'COMPLETED',
+      updatedAt: new Date().toISOString(),
+    }, restoreIdentity), /repair_incomplete_restore_state_exact_identity_required/)
+    assert.throws(() => assertIncompleteJpOhlcvRestoreState({
+      ...restoreIdentity,
+      transactionId: 'different-transaction',
+      phase: 'PRIMARY_ARCHIVED',
+      updatedAt: new Date().toISOString(),
+    }, restoreIdentity), /repair_incomplete_restore_state_exact_identity_required/)
     execFileSync(process.execPath, [
       tsxExecutable,
       stageScript,
@@ -414,6 +607,7 @@ async function main(): Promise<void> {
         STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
         STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
         STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+        ...storageEnvironment,
       },
     })
     assert.equal(fs.existsSync(serviceSnapshotPath), true, 'pre-existing service snapshot is retained for idempotent hold')
@@ -483,9 +677,8 @@ async function main(): Promise<void> {
       STOCKBOARD_DB_PATH: databasePath,
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
       SKIP_SCHEMA_ENSURE: '1',
+      ...storageEnvironment,
     })
-    delete process.env.STOCK_DATA_MOUNT_PATH
-    delete process.env.STOCK_DATA_VOLUME_UUID
     delete process.env.STOCK_DATA_FAILED_SAFE_PATH
     const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
     const adapters = createJpOhlcvCommandAdapters({ approval, plan })

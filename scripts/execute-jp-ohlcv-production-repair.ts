@@ -14,6 +14,14 @@ import {
   type JpOhlcvRepairRollbackApproval,
 } from '@/lib/jp-ohlcv-production-repair'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
+import {
+  assertJpOhlcvProductionExecutionConfiguration,
+  assertJpOhlcvStorageIdentityEnvironment,
+  sha256File,
+  type JpOhlcvProductionExecutionConfiguration,
+} from '@/lib/jp-ohlcv-executable-plan'
+import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
+import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 
 type ApprovalBundle = {
   version: 1
@@ -49,23 +57,81 @@ async function main(): Promise<void> {
   if (process.env.USE_LOCAL_DB !== '1') throw new Error('repair_use_local_db_required')
   const bundle = readJson<ApprovalBundle>(absolute('--approval-bundle'))
   const plan = readJson<JpOhlcvRepairExecutionPlan>(absolute('--execution-plan'))
+  const configurationPath = absolute('--execution-configuration')
+  const config = readJson<JpOhlcvProductionExecutionConfiguration>(configurationPath)
+  const rollbackApprovalFile = value('--rollback-approval')
+  const cleanupApprovalFile = value('--prewrite-cleanup-approval')
+  const resumeServicesApprovalFile = value('--resume-services-approval')
+  if ([rollbackApprovalFile, cleanupApprovalFile, resumeServicesApprovalFile].filter(Boolean).length > 1) {
+    throw new Error('repair_recovery_mode_conflict')
+  }
+  let rollbackApproval: JpOhlcvRepairRollbackApproval | null = null
+  let expectedRollbackSha: string | null = null
+  if (rollbackApprovalFile) {
+    if (!path.isAbsolute(rollbackApprovalFile)) throw new Error('--rollback-approval_absolute_path_required')
+    rollbackApproval = readJson<JpOhlcvRepairRollbackApproval>(path.resolve(rollbackApprovalFile))
+    expectedRollbackSha = value('--rollback-approval-sha256')
+    if (!expectedRollbackSha || repairRollbackApprovalSha256(rollbackApproval) !== expectedRollbackSha) {
+      throw new Error('repair_rollback_exact_approval_hash_required')
+    }
+  }
   if (bundle.version !== 1 || bundle.executionStatus !== 'HOLD_PENDING_EXPLICIT_APPROVAL') {
     throw new Error('repair_approval_bundle_invalid')
   }
   if (repairApprovalSha256(bundle.approval) !== bundle.approvalSha256) {
     throw new Error('repair_approval_bundle_hash_mismatch')
   }
+  const rollbackRestoreState = rollbackApproval
+    ? path.join(config.stateDirectory, `rollback-restore-${rollbackApproval.transactionId}.json`)
+    : null
+  let allowMissingDatabaseForRestore = false
+  if (!fs.existsSync(config.databaseRealpath)) {
+    if (!rollbackApproval || !rollbackRestoreState || !fs.existsSync(rollbackRestoreState)) {
+      throw new Error('repair_database_missing_without_incomplete_restore_journal')
+    }
+    const restoreState = readJson<unknown>(rollbackRestoreState)
+    assertIncompleteJpOhlcvRestoreState(restoreState, {
+      version: 1,
+      configurationSha256: stableSha256(config),
+      transactionId: rollbackApproval.transactionId,
+      databaseRealpath: config.databaseRealpath,
+      backupRealpath: rollbackApproval.backupRealpath,
+      backupSha256: rollbackApproval.backupSha256,
+      temporaryPath: `${config.databaseRealpath}.restore-${rollbackApproval.transactionId}`,
+      failedPath: `${config.databaseRealpath}.failed-${rollbackApproval.transactionId}`,
+    })
+    allowMissingDatabaseForRestore = true
+  }
+  assertJpOhlcvProductionExecutionConfiguration(config, { allowMissingDatabaseForRestore })
+  assertJpOhlcvStorageIdentityEnvironment(config, process.env)
+  if (process.env.STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256 !== sha256File(configurationPath)) {
+    throw new Error('repair_execution_configuration_exact_hash_environment_required')
+  }
+  if (config.databaseRealpath !== bundle.approval.databaseRealpath
+    || config.databaseIdentitySha256 !== bundle.approval.databaseIdentitySha256
+    || config.sourceGenerationBefore !== bundle.approval.sourceGenerationBefore
+    || config.sourceGenerationAfter !== bundle.approval.sourceGenerationAfter
+    || config.servingGenerationBefore !== bundle.approval.servingGenerationBefore
+    || config.servingGenerationAfter !== bundle.approval.servingGenerationAfter) {
+    throw new Error('repair_execution_configuration_approval_mismatch')
+  }
   if (process.env.STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED !== bundle.approvalSha256) {
     throw new Error('repair_exact_approval_environment_required')
   }
   const configuredDatabase = process.env.STOCKBOARD_DB_PATH
   if (!configuredDatabase || !path.isAbsolute(configuredDatabase)
-    || fs.realpathSync(configuredDatabase) !== bundle.approval.databaseRealpath) {
+    || path.resolve(configuredDatabase) !== bundle.approval.databaseRealpath
+    || (fs.existsSync(configuredDatabase)
+      && fs.realpathSync(configuredDatabase) !== bundle.approval.databaseRealpath)) {
     throw new Error('repair_database_environment_identity_mismatch')
   }
-  const { isCloudDatabase, localDbPath } = await import('@/lib/db/client')
-  if (isCloudDatabase || fs.realpathSync(localDbPath) !== bundle.approval.databaseRealpath) {
-    throw new Error('repair_local_database_client_identity_mismatch')
+  if (fs.existsSync(configuredDatabase)) {
+    const { isCloudDatabase, localDbPath } = await import('@/lib/db/client')
+    if (isCloudDatabase || fs.realpathSync(localDbPath) !== bundle.approval.databaseRealpath) {
+      throw new Error('repair_local_database_client_identity_mismatch')
+    }
+  } else if (!allowMissingDatabaseForRestore) {
+    throw new Error('repair_database_missing_without_restore_journal')
   }
   const paths: JpOhlcvRepairPaths = {
     stateDirectory: bundle.approval.stateDirectory,
@@ -76,12 +142,6 @@ async function main(): Promise<void> {
   const { installJpOhlcvRepairSignalHandlers, assertJpOhlcvRepairExecutionActive } = await import('@/lib/jp-ohlcv-repair-process-supervisor')
   const uninstallSignalHandlers = installJpOhlcvRepairSignalHandlers()
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
-  const rollbackApprovalFile = value('--rollback-approval')
-  const cleanupApprovalFile = value('--prewrite-cleanup-approval')
-  const resumeServicesApprovalFile = value('--resume-services-approval')
-  if ([rollbackApprovalFile, cleanupApprovalFile, resumeServicesApprovalFile].filter(Boolean).length > 1) {
-    throw new Error('repair_recovery_mode_conflict')
-  }
   try {
     if (cleanupApprovalFile) {
       if (!path.isAbsolute(cleanupApprovalFile)) throw new Error('--prewrite-cleanup-approval_absolute_path_required')
@@ -103,20 +163,14 @@ async function main(): Promise<void> {
       return
     }
     if (rollbackApprovalFile) {
-      if (!path.isAbsolute(rollbackApprovalFile)) throw new Error('--rollback-approval_absolute_path_required')
-      const rollbackApproval = readJson<JpOhlcvRepairRollbackApproval>(path.resolve(rollbackApprovalFile))
-      const expectedRollbackSha = value('--rollback-approval-sha256')
-      if (!expectedRollbackSha || repairRollbackApprovalSha256(rollbackApproval) !== expectedRollbackSha) {
-        throw new Error('repair_rollback_exact_approval_hash_required')
-      }
       const { runJpOhlcvProductionRepairRollback } = await import('@/lib/jp-ohlcv-repair-runner')
-      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, rollbackApproval })
+      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, rollbackApproval: rollbackApproval! })
       executionEntered = true
       const result = await runJpOhlcvProductionRepairRollback({
         approval: bundle.approval,
         approvalSha256: bundle.approvalSha256,
-        rollbackApproval,
-        rollbackApprovalSha256: expectedRollbackSha,
+        rollbackApproval: rollbackApproval!,
+        rollbackApprovalSha256: expectedRollbackSha!,
         paths,
         adapter: adapters.rollback,
       })

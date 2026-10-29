@@ -5,10 +5,12 @@ import { pathToFileURL } from 'node:url'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import {
   assertJpOhlcvProductionExecutionConfiguration,
+  assertJpOhlcvStorageIdentityEnvironment,
   databaseFileObjectIdentitySha256,
   databaseSchemaIdentitySha256,
   executionConfigurationSha256,
   isHealthyJpOhlcvRepairResponseBody,
+  jpOhlcvStorageIdentityEnvironment,
   sha256File,
   type JpOhlcvLaunchdServiceIdentity,
   type JpOhlcvNestedCommand,
@@ -70,6 +72,7 @@ assertJpOhlcvProductionExecutionConfiguration(config, {
     && !fs.existsSync(config.databaseRealpath)
     && fs.existsSync(restoreStateForMissingDatabase),
 })
+assertJpOhlcvStorageIdentityEnvironment(config, process.env)
 const configSha256 = executionConfigurationSha256(config, {
   allowMissingDatabaseForRestore: operation === 'restore-backup'
     && !fs.existsSync(config.databaseRealpath)
@@ -670,6 +673,7 @@ async function runNested(command: JpOhlcvNestedCommand): Promise<void> {
         STOCKBOARD_DB_PATH: process.env.STOCKBOARD_DB_PATH,
         SKIP_SCHEMA_ENSURE: '1',
         ...environment,
+        ...jpOhlcvStorageIdentityEnvironment(config),
         STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
         STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: transactionId!,
         STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: process.env.STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH!,

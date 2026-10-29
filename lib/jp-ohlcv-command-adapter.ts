@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { client, closeLocalClientBeforeExternalWriter, ensureReady } from '@/lib/db/client'
 import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
@@ -17,7 +16,6 @@ import type {
   JpOhlcvRepairRollbackAdapter,
 } from '@/lib/jp-ohlcv-repair-runner'
 import type { JpOhlcvRepairApproval, JpOhlcvRepairRollbackApproval } from '@/lib/jp-ohlcv-production-repair'
-import { acquireUpdateLock, EXCLUSIVE_UPDATE_JOB_TYPES } from '@/lib/server/update-lock'
 import {
   assertJpOhlcvRepairExecutionActive,
   clearActiveStageProcess,
@@ -34,6 +32,11 @@ const RESERVED_STAGE_ENVIRONMENT = new Set([
   'TURSO_DATABASE_URL',
   'TURSO_AUTH_TOKEN',
   'STOCKBOARD_DB_PATH',
+  'EXTERNAL_STORAGE_REQUIRED',
+  'STOCK_DATA_MOUNT_PATH',
+  'STOCK_DATA_VOLUME_UUID',
+  'STOCK_DATA_MIN_FREE_BYTES',
+  'STOCK_DATA_MIN_FREE_PERCENT',
   'STOCKBOARD_JP_OHLCV_REPAIR_OWNER',
   'STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID',
   'STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH',
@@ -374,6 +377,7 @@ async function runJsonStage<T>(
 }
 
 async function currentRows(date: string): Promise<JpOhlcvValue[]> {
+  const { client, ensureReady } = await import('@/lib/db/client')
   await ensureReady()
   const result = await client.execute({
     sql: 'SELECT ticker, date, open, high, low, close, volume FROM ohlcv_daily WHERE date = ? ORDER BY ticker',
@@ -432,6 +436,7 @@ export function createJpOhlcvCommandAdapters(input: {
   assertPlan(input)
   let verifiedScope: JpOhlcvMissingOnlyRepairScope | null = null
   const acquireWriterLock = async (context: JpOhlcvRepairExecutionContext) => {
+    const { acquireUpdateLock, EXCLUSIVE_UPDATE_JOB_TYPES } = await import('@/lib/server/update-lock')
     const lock = await acquireUpdateLock(
       'jp_ohlcv_gap_repair',
       12 * 60 * 60,
@@ -445,6 +450,7 @@ export function createJpOhlcvCommandAdapters(input: {
   const forward: JpOhlcvRepairAdapter = {
     acquireWriterLock,
     createAndVerifyConsistentBackup: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const evidence = await runJsonStage<{
         databaseRealpath: string
@@ -476,6 +482,7 @@ export function createJpOhlcvCommandAdapters(input: {
       return verifiedScope
     },
     holdReadServices: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       return runJsonStage(input.plan.commands.holdReadServices, context)
     },
@@ -483,6 +490,7 @@ export function createJpOhlcvCommandAdapters(input: {
       if (!verifiedScope || stableSha256(verifiedScope) !== stableSha256(scope)) {
         throw new Error('repair_insert_scope_not_revalidated')
       }
+      const { client } = await import('@/lib/db/client')
       const transaction = await client.transaction('write')
       let insertedRows = 0
       try {
@@ -534,6 +542,7 @@ export function createJpOhlcvCommandAdapters(input: {
       }
     },
     rebuildDerivedServing: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
       for (const command of input.plan.commands.rebuildDerivedServing) {
@@ -577,10 +586,12 @@ export function createJpOhlcvCommandAdapters(input: {
       return evidence
     },
     holdReadServices: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       return runJsonStage(input.plan.commands.holdReadServices, context)
     },
     restoreBackupAtomically: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const evidence = await runJsonStage<{
         databaseRealpath: string
@@ -599,6 +610,7 @@ export function createJpOhlcvCommandAdapters(input: {
       return evidence
     },
     rebuildOriginalDerivedServing: async (context) => {
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
       for (const command of input.plan.commands.rebuildOriginalDerivedServing) {

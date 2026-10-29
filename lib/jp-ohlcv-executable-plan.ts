@@ -44,6 +44,13 @@ export type JpOhlcvProductionExecutionConfiguration = {
   stateDirectory: string
   backupDirectory: string
   minimumPostBackupFreeBytes: number
+  storageIdentity: {
+    mountPath: string
+    volumeUuid: string
+    minFreeBytes: number
+    minFreePercent: number
+  }
+  storageIdentitySha256: string
   sqliteExecutable: string
   sqliteExecutableSha256: string
   sourceGenerationBefore: string
@@ -146,6 +153,35 @@ const SHA256 = /^[a-f0-9]{64}$/
 const GENERATION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const GIT_OBJECT = /^[a-f0-9]{40,64}$/
+
+export function jpOhlcvStorageIdentitySha256(
+  storageIdentity: JpOhlcvProductionExecutionConfiguration['storageIdentity'],
+): string {
+  return stableSha256(storageIdentity)
+}
+
+export function jpOhlcvStorageIdentityEnvironment(
+  config: JpOhlcvProductionExecutionConfiguration,
+): Record<string, string> {
+  if (!config.storageIdentity) throw new Error('repair_execution_configuration_storage_identity_missing_regenerate_package')
+  return {
+    EXTERNAL_STORAGE_REQUIRED: config.mode === 'PRODUCTION' ? 'true' : 'false',
+    STOCK_DATA_MOUNT_PATH: config.storageIdentity.mountPath,
+    STOCK_DATA_VOLUME_UUID: config.storageIdentity.volumeUuid,
+    STOCK_DATA_MIN_FREE_BYTES: String(config.storageIdentity.minFreeBytes),
+    STOCK_DATA_MIN_FREE_PERCENT: String(config.storageIdentity.minFreePercent),
+  }
+}
+
+export function assertJpOhlcvStorageIdentityEnvironment(
+  config: JpOhlcvProductionExecutionConfiguration,
+  environment: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): void {
+  const expected = jpOhlcvStorageIdentityEnvironment(config)
+  for (const [key, value] of Object.entries(expected)) {
+    if (environment[key] !== value) throw new Error(`repair_storage_identity_environment_mismatch:${key}`)
+  }
+}
 
 export function sha256File(file: string): string {
   const hash = crypto.createHash('sha256')
@@ -320,6 +356,26 @@ export function assertJpOhlcvProductionExecutionConfiguration(
     || config.minimumPostBackupFreeBytes < (config.mode === 'PRODUCTION' ? 150_000_000_000 : 1_000_000)) {
     throw new Error('repair_execution_configuration_storage_reserve_invalid')
   }
+  const storageMount = path.resolve(config.storageIdentity?.mountPath ?? '')
+  const storageRelative = path.relative(storageMount, config.databaseRealpath)
+  if (!config.storageIdentity
+    || !path.isAbsolute(config.storageIdentity.mountPath)
+    || !fs.existsSync(config.storageIdentity.mountPath)
+    || fs.realpathSync(config.storageIdentity.mountPath) !== config.storageIdentity.mountPath
+    || !/^[A-Za-z0-9][A-Za-z0-9-]{7,127}$/.test(config.storageIdentity.volumeUuid)
+    || !Number.isSafeInteger(config.storageIdentity.minFreeBytes)
+    || config.storageIdentity.minFreeBytes < (config.mode === 'PRODUCTION' ? 50 * 1024 ** 3 : 0)
+    || !Number.isFinite(config.storageIdentity.minFreePercent)
+    || config.storageIdentity.minFreePercent < (config.mode === 'PRODUCTION' ? 5 : 0)
+    || config.storageIdentity.minFreePercent > 100
+    || !storageRelative
+    || storageRelative === '..'
+    || storageRelative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(storageRelative)
+    || config.storageIdentitySha256 !== jpOhlcvStorageIdentitySha256(config.storageIdentity)
+    || !SHA256.test(config.storageIdentitySha256)) {
+    throw new Error('repair_execution_configuration_storage_identity_invalid')
+  }
   for (const file of [
     config.sourceGenerationPointer,
     config.servingGenerationPointer,
@@ -418,6 +474,15 @@ export function assertJpOhlcvProductionExecutionConfiguration(
     if (Object.keys(command.environment).some((key) => /TOKEN|SECRET|PASSWORD|AUTH|COOKIE/i.test(key))) {
       throw new Error(`repair_nested_command_secret_environment_forbidden:${command.id}`)
     }
+    if (Object.keys(command.environment).some((key) => [
+      'EXTERNAL_STORAGE_REQUIRED',
+      'STOCK_DATA_MOUNT_PATH',
+      'STOCK_DATA_VOLUME_UUID',
+      'STOCK_DATA_MIN_FREE_BYTES',
+      'STOCK_DATA_MIN_FREE_PERCENT',
+    ].includes(key))) {
+      throw new Error(`repair_nested_command_storage_environment_forbidden:${command.id}`)
+    }
   }
   if (!config.nestedCommands.some((command) => command.publishesServingGeneration && !command.rollback)
     || !config.nestedCommands.some((command) => command.publishesServingGeneration && command.rollback)) {
@@ -459,6 +524,19 @@ export function assertJpOhlcvProductionExecutionPackage(
   }
   for (const sealed of bundle.runner.sealedFiles) {
     assertAbsoluteRegular(sealed.path, sealed.sha256, 'repair_execution_package_runner_sealed')
+  }
+  const config = JSON.parse(fs.readFileSync(bundle.configurationPath, 'utf8')) as JpOhlcvProductionExecutionConfiguration
+  if (!config.storageIdentity || !config.storageIdentitySha256) {
+    throw new Error('repair_execution_package_stale_storage_identity_regenerate_required')
+  }
+  assertJpOhlcvStorageIdentityEnvironment(config, bundle.runner.environment)
+  if (bundle.runner.environment.STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256
+    !== bundle.configurationSha256) {
+    throw new Error('repair_execution_package_runner_configuration_hash_contract_invalid')
+  }
+  const configurationFlag = bundle.runner.args.indexOf('--execution-configuration')
+  if (configurationFlag < 0 || bundle.runner.args[configurationFlag + 1] !== bundle.configurationPath) {
+    throw new Error('repair_execution_package_runner_configuration_contract_invalid')
   }
 }
 

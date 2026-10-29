@@ -7,11 +7,13 @@ import {
   databaseFileObjectIdentitySha256,
   databaseSchemaIdentitySha256,
   executionConfigurationSha256,
+  jpOhlcvStorageIdentitySha256,
   sha256File,
   type JpOhlcvLaunchdServiceIdentity,
   type JpOhlcvNestedCommand,
   type JpOhlcvProductionExecutionConfiguration,
 } from '@/lib/jp-ohlcv-executable-plan'
+import { inspectWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import {
   buildJpOhlcvBackfillPlan,
   buildJpOhlcvMissingOnlyRepairScope,
@@ -116,6 +118,15 @@ const stateDirectory = absolute('--state-directory')
 const backupDirectory = absolute('--backup-directory')
 const output = absolute('--output')
 const evidenceDirectory = absolute('--evidence-directory')
+const storageMountInput = absolute('--stock-data-mount-path')
+if (!fs.existsSync(storageMountInput) || !fs.statSync(storageMountInput).isDirectory()) {
+  throw new Error('repair_configuration_storage_mount_directory_required')
+}
+const storageMountPath = fs.realpathSync(storageMountInput)
+const storageVolumeUuid = value('--stock-data-volume-uuid').trim()
+if (!/^[A-Za-z0-9][A-Za-z0-9-]{7,127}$/.test(storageVolumeUuid)) {
+  throw new Error('repair_configuration_storage_volume_uuid_invalid')
+}
 const webHealthUrl = optional('--web-health-url') ?? 'http://127.0.0.1:3000/api/health'
 const analogHealthUrl = optional('--analog-health-url') ?? 'http://127.0.0.1:3001/api/health'
 const integrationRoot = fs.realpathSync(process.cwd())
@@ -126,6 +137,17 @@ if (fs.existsSync(output)) throw new Error('repair_configuration_output_exists')
 if (git(integrationRoot, ['status', '--porcelain', '--untracked-files=all'])) {
   throw new Error('repair_configuration_worktree_not_clean')
 }
+const storageIdentity = {
+  mountPath: storageMountPath,
+  volumeUuid: storageVolumeUuid,
+  minFreeBytes: 50 * 1024 ** 3,
+  minFreePercent: 5,
+}
+inspectWritableTargetPath({
+  dbPath: databaseRealpath,
+  ...storageIdentity,
+  jobType: 'jp_ohlcv_gap_repair',
+})
 
 const officialInput = readJson<JpOfficialOhlcvValue[] | { rows: JpOfficialOhlcvValue[]; officialSha256?: string }>(officialRowsFile)
 const officialRows = Array.isArray(officialInput) ? officialInput : officialInput.rows
@@ -237,6 +259,8 @@ const config: JpOhlcvProductionExecutionConfiguration = {
   stateDirectory,
   backupDirectory,
   minimumPostBackupFreeBytes: 150_000_000_000,
+  storageIdentity,
+  storageIdentitySha256: jpOhlcvStorageIdentitySha256(storageIdentity),
   sqliteExecutable,
   sqliteExecutableSha256: sha256File(sqliteExecutable),
   sourceGenerationBefore,

@@ -6,6 +6,7 @@ import {
   assertJpOhlcvExecutionSourceIdentity,
   assertJpOhlcvProductionExecutionConfiguration,
   assertJpOhlcvProductionExecutionPackage,
+  assertJpOhlcvStorageIdentityEnvironment,
   executionPackageSha256,
   sha256File,
   type JpOhlcvProductionExecutionConfiguration,
@@ -21,6 +22,7 @@ import {
   createLaunchdWriterHoldDriver,
 } from '@/lib/storage/launchd-writer-hold-driver'
 import type { WriterHoldDriver } from '@/lib/storage/weekly-writer-hold'
+import { inspectWritableTargetPath } from '@/lib/storage/external-storage-guard'
 
 type OperatorPhase = 'PRE_FLIGHT' | 'WRITER_HOLD' | 'IN_TRANSACTION' | 'COMMIT_VERIFY' | 'POST_COMMIT'
 type MutationState = 'NOT_STARTED' | 'TRANSACTION_STATE_UNCERTAIN' | 'COMMIT_REPORTED' | 'COMMIT_VERIFIED'
@@ -67,6 +69,7 @@ async function runChild(
 }> {
   const command = bundle.runner
   assertJpOhlcvExecutionSourceIdentity(config)
+  assertJpOhlcvStorageIdentityEnvironment(config, command.environment)
   if (sha256File(fs.realpathSync(command.executable)) !== command.executableSha256) {
     throw new Error('repair_orchestrator_runner_executable_changed')
   }
@@ -214,6 +217,11 @@ async function main(): Promise<void> {
     throw new Error('repair_orchestrator_configuration_mismatch')
   }
   operatorConfig = config
+  inspectWritableTargetPath({
+    dbPath: config.databaseRealpath,
+    ...config.storageIdentity,
+    jobType: 'jp_ohlcv_gap_repair',
+  })
   const driver = createLaunchdWriterHoldDriver(config.writerServices.map((service) => ({
     label: service.label,
     plistPath: service.plistPath,

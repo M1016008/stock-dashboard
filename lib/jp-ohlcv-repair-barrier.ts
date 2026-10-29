@@ -126,6 +126,11 @@ export function jpOhlcvRepairOwnerEnvironment(input: {
     'USE_LOCAL_DB',
     'STOCKBOARD_DB_PATH',
     'SKIP_SCHEMA_ENSURE',
+    'EXTERNAL_STORAGE_REQUIRED',
+    'STOCK_DATA_MOUNT_PATH',
+    'STOCK_DATA_VOLUME_UUID',
+    'STOCK_DATA_MIN_FREE_BYTES',
+    'STOCK_DATA_MIN_FREE_PERCENT',
   ].reduce((environment, key) => {
     const value = process.env[key]
     if (value !== undefined) environment[key] = value
