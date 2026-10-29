@@ -32,15 +32,48 @@ type GenerationPointer = {
   }
 }
 
+type RestorePhase =
+  | 'PREPARING'
+  | 'BACKUP_STAGED'
+  | 'PRIMARY_ARCHIVED'
+  | 'BACKUP_ACTIVATED'
+  | 'SOURCE_GENERATION_RESTORED'
+  | 'COMPLETED'
+
+type RestoreState = {
+  version: 1
+  configurationSha256: string
+  transactionId: string
+  databaseRealpath: string
+  backupRealpath: string
+  backupSha256: string
+  temporaryPath: string
+  failedPath: string
+  phase: RestorePhase
+  updatedAt: string
+}
+
 const operation = value('--operation')
 const configFile = absolute('--config')
 const config = readJson<JpOhlcvProductionExecutionConfiguration>(configFile)
-assertJpOhlcvProductionExecutionConfiguration(config)
-const configSha256 = executionConfigurationSha256(config)
 const transactionId = process.env.STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID
 if (!transactionId || process.env.STOCKBOARD_JP_OHLCV_REPAIR_OWNER !== '1') {
   throw new Error('repair_stage_owner_environment_required')
 }
+const restoreStateForMissingDatabase = path.join(
+  config.stateDirectory,
+  `rollback-restore-${transactionId}.json`,
+)
+assertJpOhlcvProductionExecutionConfiguration(config, {
+  allowMissingDatabaseForRestore: operation === 'restore-backup'
+    && !fs.existsSync(config.databaseRealpath)
+    && fs.existsSync(restoreStateForMissingDatabase),
+})
+const configSha256 = executionConfigurationSha256(config, {
+  allowMissingDatabaseForRestore: operation === 'restore-backup'
+    && !fs.existsSync(config.databaseRealpath)
+    && fs.existsSync(restoreStateForMissingDatabase),
+})
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -167,16 +200,192 @@ function assertExactTargetRow(input: {
   }
 }
 
-function generationPointer(file: string): GenerationPointer {
+function generationPointer(file: string, expectedTransactionId?: string): GenerationPointer {
   const pointer = readJson<GenerationPointer>(file)
   const expectedStatus = pointer.sourceGeneration === config.sourceGenerationAfter ? 'REPAIRED' : 'BASELINE'
   const { repairStatus, ...pointerLineage } = pointer.lineage ?? {} as GenerationPointer['lineage']
   if (pointer.version !== 1 || !pointer.generation || !pointer.sourceGeneration
+    || !pointer.transactionId
+    || (expectedTransactionId !== undefined && pointer.transactionId !== expectedTransactionId)
     || repairStatus !== expectedStatus
     || stableSha256(pointerLineage) !== stableSha256(config.lineage)) {
     throw new Error('repair_stage_generation_pointer_invalid')
   }
   return pointer
+}
+
+function restoreStatePath(): string {
+  return path.join(config.stateDirectory, `rollback-restore-${transactionId}.json`)
+}
+
+function expectedRestoreState(input: {
+  backupRealpath: string
+  backupSha256: string
+}): Omit<RestoreState, 'phase' | 'updatedAt'> {
+  return {
+    version: 1,
+    configurationSha256: configSha256,
+    transactionId: transactionId!,
+    databaseRealpath: config.databaseRealpath,
+    backupRealpath: input.backupRealpath,
+    backupSha256: input.backupSha256,
+    temporaryPath: `${config.databaseRealpath}.restore-${transactionId}`,
+    failedPath: `${config.databaseRealpath}.failed-${transactionId}`,
+  }
+}
+
+function readRestoreState(expected: Omit<RestoreState, 'phase' | 'updatedAt'>): RestoreState | null {
+  const file = restoreStatePath()
+  if (!fs.existsSync(file)) return null
+  const state = readJson<RestoreState>(file)
+  const { phase: _phase, updatedAt: _updatedAt, ...identity } = state
+  if (stableSha256(identity) !== stableSha256(expected)
+    || !['PREPARING', 'BACKUP_STAGED', 'PRIMARY_ARCHIVED', 'BACKUP_ACTIVATED',
+      'SOURCE_GENERATION_RESTORED', 'COMPLETED'].includes(state.phase)
+    || !Number.isFinite(Date.parse(state.updatedAt))) {
+    throw new Error(`repair_restore_state_invalid:${file}`)
+  }
+  return state
+}
+
+function writeRestoreState(
+  expected: Omit<RestoreState, 'phase' | 'updatedAt'>,
+  phase: RestorePhase,
+): RestoreState {
+  const state: RestoreState = { ...expected, phase, updatedAt: new Date().toISOString() }
+  atomicJson(restoreStatePath(), state)
+  return state
+}
+
+function fixtureRestoreCrash(point: string): void {
+  if (config.mode === 'ISOLATED_FIXTURE'
+    && process.env.STOCKBOARD_JP_OHLCV_REPAIR_TEST_RESTORE_CRASH_AT === point) {
+    throw new Error(`repair_fixture_restore_crash:${point}`)
+  }
+}
+
+function pointerMatchesRestoredSource(): boolean {
+  try {
+    const pointer = generationPointer(config.sourceGenerationPointer, transactionId)
+    return pointer.generation === config.sourceGenerationBefore
+      && pointer.sourceGeneration === config.sourceGenerationBefore
+  } catch {
+    return false
+  }
+}
+
+function assertRestoredDatabase(input: Omit<RestoreState, 'phase' | 'updatedAt'>): void {
+  if (!fs.existsSync(input.databaseRealpath)
+    || sha256File(input.databaseRealpath) !== input.backupSha256
+    || !fs.existsSync(input.failedPath)
+    || fs.existsSync(input.temporaryPath)) {
+    throw new Error(`repair_restore_activated_state_invalid:${restoreStatePath()}`)
+  }
+}
+
+function restoreBackupWithJournal(metadata: {
+  backupRealpath: string
+  backupSha256: string
+}): RestoreState {
+  const expected = expectedRestoreState(metadata)
+  let state = readRestoreState(expected)
+  if (!state) {
+    if (!fs.existsSync(expected.databaseRealpath)
+      || fs.existsSync(expected.temporaryPath)
+      || fs.existsSync(expected.failedPath)) {
+      throw new Error(`repair_restore_unjournaled_artifact_present:${restoreStatePath()}`)
+    }
+    state = writeRestoreState(expected, 'PREPARING')
+  }
+
+  if (state.phase === 'PREPARING') {
+    if (fs.existsSync(expected.failedPath)) {
+      throw new Error(`repair_restore_primary_archived_without_journal_phase:${restoreStatePath()}`)
+    }
+    if (!fs.existsSync(expected.temporaryPath)) {
+      fs.copyFileSync(expected.backupRealpath, expected.temporaryPath, fs.constants.COPYFILE_EXCL)
+    }
+    if (sha256File(expected.temporaryPath) !== expected.backupSha256) {
+      throw new Error(`repair_restore_copy_hash_mismatch:${restoreStatePath()}`)
+    }
+    state = writeRestoreState(expected, 'BACKUP_STAGED')
+    fixtureRestoreCrash('after-backup-staged')
+  }
+
+  if (state.phase === 'BACKUP_STAGED') {
+    const databaseExists = fs.existsSync(expected.databaseRealpath)
+    const temporaryExists = fs.existsSync(expected.temporaryPath)
+    const failedExists = fs.existsSync(expected.failedPath)
+    if (databaseExists && failedExists && !temporaryExists
+      && sha256File(expected.databaseRealpath) === expected.backupSha256) {
+      state = writeRestoreState(expected, 'BACKUP_ACTIVATED')
+    } else {
+      if (databaseExists && !failedExists && temporaryExists) {
+        fs.renameSync(expected.databaseRealpath, expected.failedPath)
+        fixtureRestoreCrash('after-primary-rename')
+      } else if (databaseExists || !failedExists || !temporaryExists) {
+        throw new Error(`repair_restore_archive_state_ambiguous:${restoreStatePath()}`)
+      }
+      for (const suffix of ['-wal', '-shm']) {
+        const source = `${expected.databaseRealpath}${suffix}`
+        const destination = `${expected.failedPath}${suffix}`
+        if (fs.existsSync(source) && fs.existsSync(destination)) {
+          throw new Error(`repair_restore_sidecar_state_ambiguous:${destination}`)
+        }
+        if (fs.existsSync(source)) fs.renameSync(source, destination)
+      }
+      state = writeRestoreState(expected, 'PRIMARY_ARCHIVED')
+      fixtureRestoreCrash('after-primary-archived')
+    }
+  }
+
+  if (state.phase === 'PRIMARY_ARCHIVED') {
+    if (fs.existsSync(expected.databaseRealpath) && !fs.existsSync(expected.temporaryPath)
+      && fs.existsSync(expected.failedPath)
+      && sha256File(expected.databaseRealpath) === expected.backupSha256) {
+      state = writeRestoreState(expected, 'BACKUP_ACTIVATED')
+    } else {
+      if (fs.existsSync(expected.databaseRealpath)
+        || !fs.existsSync(expected.temporaryPath)
+        || !fs.existsSync(expected.failedPath)) {
+        throw new Error(`repair_restore_activation_state_ambiguous:${restoreStatePath()}`)
+      }
+      fs.renameSync(expected.temporaryPath, expected.databaseRealpath)
+      syncDirectory(path.dirname(expected.databaseRealpath))
+      fixtureRestoreCrash('after-backup-activated')
+      assertRestoredDatabase(expected)
+      state = writeRestoreState(expected, 'BACKUP_ACTIVATED')
+    }
+  }
+
+  if (state.phase === 'BACKUP_ACTIVATED') {
+    assertRestoredDatabase(expected)
+    if (!pointerMatchesRestoredSource()) {
+      publishGeneration(config.sourceGenerationPointer, config.sourceGenerationBefore, config.sourceGenerationBefore)
+    }
+    fixtureRestoreCrash('after-source-generation-restored')
+    if (!pointerMatchesRestoredSource()) {
+      throw new Error(`repair_restore_source_generation_mismatch:${restoreStatePath()}`)
+    }
+    state = writeRestoreState(expected, 'SOURCE_GENERATION_RESTORED')
+  }
+
+  if (state.phase === 'SOURCE_GENERATION_RESTORED') {
+    assertRestoredDatabase(expected)
+    if (!pointerMatchesRestoredSource()) {
+      throw new Error(`repair_restore_source_generation_mismatch:${restoreStatePath()}`)
+    }
+    state = writeRestoreState(expected, 'COMPLETED')
+  }
+
+  if (state.phase !== 'COMPLETED') {
+    throw new Error(`repair_restore_incomplete:${restoreStatePath()}`)
+  }
+  assertRestoredDatabase(expected)
+  if (!pointerMatchesRestoredSource()) {
+    throw new Error(`repair_restore_completed_generation_mismatch:${restoreStatePath()}`)
+  }
+  return state
 }
 
 function publishGeneration(file: string, generation: string, sourceGeneration: string): GenerationPointer {
@@ -553,7 +762,7 @@ async function main(): Promise<Record<string, unknown>> {
     return { status: 'PASS', sourceGeneration: pointer.generation }
   }
   if (operation === 'verify-data-generation') {
-    const pointer = generationPointer(config.sourceGenerationPointer)
+    const pointer = generationPointer(config.sourceGenerationPointer, transactionId)
     if (pointer.generation !== config.sourceGenerationAfter) throw new Error('repair_source_generation_not_published')
     return { status: 'PASS', sourceGeneration: pointer.generation }
   }
@@ -574,8 +783,8 @@ async function main(): Promise<Record<string, unknown>> {
     const rollback = operation === 'verify-original-serving'
     const expectedSource = rollback ? config.sourceGenerationBefore : config.sourceGenerationAfter
     const expectedServing = rollback ? config.servingGenerationBefore : config.servingGenerationAfter
-    const source = generationPointer(config.sourceGenerationPointer)
-    const serving = generationPointer(config.servingGenerationPointer)
+    const source = generationPointer(config.sourceGenerationPointer, transactionId)
+    const serving = generationPointer(config.servingGenerationPointer, transactionId)
     if (source.generation !== expectedSource || serving.generation !== expectedServing
       || serving.sourceGeneration !== expectedSource) throw new Error('repair_serving_generation_mismatch')
     const expectedRows = rollback ? config.repairScope.existingRows : config.repairScope.officialRows
@@ -620,23 +829,13 @@ async function main(): Promise<Record<string, unknown>> {
   }
   if (operation === 'restore-backup') {
     const metadata = requireBackupMetadata()
-    const temporary = `${config.databaseRealpath}.restore-${transactionId}`
-    const failed = `${config.databaseRealpath}.failed-${transactionId}`
-    if (fs.existsSync(temporary) || fs.existsSync(failed)) throw new Error('repair_restore_destination_exists')
-    fs.copyFileSync(metadata.backupRealpath, temporary, fs.constants.COPYFILE_EXCL)
-    if (sha256File(temporary) !== metadata.backupSha256) throw new Error('repair_restore_copy_hash_mismatch')
-    fs.renameSync(config.databaseRealpath, failed)
-    for (const suffix of ['-wal', '-shm']) {
-      const sidecar = `${config.databaseRealpath}${suffix}`
-      if (fs.existsSync(sidecar)) fs.renameSync(sidecar, `${failed}${suffix}`)
-    }
-    fs.renameSync(temporary, config.databaseRealpath)
-    syncDirectory(path.dirname(config.databaseRealpath))
-    publishGeneration(config.sourceGenerationPointer, config.sourceGenerationBefore, config.sourceGenerationBefore)
+    const restoreState = restoreBackupWithJournal(metadata)
     return {
       databaseRealpath: config.databaseRealpath,
       databaseSha256: sha256File(config.databaseRealpath),
       sourceGeneration: config.sourceGenerationBefore,
+      restoreStatePath: restoreStatePath(),
+      restorePhase: restoreState.phase,
     }
   }
   throw new Error(`repair_stage_operation_unsupported:${operation}`)

@@ -546,6 +546,50 @@ async function main(): Promise<void> {
       adapter: adapters.forward,
       transactionId: 'fixture-e2e-success',
     }), /repair_.*(?:terminal|committed|exists|state)/i)
+
+    const restoreArgs = [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'restore-backup',
+      '--config', configPath,
+    ]
+    const restoreEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: 'test',
+      USE_LOCAL_DB: '1',
+      STOCKBOARD_DB_PATH: databasePath,
+      STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
+      STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
+      STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+    }
+    assert.throws(() => execFileSync(process.execPath, restoreArgs, {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...restoreEnvironment,
+        STOCKBOARD_JP_OHLCV_REPAIR_TEST_RESTORE_CRASH_AT: 'after-primary-archived',
+      },
+    }), /Command failed/)
+    const restoreStatePath = path.join(stateDirectory, 'rollback-restore-fixture-e2e-success.json')
+    assert.equal(JSON.parse(fs.readFileSync(restoreStatePath, 'utf8')).phase, 'PRIMARY_ARCHIVED')
+    assert.equal(fs.existsSync(databasePath), false)
+    assert.equal(fs.existsSync(`${databasePath}.restore-fixture-e2e-success`), true)
+    assert.equal(fs.existsSync(`${databasePath}.failed-fixture-e2e-success`), true)
+    const restoredOutput = execFileSync(process.execPath, restoreArgs, {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    }).trim().split('\n').at(-1)
+    const restored = JSON.parse(restoredOutput ?? '{}') as { restorePhase?: unknown; sourceGeneration?: unknown }
+    assert.equal(restored.restorePhase, 'COMPLETED')
+    assert.equal(restored.sourceGeneration, config.sourceGenerationBefore)
+    const restoredDb = new DatabaseSync(databasePath, { readOnly: true })
+    const restoredRows = exactDateRows(restoredDb)
+    restoredDb.close()
+    assert.deepEqual(restoredRows, beforeRows)
+    const restoredSource = JSON.parse(fs.readFileSync(sourcePointer, 'utf8'))
+    assert.equal(restoredSource.generation, config.sourceGenerationBefore)
+    assert.equal(restoredSource.transactionId, 'fixture-e2e-success')
     console.log(JSON.stringify({
       status: 'PASS',
       officialRows: 4_218,
@@ -558,6 +602,7 @@ async function main(): Promise<void> {
       executionConfigurationSha256: executionConfigurationSha256(config),
       backupFiles: fs.readdirSync(backupDirectory).sort(),
       duplicateExecution: 'REJECTED',
+      rollbackCrashRecovery: 'PASS',
     }))
   } finally {
     await webHealth.close()

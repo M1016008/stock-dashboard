@@ -264,14 +264,17 @@ async function executeStage(input: {
       settled = true
       if (timer) clearTimeout(timer)
       let failure = inputFailure
+      let processGroupStopped = !child.pid
       try {
         if (killPromise) await killPromise
         if (child.pid && isProcessGroupAlive(child.pid)) {
           await terminateAndWaitForProcessGroup(child.pid)
-          failure = new Error('repair_stage_command_descendants_remained')
         }
+        processGroupStopped = !child.pid || !isProcessGroupAlive(child.pid)
+        if (!processGroupStopped) failure = new Error('repair_stage_command_descendants_remained')
       } catch (error) {
         failure = error instanceof Error ? error : new Error(String(error))
+        processGroupStopped = !child.pid || !isProcessGroupAlive(child.pid)
       }
       const shutdownSignal = currentJpOhlcvRepairShutdownSignal()
       if (!failure && shutdownSignal) failure = new Error(`repair_execution_interrupted:${shutdownSignal}`)
@@ -284,8 +287,11 @@ async function executeStage(input: {
         )
       }
       try {
-        if (registered && child.pid) clearActiveStageProcess(child.pid)
-        if (recorded && child.pid) {
+        // A process group that cannot be proven stopped remains active in both
+        // the in-memory supervisor and the durable journal. Rollback recovery
+        // must then require explicit stale-process evidence after it is gone.
+        if (processGroupStopped && registered && child.pid) clearActiveStageProcess(child.pid)
+        if (processGroupStopped && recorded && child.pid) {
           input.context.recordStageProcessStopped({
             processGroupId: child.pid,
             outcome: failure?.message ?? (terminationRequested ? 'terminated' : 'exit_0'),
@@ -563,9 +569,14 @@ export function createJpOhlcvCommandAdapters(input: {
         databaseRealpath: string
         databaseSha256: string
         sourceGeneration: string
+        restoreStatePath: string
+        restorePhase: 'COMPLETED'
       }>(input.plan.commands.restoreBackup, context)
       if (fs.realpathSync(evidence.databaseRealpath) !== input.approval.databaseRealpath
-        || sha256File(evidence.databaseRealpath) !== evidence.databaseSha256) {
+        || sha256File(evidence.databaseRealpath) !== evidence.databaseSha256
+        || evidence.restorePhase !== 'COMPLETED'
+        || path.dirname(evidence.restoreStatePath) !== input.approval.stateDirectory
+        || !fs.statSync(evidence.restoreStatePath).isFile()) {
         throw new Error('repair_rollback_restored_database_identity_mismatch')
       }
       return evidence

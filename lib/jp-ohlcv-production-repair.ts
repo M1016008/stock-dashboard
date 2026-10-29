@@ -269,12 +269,24 @@ function failureCauses(error: unknown): Array<{ name: string; message: string }>
   return result
 }
 
-function holdOperatorAction(stage: JpOhlcvRepairStage): string {
+function holdOperatorAction(input: {
+  stage: JpOhlcvRepairStage
+  transactionId: string
+  databaseRealpath: string
+  stateDirectory: string
+}): string {
+  const { stage, transactionId, databaseRealpath, stateDirectory } = input
   if (['PREPARING', 'PREPARED', 'WRITER_LOCKED', 'BACKUP_VERIFIED'].includes(stage)) {
     return 'No data mutation is recorded. Preserve the lock and journal, run the read-only status command, prove the writer lock absent or expired, and obtain an exact hash-bound ARCHIVE_PREWRITE_HOLD approval. A retry is a new transaction and approval.'
   }
   if (stage === 'READ_SERVICES_RESUMING') {
     return 'The new Source and Serving generations were verified, but Web/Analog resume is uncertain. Preserve all artifacts and run status. Choose either exact hash-bound RESUME_READ_SERVICES after revalidating the promoted generation, or exact hash-bound ROLLBACK; never retry automatically.'
+  }
+  if (stage === 'COMMITTED') {
+    return 'The data, derived state, generations and read services were verified and committed, but final journal archival is incomplete. Do not retry or roll back automatically. Preserve the committed journal and lock, verify the generation pointers and service state against this transaction, and obtain an exact operator recovery approval.'
+  }
+  if (stage.startsWith('ROLLBACK_')) {
+    return `Rollback is incomplete and must not be restarted automatically. Preserve ${databaseRealpath}, ${databaseRealpath}.restore-${transactionId}, ${databaseRealpath}.failed-${transactionId}, their WAL/SHM sidecars, the verified backup, and ${path.join(stateDirectory, `rollback-restore-${transactionId}.json`)}. Keep Web/Analog and every writer held. Inspect the restore phase, hashes, Source/Serving generations and active process record; require exact stale-process evidence if present, then use an operator-approved recovery procedure for that phase.`
   }
   return 'Data or serving state may be partial and Web/Analog may be held. Preserve the database, verified backup, journal, lock and both generations; run the read-only status command and obtain an exact hash-bound rollback approval.'
 }
@@ -996,10 +1008,15 @@ export class JpOhlcvProductionRepairTransaction {
       servingGeneration: { before: this.approval.servingGenerationBefore, after: this.approval.servingGenerationAfter },
       protectedPaths: [
         this.approval.databaseRealpath,
+        `${this.approval.databaseRealpath}-wal`,
+        `${this.approval.databaseRealpath}-shm`,
+        `${this.approval.databaseRealpath}.restore-${this.transactionId}`,
+        `${this.approval.databaseRealpath}.failed-${this.transactionId}`,
         this.approval.backupDirectory,
         this.paths.stateDirectory,
         this.paths.journal,
         this.paths.lock,
+        path.join(this.paths.stateDirectory, `rollback-restore-${this.transactionId}.json`),
       ],
       preservedConflicts: {
         tickers: [...this.approval.approvedConflictTickers].sort(),
@@ -1037,7 +1054,12 @@ export class JpOhlcvProductionRepairTransaction {
       ...this.journal,
       stage: 'HOLD',
       updatedAt: new Date().toISOString(),
-      operatorAction: holdOperatorAction(originalStage),
+      operatorAction: holdOperatorAction({
+        stage: originalStage,
+        transactionId: this.transactionId,
+        databaseRealpath: this.approval.databaseRealpath,
+        stateDirectory: this.paths.stateDirectory,
+      }),
       failure: {
         name: sanitizeFailureText(error instanceof Error ? error.name : 'Error'),
         message: sanitizeFailureText(error instanceof Error ? error.message : error),

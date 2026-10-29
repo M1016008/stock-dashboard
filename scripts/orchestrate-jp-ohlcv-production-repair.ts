@@ -259,11 +259,17 @@ async function main(): Promise<void> {
         || fs.existsSync(path.join(config.stateDirectory, 'repair-journal.json'))) {
         throw new Error('repair_orchestrator_commit_state_uncertain')
       }
-      const source = readJson<{ generation?: unknown }>(config.sourceGenerationPointer)
-      const serving = readJson<{ generation?: unknown; sourceGeneration?: unknown }>(config.servingGenerationPointer)
+      const source = readJson<{ generation?: unknown; transactionId?: unknown }>(config.sourceGenerationPointer)
+      const serving = readJson<{
+        generation?: unknown
+        sourceGeneration?: unknown
+        transactionId?: unknown
+      }>(config.servingGenerationPointer)
       if (source.generation !== config.sourceGenerationAfter
+        || source.transactionId !== committed.transactionId
         || serving.generation !== config.servingGenerationAfter
-        || serving.sourceGeneration !== config.sourceGenerationAfter) {
+        || serving.sourceGeneration !== config.sourceGenerationAfter
+        || serving.transactionId !== committed.transactionId) {
         throw new Error('repair_orchestrator_committed_generation_mismatch')
       }
       const journal = readJson<{ stage?: unknown; evidence?: Record<string, unknown> }>(committed.archivedJournal)

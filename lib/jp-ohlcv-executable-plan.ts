@@ -301,11 +301,14 @@ export function assertJpOhlcvExecutionSourceIdentity(
 
 export function assertJpOhlcvProductionExecutionConfiguration(
   config: JpOhlcvProductionExecutionConfiguration,
+  options: { allowMissingDatabaseForRestore?: boolean } = {},
 ): void {
   if (config.version !== 1 || !DATE.test(config.targetDate)) throw new Error('repair_execution_configuration_invalid')
   assertJpOhlcvExecutionSourceIdentity(config)
+  const databaseExists = fs.existsSync(config.databaseRealpath)
   if (!path.isAbsolute(config.databaseRealpath)
-    || fs.realpathSync(config.databaseRealpath) !== config.databaseRealpath
+    || (!databaseExists && !options.allowMissingDatabaseForRestore)
+    || (databaseExists && fs.realpathSync(config.databaseRealpath) !== config.databaseRealpath)
     || !SHA256.test(config.databaseIdentitySha256)
     || !SHA256.test(config.databaseObjectIdentitySha256)) {
     throw new Error('repair_execution_configuration_database_invalid')
@@ -422,8 +425,11 @@ export function assertJpOhlcvProductionExecutionConfiguration(
   }
 }
 
-export function executionConfigurationSha256(config: JpOhlcvProductionExecutionConfiguration): string {
-  assertJpOhlcvProductionExecutionConfiguration(config)
+export function executionConfigurationSha256(
+  config: JpOhlcvProductionExecutionConfiguration,
+  options: { allowMissingDatabaseForRestore?: boolean } = {},
+): string {
+  assertJpOhlcvProductionExecutionConfiguration(config, options)
   return stableSha256(config)
 }
 
