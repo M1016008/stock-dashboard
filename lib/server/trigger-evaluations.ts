@@ -39,6 +39,7 @@ import {
 import type { MarketCode } from '@/lib/markets'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const DATA_GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const ALL_CANDIDATES_LIMIT = 10_000
 const MEMBER_WRITE_CHUNK = 20
 
@@ -155,6 +156,7 @@ export interface TriggerEvaluationDependencies {
   now?: () => number
   market?: MarketCode
   expectedDefinitionIdentity?: TriggerEvaluationDefinitionIdentity
+  sourceGeneration?: string
 }
 
 function matchesExpectedDefinitionIdentity(
@@ -278,7 +280,14 @@ function member(row: MemberRow): TriggerEvaluationMember {
   }
 }
 
-function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string): string {
+function runSignature(
+  definition: SavedTriggerDefinition,
+  resolvedAsOf: string,
+  sourceGeneration?: string,
+): string {
+  if (sourceGeneration && !DATA_GENERATION_PATTERN.test(sourceGeneration)) {
+    throw new SavedTriggerValidationError('sourceGeneration is invalid')
+  }
   return createHash('sha256').update(JSON.stringify({
     definitionId: definition.id,
     evaluationVersion: definition.evaluationVersion,
@@ -286,6 +295,7 @@ function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string):
     scoreVersion: definition.scoreVersion,
     evaluationConfigSignature: definition.evaluationSignature,
     resolvedAsOf,
+    ...(sourceGeneration ? { sourceGeneration } : {}),
   })).digest('hex')
 }
 
@@ -472,7 +482,7 @@ export async function evaluateSavedTriggerDefinition(
     ? await dependencies.resolveAsOf(requestedAsOf)
     : await defaultResolveAsOf(requestedAsOf, market)
   if (!resolvedAsOf) throw new TriggerDiscoveryInputError('requestedAsOf has no available market session')
-  const signature = runSignature(definition, resolvedAsOf)
+  const signature = runSignature(definition, resolvedAsOf, dependencies.sourceGeneration)
   const existing = await evaluationByRunSignature(signature)
   if (existing?.status === 'COMPLETED') {
     return {

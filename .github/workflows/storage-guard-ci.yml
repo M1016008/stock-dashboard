@@ -82,6 +82,9 @@ jobs:
       - name: Weekly backup policy and writer hold
         run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner
 
+      - name: JP OHLCV repair transaction and runtime drift
+        run: npm run test:jquants-source-contract && npm run test:jp-ohlcv-gap-repair && npm run test:jp-ohlcv-production-repair && npm run test:jp-ohlcv-runtime-snapshot && npm run test:jp-ohlcv-command-adapter && npm run test:jp-ohlcv-backup-time-budget && npm run test:jp-ohlcv-executable-plan-e2e
+
       - name: Large Holder release preflight
         run: npm run test:large-holder-release-preflight
 

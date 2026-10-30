@@ -435,6 +435,58 @@ async function main(): Promise<void> {
       [reusedDefinition.id, reusedDate],
     ))?.count), 1, 'same-day Manual and Daily runs share one immutable Evaluation')
 
+    const generationDefinition = await createDefinition('source-generation', 20, 25, 'BIWEEKLY')
+    const generationDate = `${datePrefix}16`
+    const generationRunner = (
+      definitionId: string,
+      requestedAsOf: string,
+      expectedIdentity: TriggerEvaluationDefinitionIdentity,
+      sourceGeneration?: string,
+    ) => evaluateSavedTriggerDefinition(definitionId, requestedAsOf, {
+      expectedDefinitionIdentity: expectedIdentity,
+      sourceGeneration,
+      resolveAsOf: async (date) => date,
+      discover: async (input) => discoveryResult(input.asOf, 'NEAR', false),
+    })
+    const beforeGeneration = await runDailyTriggerEvaluations(
+      {
+        requestedAsOf: generationDate,
+        sourceGeneration: 'jp-source-before',
+        forceReevaluate: true,
+      },
+      {
+        resolveDataDate: async () => generationDate,
+        listDefinitions: only([generationDefinition]),
+        evaluateDefinition: generationRunner,
+      },
+    )
+    const afterGeneration = await runDailyTriggerEvaluations(
+      {
+        requestedAsOf: generationDate,
+        sourceGeneration: 'jp-source-after',
+        forceReevaluate: true,
+      },
+      {
+        resolveDataDate: async () => generationDate,
+        listDefinitions: only([generationDefinition]),
+        evaluateDefinition: generationRunner,
+      },
+    )
+    assert.equal(afterGeneration.batch?.id, beforeGeneration.batch?.id)
+    assert.equal(afterGeneration.reusedBatch, false)
+    assert.notEqual(afterGeneration.items[0].evaluationId, beforeGeneration.items[0].evaluationId)
+    const generationEvaluations = await execAll<{ run_signature: string }>(
+      `SELECT run_signature FROM trigger_evaluations
+       WHERE definition_id=? AND resolved_as_of=? ORDER BY created_at, id`,
+      [generationDefinition.id, generationDate],
+    )
+    assert.equal(generationEvaluations.length, 2)
+    assert.notEqual(generationEvaluations[0].run_signature, generationEvaluations[1].run_signature)
+    await assert.rejects(
+      () => runDailyTriggerEvaluations({ requestedAsOf: generationDate, forceReevaluate: true }),
+      /force_reevaluate_requires_source_generation/,
+    )
+
     const concurrencyDefinition = await createDefinition('concurrency')
     let entered!: () => void
     let release!: () => void
@@ -506,6 +558,10 @@ async function main(): Promise<void> {
       lifecycle: lifecycle.batch,
       inZoneLifecycle: inZone.batch,
       reusedEvaluation: reusedItem.batch,
+      sourceGenerationReevaluation: {
+        batchId: afterGeneration.batch?.id,
+        evaluations: generationEvaluations.length,
+      },
       concurrencyGuard: true,
       dryRunPersisted: false,
       pipelineOrderVerified: true,

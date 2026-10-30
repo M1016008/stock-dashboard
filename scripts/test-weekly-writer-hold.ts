@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { withWeeklyWriterHold, WriterHoldError, type ApprovedWriterIdentity,
+import { withWeeklyWriterHold, WriterHoldError, WriterPreflightError, type ApprovedWriterIdentity,
   type WriterHoldDriver, type WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
 
 const expected: ApprovedWriterIdentity[] = [
@@ -47,6 +47,7 @@ const phaseOrder: string[] = []
 const held = await withWeeklyWriterHold({
   approved: expected,
   maximumHoldMs: 1_000,
+  restoreSloMs: 100,
   driver: normal.value,
   operation: async (assertHoldValid) => {
     await assertHoldValid()
@@ -70,18 +71,83 @@ assert.deepEqual(held.receipt.alreadyUnloadedLabels, [expected[1].label])
 assert.deepEqual(held.receipt.intentionallyDisabledLabels, [expected[2].label])
 assert.deepEqual(held.receipt.restoredLabels, [expected[0].label])
 assert.deepEqual(held.receipt.alreadyLoadedOnRestoreLabels, [])
+assert.ok(held.receipt.restoreStartedAtMs <= held.receipt.restoreCompletedAtMs)
+assert.equal(
+  held.receipt.restoreDurationMs,
+  held.receipt.restoreCompletedAtMs - held.receipt.restoreStartedAtMs,
+)
+assert.equal(held.receipt.restoreSloMs, 100)
+assert.equal(held.receipt.restoreWithinSlo, true)
 assert.equal(normal.states.get(expected[2].label)!.disabled, true)
 assert.equal(normal.states.get(expected[2].label)!.loaded, false)
 
-const failing = driver()
 await assert.rejects(() => withWeeklyWriterHold({
   approved: expected,
   maximumHoldMs: 1_000,
-  driver: failing.value,
-  operation: async () => { throw new Error('SYNC_FAILED') },
-}), /SYNC_FAILED/)
+  expectedLoadedLabels: [expected[0].label, expected[1].label],
+  expectedUnloadedLabels: [expected[2].label],
+  driver: driver().value,
+  operation: async () => undefined,
+}), (error: unknown) => {
+  assert.ok(error instanceof WriterPreflightError)
+  assert.equal(error.writerMutationAttempted, false)
+  assert.match(error.message, new RegExp(
+    `WRITER_INITIAL_STATE_MISMATCH:${expected[1].label}:expected_loaded:observed_unloaded`,
+  ))
+  return true
+})
+
+await assert.rejects(() => withWeeklyWriterHold({
+  approved: expected,
+  maximumHoldMs: 1_000,
+  expectedLoadedLabels: [expected[0].label],
+  expectedUnloadedLabels: [expected[2].label],
+  driver: driver().value,
+  operation: async () => undefined,
+}), /WRITER_EXPECTED_STATE_LABELS_INVALID/)
+
+await assert.rejects(() => withWeeklyWriterHold({
+  approved: expected,
+  maximumHoldMs: 1_000,
+  expectedDisabledLabels: [expected[1].label, expected[2].label],
+  driver: driver().value,
+  operation: async () => undefined,
+}), new RegExp(`WRITER_INITIAL_DISABLED_STATE_MISMATCH:${expected[1].label}:expected_disabled:observed_enabled`))
+
+const failing = driver()
+let failingError: unknown
+try {
+  await withWeeklyWriterHold({
+    approved: expected,
+    maximumHoldMs: 1_000,
+    restoreSloMs: 100,
+    driver: failing.value,
+    operation: async () => { throw new Error('SYNC_FAILED') },
+  })
+} catch (error) {
+  failingError = error
+}
+assert.ok(failingError instanceof WriterHoldError)
+assert.match(failingError.message, /SYNC_FAILED/)
+assert.equal(failingError.restoreEvidence.complete, true)
+assert.deepEqual(failingError.restoreEvidence.expectedLoadedLabels, [expected[0].label])
+assert.deepEqual(failingError.restoreEvidence.restoredLabels, [expected[0].label])
+assert.ok(failingError.restoreEvidence.restoreDurationMs >= 0)
+assert.equal(failingError.restoreEvidence.restoreSloMs, 100)
+assert.equal(failingError.restoreEvidence.restoreWithinSlo, true)
+assert.ok(failingError.restoreEvidence.holdElapsedMs >= failingError.restoreEvidence.restoreDurationMs)
 assert.equal(failing.states.get(expected[0].label)!.loaded, true, 'loaded writer must be restored after failure')
 assert.equal(failing.states.get(expected[2].label)!.loaded, false, 'disabled writer must remain disabled')
+
+const slowRestore = driver({ advanceMs: 2 })
+const slowRestoreResult = await withWeeklyWriterHold({
+  approved: expected,
+  maximumHoldMs: 1_000,
+  restoreSloMs: 1,
+  driver: slowRestore.value,
+  operation: async () => undefined,
+})
+assert.equal(slowRestoreResult.receipt.restoreWithinSlo, false)
 
 await assert.rejects(() => withWeeklyWriterHold({
   approved: expected,
@@ -263,6 +329,8 @@ assert.ok(dualError instanceof WriterHoldError)
 assert.match(dualError.message, /primary=SYNTHETIC_PRIMARY_FAILURE/)
 assert.match(dualError.message, /SYNTHETIC_BOOTSTRAP_FAILURE/)
 assert.ok(dualError.restoreErrors.some((error) => String(error).includes('WRITER_FINAL_STATE_ERROR')))
+assert.equal(dualError.restoreEvidence.complete, false)
+assert.ok(dualError.restoreEvidence.restoreErrorCount > 0)
 
 const restoreOrderExpected = midExpected.slice(0, 2)
 const restoreOrderStates = new Map(restoreOrderExpected.map((item) => [item.label, {
@@ -330,6 +398,40 @@ await assert.rejects(() => withWeeklyWriterHold({
 assert.ok(!orphanedGroup.actions.some((action) => action.startsWith('bootstrap:')),
   'a surviving process group must block bootstrap to prevent duplicate writers')
 
+const serviceSloStates = new Map(midExpected.map((item, index) => [item.label, {
+  ...item,
+  loaded: index < 13,
+  disabled: index >= 14,
+  instances: index < 13 ? 1 : 0,
+}]))
+let serviceSloClock = 0
+const serviceSlo = await withWeeklyWriterHold({
+  approved: midExpected,
+  maximumHoldMs: 12 * 60 * 60_000,
+  maximumStopWaitMs: 60_000,
+  restoreSloMs: 60 * 60_000,
+  expectedLoadedLabels: midExpected.slice(0, 13).map((item) => item.label),
+  expectedUnloadedLabels: midExpected.slice(13).map((item) => item.label),
+  expectedDisabledLabels: midExpected.slice(14).map((item) => item.label),
+  driver: {
+    async observe(label) { return structuredClone(serviceSloStates.get(label)!) },
+    async bootout(label) { Object.assign(serviceSloStates.get(label)!, { loaded: false, instances: 0 }) },
+    async bootstrap(label) {
+      serviceSloClock += 1_000
+      Object.assign(serviceSloStates.get(label)!, { loaded: true, instances: 1 })
+    },
+    async processGroupAlive() { return false },
+    async sleep(milliseconds) { serviceSloClock += milliseconds },
+    now: () => serviceSloClock,
+  },
+  operation: async () => undefined,
+})
+assert.equal(serviceSlo.receipt.restoredLabels.length, 13)
+assert.equal(serviceSlo.receipt.alreadyUnloadedLabels.length, 1)
+assert.equal(serviceSlo.receipt.intentionallyDisabledLabels.length, 2)
+assert.equal(serviceSlo.receipt.restoreDurationMs, 13_000)
+assert.equal(serviceSlo.receipt.restoreWithinSlo, true)
+
 console.log(JSON.stringify({ verdict: 'PASS', loadedWriterRestored: true,
   disabledWriterRemainedDisabled: true, multipleInstancesRejected: true,
     identityMismatchRejected: true, holdTimeoutRejected: true,
@@ -339,7 +441,8 @@ console.log(JSON.stringify({ verdict: 'PASS', loadedWriterRestored: true,
     primaryAndRestoreErrorsSeparated: true, finalStateMismatchReported: true,
     reverseRestoreOrderVerified: true, processGroupDrainWaited: true,
     persistentProcessGroupBlockedBootstrap: true,
-    verificationRunsAfterWriterRestore: true }, null, 2))
+    verificationRunsAfterWriterRestore: true,
+    thirteenWriterRestoreDurationMs: serviceSlo.receipt.restoreDurationMs }, null, 2))
 }
 
 main().catch((error) => {

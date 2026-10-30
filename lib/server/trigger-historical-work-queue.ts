@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { execGet, localDbPath } from '@/lib/db/client'
+import { jpOhlcvRepairBarrierDecision } from '@/lib/jp-ohlcv-repair-barrier'
 import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import {
   cleanupExpiredHistoricalScanJobs,
@@ -76,6 +77,7 @@ export async function runTriggerHistoricalWorkOnce(
   jobId: string
   status: string
 } | null> {
+  if (jpOhlcvRepairBarrierDecision({ jobType: 'trigger_historical_worker' }).blocked) return null
   const type = await nextWorkType()
   if (type === 'HISTORICAL_SCAN') {
     const row = await claimNextHistoricalScanJob(identity?.jobOwner() ?? randomUUID())
@@ -163,6 +165,10 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
   try {
     while (!stopping) {
       try {
+        if (jpOhlcvRepairBarrierDecision({ jobType: 'trigger_historical_worker' }).blocked) {
+          await new Promise((resolve) => setTimeout(resolve, pollMs))
+          continue
+        }
         const recoveryStartedAt = performance.now()
         const recovered = {
           historical: await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup'),
@@ -187,6 +193,10 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
     }
     while (!stopping) {
       try {
+        if (jpOhlcvRepairBarrierDecision({ jobType: 'trigger_historical_worker' }).blocked) {
+          await new Promise((resolve) => setTimeout(resolve, pollMs))
+          continue
+        }
         storage?.assertWritable()
         if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
           await cleanupExpiredHistoricalScanJobs()
