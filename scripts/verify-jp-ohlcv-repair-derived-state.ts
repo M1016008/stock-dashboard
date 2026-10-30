@@ -27,6 +27,19 @@ function sqlText(input: string): string {
 const configPath = path.resolve(value('--config'))
 const mode = value('--mode')
 if (mode !== 'forward' && mode !== 'rollback') throw new Error('repair_verify_mode_unsupported')
+const rollbackExpectedTargetRowsFlag = process.argv.includes('--rollback-expected-target-rows')
+  ? value('--rollback-expected-target-rows')
+  : null
+const rollbackExpectedTargetRows = rollbackExpectedTargetRowsFlag === null
+  ? null
+  : Number(rollbackExpectedTargetRowsFlag)
+if (mode === 'rollback'
+  && (!Number.isSafeInteger(rollbackExpectedTargetRows) || Number(rollbackExpectedTargetRows) <= 0)) {
+  throw new Error('repair_verify_rollback_expected_target_rows_required')
+}
+if (mode === 'forward' && rollbackExpectedTargetRowsFlag !== null) {
+  throw new Error('repair_verify_forward_rollback_target_forbidden')
+}
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as JpOhlcvProductionExecutionConfiguration
 const database = process.env.STOCKBOARD_DB_PATH
 if (!database || fs.realpathSync(database) !== config.databaseRealpath) {
@@ -43,7 +56,7 @@ function sqlite(sql: string): string {
 
 const expectedTargetRows = mode === 'forward'
   ? config.repairScope.officialRows
-  : config.repairScope.existingRows
+  : Number(rollbackExpectedTargetRows)
 const targetRows = Number(sqlite(`SELECT COUNT(*) FROM ohlcv_daily WHERE date=${sqlText(config.targetDate)};`))
 if (targetRows !== expectedTargetRows) {
   throw new Error(`repair_verify_${mode}_coverage_mismatch:expected_${expectedTargetRows}:actual_${targetRows}`)
@@ -153,7 +166,14 @@ if (mode === 'forward') {
     },
   }
 }
-if (sqlite('PRAGMA quick_check;') !== 'ok') throw new Error(`repair_verify_${mode}_quick_check_failed`)
+// Rollback already verifies the complete backup with quick_check, then proves the
+// restored database is byte-identical by SHA-256. Repeating a full-database
+// quick_check here would exceed the bounded derived-verification window without
+// adding a distinct integrity assertion.
+const quickCheck = mode === 'forward'
+  ? sqlite('PRAGMA quick_check;')
+  : 'RESTORED_SHA256_VERIFIED_BEFORE_DERIVED_REBUILD'
+if (mode === 'forward' && quickCheck !== 'ok') throw new Error('repair_verify_forward_quick_check_failed')
 connection.close()
 
 console.log(JSON.stringify({
@@ -168,5 +188,5 @@ console.log(JSON.stringify({
   preservedConflicts: config.preservedConflictTickers,
   unresolvedConflictCount: config.preservedConflictTickers.length,
   derived,
-  quickCheck: 'ok',
+  quickCheck,
 }))

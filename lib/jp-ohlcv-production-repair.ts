@@ -168,7 +168,7 @@ export type JpOhlcvRepairRunnerRecovery = {
 }
 
 export type JpOhlcvRepairRollbackApproval = {
-  version: 1
+  version: 1 | 2
   action: 'ROLLBACK'
   repairApprovalSha256: string
   journalSha256: string
@@ -182,6 +182,14 @@ export type JpOhlcvRepairRollbackApproval = {
   reason: string
   originalRunnerRecovery: JpOhlcvRepairRunnerRecovery
   staleStageProcessRecovery?: JpOhlcvRepairStaleProcessRecovery
+  emergencyRecovery?: {
+    originalExecutionPlanSha256: string
+    recoveryExecutionPlanSha256: string
+    recoveryConfigurationFileSha256: string
+    expectedRestoredTargetRows: number
+    backupRuntimeSnapshotSha256: string
+    backupRuntimeSnapshotFileSha256: string
+  }
 }
 
 export type JpOhlcvRepairPrewriteCleanupApproval = {
@@ -892,7 +900,7 @@ export class JpOhlcvProductionRepairTransaction {
     }
     const journal = JSON.parse(fs.readFileSync(input.paths.journal, 'utf8')) as JpOhlcvRepairJournal
     const rollback = input.rollbackApproval
-    if (rollback.version !== 1 || rollback.action !== 'ROLLBACK'
+    if ((rollback.version !== 1 && rollback.version !== 2) || rollback.action !== 'ROLLBACK'
       || rollback.repairApprovalSha256 !== input.approvalSha256
       || rollback.journalSha256 !== stableSha256(journal)
       || rollback.transactionId !== journal.transactionId
@@ -902,6 +910,22 @@ export class JpOhlcvProductionRepairTransaction {
       || rollback.servingGenerationTarget !== journal.servingGeneration.before
       || journal.approvalSha256 !== input.approvalSha256) {
       throw new Error('repair_rollback_approval_state_mismatch')
+    }
+    if (rollback.version === 2) {
+      const emergency = rollback.emergencyRecovery
+      if (!emergency
+        || !/^[a-f0-9]{64}$/.test(emergency.originalExecutionPlanSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.recoveryExecutionPlanSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.recoveryConfigurationFileSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.backupRuntimeSnapshotSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.backupRuntimeSnapshotFileSha256)
+        || emergency.originalExecutionPlanSha256 !== input.approval.derivedPlanSha256
+        || !Number.isSafeInteger(emergency.expectedRestoredTargetRows)
+        || emergency.expectedRestoredTargetRows <= 0) {
+        throw new Error('repair_rollback_emergency_recovery_contract_invalid')
+      }
+    } else if (rollback.emergencyRecovery !== undefined) {
+      throw new Error('repair_rollback_emergency_recovery_version_required')
     }
     const recordedBackup = journal.evidence.BACKUP_VERIFIED as { backupRealpath?: unknown; backupSha256?: unknown } | undefined
     if (rollback.backupRealpath !== recordedBackup?.backupRealpath

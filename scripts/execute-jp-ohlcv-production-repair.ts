@@ -85,6 +85,24 @@ async function main(): Promise<void> {
   if (repairApprovalSha256(bundle.approval) !== bundle.approvalSha256) {
     throw new Error('repair_approval_bundle_hash_mismatch')
   }
+  if (rollbackApproval?.version === 2
+    && rollbackApproval.emergencyRecovery?.recoveryConfigurationFileSha256 !== sha256File(configurationPath)) {
+    throw new Error('repair_emergency_recovery_configuration_hash_mismatch')
+  }
+  if (rollbackApproval?.version === 2) {
+    const expectedRows = String(rollbackApproval.emergencyRecovery!.expectedRestoredTargetRows)
+    const recoveryVerifiers = config.nestedCommands.filter((command) => {
+      const index = command.args.indexOf('--rollback-expected-target-rows')
+      return command.id === 'verify-restored-derived-state'
+        && command.rollback
+        && command.args.some((arg) => arg.endsWith('/verify-jp-ohlcv-repair-derived-state.ts'))
+        && index >= 0
+        && command.args[index + 1] === expectedRows
+    })
+    if (recoveryVerifiers.length !== 1) {
+      throw new Error('repair_emergency_recovery_target_rows_not_sealed')
+    }
+  }
   const rollbackRestoreState = rollbackApproval
     ? path.join(config.stateDirectory, `rollback-restore-${rollbackApproval.transactionId}.json`)
     : null
@@ -108,6 +126,42 @@ async function main(): Promise<void> {
   }
   assertJpOhlcvProductionExecutionConfiguration(config, { allowMissingDatabaseForRestore })
   assertJpOhlcvStorageIdentityEnvironment(config, process.env)
+  if (rollbackApproval?.version === 2) {
+    const emergency = rollbackApproval.emergencyRecovery!
+    const journal = readJson<{
+      evidence?: {
+        RUNTIME_SNAPSHOT_RENEWED?: {
+          snapshotSha256?: unknown
+          evidencePath?: unknown
+          evidenceFileSha256?: unknown
+        }
+      }
+    }>(path.join(config.stateDirectory, 'repair-journal.json'))
+    const renewed = journal.evidence?.RUNTIME_SNAPSHOT_RENEWED
+    if (config.repairScope.existingRows !== emergency.expectedRestoredTargetRows
+      || renewed?.snapshotSha256 !== emergency.backupRuntimeSnapshotSha256
+      || renewed?.evidenceFileSha256 !== emergency.backupRuntimeSnapshotFileSha256
+      || typeof renewed.evidencePath !== 'string'
+      || !path.isAbsolute(renewed.evidencePath)
+      || sha256File(renewed.evidencePath) !== emergency.backupRuntimeSnapshotFileSha256) {
+      throw new Error('repair_emergency_recovery_runtime_snapshot_contract_mismatch')
+    }
+    const snapshotEvidence = readJson<{
+      transactionId?: unknown
+      snapshot?: {
+        snapshotSha256?: unknown
+        officialRows?: unknown
+        runtimeScope?: { missingRows?: unknown[] }
+      }
+    }>(renewed.evidencePath)
+    const restoredTargetRows = Number(snapshotEvidence.snapshot?.officialRows)
+      - (snapshotEvidence.snapshot?.runtimeScope?.missingRows?.length ?? Number.NaN)
+    if (snapshotEvidence.transactionId !== rollbackApproval.transactionId
+      || snapshotEvidence.snapshot?.snapshotSha256 !== emergency.backupRuntimeSnapshotSha256
+      || restoredTargetRows !== emergency.expectedRestoredTargetRows) {
+      throw new Error('repair_emergency_recovery_runtime_snapshot_evidence_mismatch')
+    }
+  }
   if (process.env.STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256 !== sha256File(configurationPath)) {
     throw new Error('repair_execution_configuration_exact_hash_environment_required')
   }

@@ -13,7 +13,11 @@ import {
 } from '@/lib/jp-ohlcv-data-quality'
 import type { JpOhlcvRepairExecutionPlan, JpOhlcvRepairStageCommand } from '@/lib/jp-ohlcv-command-adapter'
 import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
-import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import {
+  repairApprovalSha256,
+  type JpOhlcvRepairApproval,
+  type JpOhlcvRepairRollbackApproval,
+} from '@/lib/jp-ohlcv-production-repair'
 import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
 
 function fileSha256(file: string): string {
@@ -445,6 +449,51 @@ async function main(): Promise<void> {
     rollbackEvidence.parentRestoredDatabaseSha256TimeoutMs,
     limits.parentBackupSha256MaxTimeoutMs,
   )
+  const recoveryPlan = structuredClone(plan)
+  recoveryPlan.commands.rebuildOriginalDerivedServing[0].args.push(
+    '--rollback-expected-target-rows',
+    '2',
+  )
+  const emergencyRollbackApproval: JpOhlcvRepairRollbackApproval = {
+    version: 2,
+    action: 'ROLLBACK',
+    repairApprovalSha256: repairApprovalSha256(approval),
+    journalSha256: '1'.repeat(64),
+    transactionId: 'fixture-emergency-recovery',
+    databaseRealpath: approval.databaseRealpath,
+    backupDirectory: approval.backupDirectory,
+    backupRealpath: fs.realpathSync(backup),
+    backupSha256: fileSha256(backup),
+    sourceGenerationTarget: approval.sourceGenerationBefore,
+    servingGenerationTarget: approval.servingGenerationBefore,
+    reason: 'fixture emergency recovery approval',
+    originalRunnerRecovery: {
+      pid: 1,
+      processGroupId: 1,
+      processIdentitySha256: '2'.repeat(64),
+      observedState: 'PID_ABSENT',
+      confirmedStoppedAt: new Date().toISOString(),
+      reason: 'fixture',
+    },
+    emergencyRecovery: {
+      originalExecutionPlanSha256: approval.derivedPlanSha256,
+      recoveryExecutionPlanSha256: stableSha256(recoveryPlan),
+      recoveryConfigurationFileSha256: '3'.repeat(64),
+      expectedRestoredTargetRows: 2,
+      backupRuntimeSnapshotSha256: '4'.repeat(64),
+      backupRuntimeSnapshotFileSha256: '5'.repeat(64),
+    },
+  }
+  assert.doesNotThrow(() => createJpOhlcvCommandAdapters({
+    approval,
+    plan: recoveryPlan,
+    rollbackApproval: emergencyRollbackApproval,
+  }))
+  assert.throws(() => createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    rollbackApproval: emergencyRollbackApproval,
+  }), /repair_execution_plan_hash_mismatch/)
   const largeFile = path.join(root, 'large-file.bin')
   fs.writeFileSync(largeFile, Buffer.alloc(2 * 1024 * 1024))
   const { sha256LargeFileWithTimeout } = await import('@/lib/jp-ohlcv-command-adapter')

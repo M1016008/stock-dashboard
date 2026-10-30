@@ -284,7 +284,11 @@ const nestedCommands: JpOhlcvNestedCommand[] = [
   }),
   command({
     id: 'verify-restored-derived-state', script: 'scripts/verify-jp-ohlcv-repair-derived-state.ts',
-    args: ['--config', output, '--mode', 'rollback'], timeoutMs: 10 * 60_000,
+    args: [
+      '--config', output,
+      '--mode', 'rollback',
+      '--rollback-expected-target-rows', String(existingRows.length),
+    ], timeoutMs: 10 * 60_000,
     rollback: true, publishesServingGeneration: true,
   }),
 ]

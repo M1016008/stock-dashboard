@@ -30,7 +30,13 @@ import {
 } from '@/lib/jp-ohlcv-executable-plan'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
 import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
-import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-orchestrator'
+import {
+  JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS,
+  restoreJpOhlcvMaintenanceWriters,
+  runJpOhlcvMaintenanceOrchestrator,
+} from '@/lib/jp-ohlcv-maintenance-orchestrator'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 import { runJpOhlcvProductionRepair } from '@/lib/jp-ohlcv-repair-runner'
@@ -39,6 +45,7 @@ import type { JQuantsRejectedDailyRowEvidence } from '@/lib/jquants'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
+import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
 
 type SqliteRow = Record<string, string | number | bigint | null>
 type SqliteStatement = {
@@ -295,6 +302,7 @@ function writeDerivedFixtureScript(): string {
 function fakeWriterDriver(
   writers: ReturnType<typeof service>[],
   initiallyLoaded: ReadonlySet<string>,
+  disabled: ReadonlySet<string> = new Set(),
 ): WriterHoldDriver {
   const loaded = new Map(writers.map((writer) => [writer.label, initiallyLoaded.has(writer.label)]))
   let now = Date.now()
@@ -311,7 +319,7 @@ function fakeWriterDriver(
     definitionSha256: writer.definitionSha256,
     program: writer.program,
     loaded: active,
-    disabled: false,
+    disabled: disabled.has(label),
     instances: active ? 1 : 0,
     pid: null,
     processGroupId: null,
@@ -391,11 +399,9 @@ async function main(): Promise<void> {
   const baselineLineage = { ...lineage, repairStatus: 'BASELINE' as const }
   writeJson(sourcePointer, { version: 1, generation: 'jp-source-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
   writeJson(servingPointer, { version: 1, generation: 'jp-serving-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
-  const writers = Array.from({ length: 16 }, (_, index) => service(
-    `com.stockboard.fixture-writer-${String(index + 1).padStart(2, '0')}`,
-    'WRITER',
-  ))
-  const loadedWriterLabels = new Set(writers.slice(0, 13).map((writer) => writer.label))
+  const writers = WEEKLY_BACKUP_WRITER_LABELS.map((label) => service(label, 'WRITER'))
+  const loadedWriterLabels = new Set<string>(JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS)
+  const disabledWriterLabels = new Set<string>(JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS)
   const web = service('com.stockboard.fixture-web', 'READ_SERVICE')
   const analog = service('com.stockboard.fixture-analog', 'READ_SERVICE')
   writeJson(`${serviceSnapshotPath}.fixture-runtime.json`, {
@@ -913,7 +919,7 @@ async function main(): Promise<void> {
     let committedJournalPath = ''
     const orchestration = await runJpOhlcvMaintenanceOrchestrator({
       config,
-      driver: fakeWriterDriver(writers, loadedWriterLabels),
+      driver: fakeWriterDriver(writers, loadedWriterLabels, disabledWriterLabels),
       assertOnlyApprovedReaderHandles: async () => undefined,
       runTransaction: async (assertWriterHoldValid) => {
         await assertWriterHoldValid()
@@ -988,8 +994,9 @@ async function main(): Promise<void> {
       noTradeRows: 224,
       unexpectedRejectedRows: 0,
     })
-    assert.deepEqual(orchestration.writerHold.restoredLabels, writers.slice(0, 13).map((writer) => writer.label).reverse())
-    assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, writers.slice(13).map((writer) => writer.label))
+    assert.deepEqual(orchestration.writerHold.restoredLabels, [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse())
+    assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, ['com.stockboard.large-holder-update'])
+    assert.deepEqual(orchestration.writerHold.intentionallyDisabledLabels, [...JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS])
     assert.ok(orchestration.writerHold.restoreStartedAtMs <= orchestration.writerHold.restoreCompletedAtMs)
     assert.equal(
       orchestration.writerHold.restoreDurationMs,
@@ -1080,6 +1087,78 @@ async function main(): Promise<void> {
     const restoredRows = exactDateRows(restoredDb)
     restoredDb.close()
     assert.deepEqual(restoredRows, beforeRows)
+    const restoredVerifierOutput = execFileSync(process.execPath, [
+      tsxExecutable,
+      derivedVerifierScript,
+      '--config', configPath,
+      '--mode', 'rollback',
+      '--rollback-expected-target-rows', String(beforeRows.length),
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    }).trim().split('\n').at(-1)
+    const restoredVerifier = JSON.parse(restoredVerifierOutput ?? '{}') as {
+      status?: unknown
+      mode?: unknown
+      quickCheck?: unknown
+    }
+    assert.deepEqual(restoredVerifier, {
+      status: 'PASS',
+      mode: 'rollback',
+      dataQualityStatus: 'BASELINE_RESTORED_EXISTING_CONFLICTS_HOLD',
+      dayFullyRepaired: false,
+      targetDate: TARGET_DATE,
+      targetRows: beforeRows.length,
+      preservedConflicts: ['1447', '2164'],
+      unresolvedConflictCount: 2,
+      derived: null,
+      quickCheck: 'RESTORED_SHA256_VERIFIED_BEFORE_DERIVED_REBUILD',
+    })
+    writeJson(servingPointer, {
+      version: 1,
+      generation: config.servingGenerationBefore,
+      sourceGeneration: config.sourceGenerationBefore,
+      transactionId: 'fixture-e2e-success',
+      publishedAt: new Date().toISOString(),
+      lineage: baselineLineage,
+    })
+    const emergencyRecoveryConfigPath = path.join(root, 'emergency-recovery-config.json')
+    const emergencyRecoveryConfig = {
+      ...config,
+      repairScope: {
+        ...config.repairScope,
+        existingRows: beforeRows.length,
+        matchingRows: beforeRows.length - config.repairScope.conflicts,
+        missingRows: config.repairScope.officialRows - beforeRows.length,
+      },
+    }
+    writeJson(emergencyRecoveryConfigPath, emergencyRecoveryConfig)
+    const originalServingOutput = execFileSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'verify-original-serving',
+      '--config', emergencyRecoveryConfigPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    }).trim().split('\n').at(-1)
+    assert.deepEqual(JSON.parse(originalServingOutput ?? '{}'), {
+      sourceGeneration: config.sourceGenerationBefore,
+      servingGeneration: config.servingGenerationBefore,
+      health: 'PASS',
+    })
+    let recoverySafeChecks = 0
+    const writerRecovery = await restoreJpOhlcvMaintenanceWriters({
+      config,
+      driver: fakeWriterDriver(writers, new Set(), disabledWriterLabels),
+      assertRecoverySafe: async () => { recoverySafeChecks += 1 },
+    })
+    assert.deepEqual(writerRecovery.restoredLabels, [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse())
+    assert.deepEqual(writerRecovery.alreadyLoadedLabels, [])
+    assert.deepEqual(writerRecovery.preservedUnloadedLabels, [...JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS])
+    assert.ok(recoverySafeChecks >= JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS.length + 2)
     const restoredSource = JSON.parse(fs.readFileSync(sourcePointer, 'utf8'))
     assert.equal(restoredSource.generation, config.sourceGenerationBefore)
     assert.equal(restoredSource.transactionId, 'fixture-e2e-success')
