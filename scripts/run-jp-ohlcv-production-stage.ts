@@ -19,6 +19,10 @@ import {
 } from '@/lib/jp-ohlcv-executable-plan'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  boundedBackupOperationTimeout,
+  JP_OHLCV_BACKUP_TIME_LIMITS as backupTimeLimits,
+} from '@/lib/jp-ohlcv-backup-time-budget'
+import {
   assertNoUnauthorizedDatabaseHandles,
   createLaunchdWriterHoldDriver,
   type LaunchdRuntimeIdentity,
@@ -78,6 +82,15 @@ const configSha256 = executionConfigurationSha256(config, {
     && !fs.existsSync(config.databaseRealpath)
     && fs.existsSync(restoreStateForMissingDatabase),
 })
+const stageStartedAtMs = Date.now()
+
+type BackupOperationTiming = {
+  operation: string
+  startedAt: string
+  completedAt: string
+  durationMs: number
+  timeoutMs: number
+}
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -133,32 +146,47 @@ function assertDatabaseIdentity(): void {
   }
 }
 
-function sqlite(sql: string, database = config.databaseRealpath): string {
+function sqlite(
+  sql: string,
+  database = config.databaseRealpath,
+  options: { timeoutMs?: number; errorCode?: string } = {},
+): string {
+  const startedAt = Date.now()
   const result = spawnSync(config.sqliteExecutable, [database, sql], {
     encoding: 'utf8',
-    timeout: 30 * 60_000,
+    timeout: options.timeoutMs ?? 30 * 60_000,
     env: { NODE_ENV: 'production', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
   })
   if (result.status !== 0 || result.signal || result.error) {
-    throw new Error(`repair_stage_sqlite_failed:${result.error?.message ?? result.stderr.trim() ?? result.status}`)
+    const detail = result.error?.message || result.stderr.trim() || `exit_${result.status ?? 'null'}_signal_${result.signal ?? 'none'}`
+    throw new Error(`${options.errorCode ?? 'repair_stage_sqlite_failed'}:elapsed_${Date.now() - startedAt}:timeout_${options.timeoutMs ?? 30 * 60_000}:${detail}`)
   }
   return result.stdout.trim()
 }
 
-function sqliteReadOnly(sql: string, database: string): string {
+function sqliteReadOnly(
+  sql: string,
+  database: string,
+  options: { timeoutMs?: number; errorCode?: string } = {},
+): string {
+  const startedAt = Date.now()
   const result = spawnSync(config.sqliteExecutable, [`${pathToFileURL(database).href}?mode=ro`, sql], {
     encoding: 'utf8',
-    timeout: 30 * 60_000,
+    timeout: options.timeoutMs ?? 30 * 60_000,
     env: { NODE_ENV: 'production', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
   })
   if (result.status !== 0 || result.signal || result.error) {
-    throw new Error(`repair_stage_sqlite_readonly_failed:${result.error?.message ?? result.stderr.trim() ?? result.status}`)
+    const detail = result.error?.message || result.stderr.trim() || `exit_${result.status ?? 'null'}_signal_${result.signal ?? 'none'}`
+    throw new Error(`${options.errorCode ?? 'repair_stage_sqlite_readonly_failed'}:elapsed_${Date.now() - startedAt}:timeout_${options.timeoutMs ?? 30 * 60_000}:${detail}`)
   }
   return result.stdout.trim()
 }
 
-function normalizeBackupArtifact(backup: string): void {
-  if (sqlite('PRAGMA journal_mode=DELETE;', backup).trim().toLowerCase() !== 'delete') {
+function normalizeBackupArtifact(backup: string, timeoutMs: number): void {
+  if (sqlite('PRAGMA journal_mode=DELETE;', backup, {
+    timeoutMs,
+    errorCode: 'repair_backup_journal_mode_timeout_or_failure',
+  }).trim().toLowerCase() !== 'delete') {
     throw new Error('repair_backup_journal_mode_normalization_failed')
   }
   const wal = `${backup}-wal`
@@ -171,6 +199,64 @@ function normalizeBackupArtifact(backup: string): void {
   const descriptor = fs.openSync(backup, 'r')
   try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
   syncDirectory(path.dirname(backup))
+}
+
+function sha256FileWithTimeout(file: string, timeoutMs: number, errorCode: string): string {
+  const startedAt = Date.now()
+  const hash = crypto.createHash('sha256')
+  const descriptor = fs.openSync(file, 'r')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  try {
+    for (;;) {
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error(`${errorCode}:elapsed_${Date.now() - startedAt}:timeout_${timeoutMs}`)
+      }
+      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null)
+      if (bytes === 0) break
+      hash.update(buffer.subarray(0, bytes))
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  if (Date.now() - startedAt > timeoutMs) {
+    throw new Error(`${errorCode}:elapsed_${Date.now() - startedAt}:timeout_${timeoutMs}`)
+  }
+  return hash.digest('hex')
+}
+
+function operationTimeout(input: {
+  label: string
+  stageTimeoutMs: number
+  maxTimeoutMs: number
+  minimumTimeoutMs: number
+  reserveAfterMs: number
+}): number {
+  return boundedBackupOperationTimeout({
+    ...input,
+    stageStartedAtMs,
+    nowMs: Date.now(),
+  })
+}
+
+function measure<T>(
+  operationName: string,
+  timeoutMs: number,
+  timings: BackupOperationTiming[],
+  action: () => T,
+): T {
+  const startedAt = Date.now()
+  try {
+    return action()
+  } finally {
+    const completedAt = Date.now()
+    timings.push({
+      operation: operationName,
+      startedAt: new Date(startedAt).toISOString(),
+      completedAt: new Date(completedAt).toISOString(),
+      durationMs: completedAt - startedAt,
+      timeoutMs,
+    })
+  }
 }
 
 function sqliteQuoted(file: string): string {
@@ -749,7 +835,10 @@ function assertBackupCapacity(): { availableBytes: number; projectedPostBackupFr
   return { availableBytes, projectedPostBackupFreeBytes }
 }
 
-function requireBackupMetadata(): {
+function requireBackupMetadata(options: {
+  sha256TimeoutMs?: number
+  timings?: BackupOperationTiming[]
+} = {}): {
   backupRealpath: string
   backupSha256: string
   sourceGeneration: string
@@ -763,9 +852,18 @@ function requireBackupMetadata(): {
     sourceGeneration: string
     servingGeneration: string
   }>(backupMetadataPath())
+  const actualBackupSha256 = options.sha256TimeoutMs && options.timings
+    ? measure('rollback_backup_sha256', options.sha256TimeoutMs, options.timings, () => (
+        sha256FileWithTimeout(
+          metadata.backupRealpath,
+          options.sha256TimeoutMs!,
+          'repair_rollback_backup_sha256_timeout_or_failure',
+        )
+      ))
+    : sha256File(metadata.backupRealpath)
   if (metadata.configSha256 !== configSha256 || metadata.transactionId !== transactionId
     || fs.realpathSync(metadata.backupRealpath) !== metadata.backupRealpath
-    || sha256File(metadata.backupRealpath) !== metadata.backupSha256) {
+    || actualBackupSha256 !== metadata.backupSha256) {
     throw new Error('repair_backup_metadata_mismatch')
   }
   return metadata
@@ -773,6 +871,8 @@ function requireBackupMetadata(): {
 
 async function main(): Promise<Record<string, unknown>> {
   if (operation === 'create-backup') {
+    const timings: BackupOperationTiming[] = []
+    activeBackupTimings = timings
     assertDatabaseIdentity()
     const capacity = assertBackupCapacity()
     const source = generationPointer(config.sourceGenerationPointer)
@@ -785,14 +885,62 @@ async function main(): Promise<Record<string, unknown>> {
     fs.mkdirSync(config.backupDirectory, { recursive: true, mode: 0o700 })
     const backup = backupPath()
     if (fs.existsSync(backup) || fs.existsSync(backupMetadataPath())) throw new Error('repair_backup_destination_exists')
-    sqlite(`.backup ${sqliteQuoted(backup)}`)
-    normalizeBackupArtifact(backup)
-    if (sqliteReadOnly('PRAGMA quick_check;', backup) !== 'ok') throw new Error('repair_backup_quick_check_failed')
+    const backupCopyTimeoutMs = operationTimeout({
+      label: 'backup_copy',
+      stageTimeoutMs: backupTimeLimits.createBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.backupCopyMaxTimeoutMs,
+      minimumTimeoutMs: 5 * 60_000,
+      reserveAfterMs: backupTimeLimits.journalModeMinimumMs
+        + backupTimeLimits.quickCheckMinimumMs
+        + backupTimeLimits.sha256MinimumMs
+        + backupTimeLimits.metadataReserveMs,
+    })
+    measure('backup_copy', backupCopyTimeoutMs, timings, () => sqlite(
+      `.backup ${sqliteQuoted(backup)}`,
+      config.databaseRealpath,
+      { timeoutMs: backupCopyTimeoutMs, errorCode: 'repair_backup_copy_timeout_or_failure' },
+    ))
+    const journalModeTimeoutMs = operationTimeout({
+      label: 'journal_mode',
+      stageTimeoutMs: backupTimeLimits.createBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.journalModeMaxTimeoutMs,
+      minimumTimeoutMs: backupTimeLimits.journalModeMinimumMs,
+      reserveAfterMs: backupTimeLimits.quickCheckMinimumMs
+        + backupTimeLimits.sha256MinimumMs
+        + backupTimeLimits.metadataReserveMs,
+    })
+    measure('journal_mode_normalization', journalModeTimeoutMs, timings, () => (
+      normalizeBackupArtifact(backup, journalModeTimeoutMs)
+    ))
+    const quickCheckTimeoutMs = operationTimeout({
+      label: 'quick_check',
+      stageTimeoutMs: backupTimeLimits.createBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.quickCheckMaxTimeoutMs,
+      minimumTimeoutMs: backupTimeLimits.quickCheckMinimumMs,
+      reserveAfterMs: backupTimeLimits.sha256MinimumMs + backupTimeLimits.metadataReserveMs,
+    })
+    const quickCheck = measure('quick_check', quickCheckTimeoutMs, timings, () => sqliteReadOnly(
+      'PRAGMA quick_check;',
+      backup,
+      { timeoutMs: quickCheckTimeoutMs, errorCode: 'repair_backup_quick_check_timeout_or_failure' },
+    ))
+    if (quickCheck !== 'ok') throw new Error('repair_backup_quick_check_failed')
     if (fs.existsSync(`${backup}-wal`) || fs.existsSync(`${backup}-shm`)) {
       throw new Error('repair_backup_sidecar_unexpected')
     }
     const backupRealpath = fs.realpathSync(backup)
-    const backupSha256 = sha256File(backupRealpath)
+    const sha256TimeoutMs = operationTimeout({
+      label: 'sha256',
+      stageTimeoutMs: backupTimeLimits.createBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.sha256MaxTimeoutMs,
+      minimumTimeoutMs: backupTimeLimits.sha256MinimumMs,
+      reserveAfterMs: backupTimeLimits.metadataReserveMs,
+    })
+    const backupSha256 = measure('sha256', sha256TimeoutMs, timings, () => sha256FileWithTimeout(
+      backupRealpath,
+      sha256TimeoutMs,
+      'repair_backup_sha256_timeout_or_failure',
+    ))
     atomicJson(backupMetadataPath(), {
       version: 1,
       configSha256,
@@ -811,6 +959,7 @@ async function main(): Promise<Record<string, unknown>> {
       ...capacity,
       sourceGeneration: source.generation,
       servingGeneration: serving.generation,
+      timings,
     }
   }
   if (operation === 'hold-read-services') {
@@ -888,14 +1037,35 @@ async function main(): Promise<Record<string, unknown>> {
     }
   }
   if (operation === 'verify-backup') {
-    const metadata = requireBackupMetadata()
-    if (sqliteReadOnly('PRAGMA quick_check;', metadata.backupRealpath) !== 'ok') {
+    const timings: BackupOperationTiming[] = []
+    activeBackupTimings = timings
+    const sha256TimeoutMs = operationTimeout({
+      label: 'rollback_sha256',
+      stageTimeoutMs: backupTimeLimits.verifyBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.sha256MaxTimeoutMs,
+      minimumTimeoutMs: backupTimeLimits.sha256MinimumMs,
+      reserveAfterMs: backupTimeLimits.quickCheckMinimumMs + backupTimeLimits.metadataReserveMs,
+    })
+    const metadata = requireBackupMetadata({ sha256TimeoutMs, timings })
+    const quickCheckTimeoutMs = operationTimeout({
+      label: 'rollback_quick_check',
+      stageTimeoutMs: backupTimeLimits.verifyBackupStageTimeoutMs,
+      maxTimeoutMs: backupTimeLimits.quickCheckMaxTimeoutMs,
+      minimumTimeoutMs: backupTimeLimits.quickCheckMinimumMs,
+      reserveAfterMs: backupTimeLimits.metadataReserveMs,
+    })
+    const quickCheck = measure('rollback_quick_check', quickCheckTimeoutMs, timings, () => sqliteReadOnly(
+      'PRAGMA quick_check;',
+      metadata.backupRealpath,
+      { timeoutMs: quickCheckTimeoutMs, errorCode: 'repair_rollback_backup_quick_check_timeout_or_failure' },
+    ))
+    if (quickCheck !== 'ok') {
       throw new Error('repair_rollback_backup_quick_check_failed')
     }
     if (fs.existsSync(`${metadata.backupRealpath}-wal`) || fs.existsSync(`${metadata.backupRealpath}-shm`)) {
       throw new Error('repair_rollback_backup_sidecar_unexpected')
     }
-    return { ...metadata, quickCheck: 'PASS' }
+    return { ...metadata, quickCheck: 'PASS', timings }
   }
   if (operation === 'restore-backup') {
     const metadata = requireBackupMetadata()
@@ -911,9 +1081,23 @@ async function main(): Promise<Record<string, unknown>> {
   throw new Error(`repair_stage_operation_unsupported:${operation}`)
 }
 
+let activeBackupTimings: BackupOperationTiming[] | null = null
+
 main()
   .then((result) => console.log(JSON.stringify(result)))
   .catch((error) => {
     console.error(error instanceof Error ? error.stack : String(error))
+    if (activeBackupTimings) {
+      console.error(JSON.stringify({
+        status: 'FAILED',
+        operation,
+        error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+        timings: activeBackupTimings.map((timing) => ({
+          operation: timing.operation,
+          durationMs: timing.durationMs,
+          timeoutMs: timing.timeoutMs,
+        })),
+      }))
+    }
     process.exitCode = 1
   })

@@ -502,7 +502,8 @@ async function observeWriterStates(): Promise<Array<Record<string, unknown>> | n
 }
 
 type HoldClass = 'BENIGN_RECAPTURE' | 'WAIT_FOR_UPDATER' | 'SOURCE_REVISED' | 'PRICE_CONFLICT'
-  | 'UNAPPROVED_DRIFT' | 'PROVIDER_ENVELOPE_CHANGED' | 'CONCURRENT_STATE_CHANGE' | 'SAFETY_GATE' | 'UNCLASSIFIED'
+  | 'UNAPPROVED_DRIFT' | 'PROVIDER_ENVELOPE_CHANGED' | 'CONCURRENT_STATE_CHANGE' | 'BACKUP_TIMEOUT'
+  | 'SAFETY_GATE' | 'UNCLASSIFIED'
 
 function holdClass(error: unknown): HoldClass {
   const message = error instanceof Error ? error.message : String(error)
@@ -530,6 +531,16 @@ function holdClass(error: unknown): HoldClass {
     }
   }
   if (message.includes('repair_runtime_snapshot_changed_after_writer_hold')) return 'CONCURRENT_STATE_CHANGE'
+  if (message.includes('repair_backup_copy_timeout_or_failure')
+    || message.includes('repair_backup_journal_mode_timeout_or_failure')
+    || message.includes('repair_backup_quick_check_timeout_or_failure')
+    || message.includes('repair_backup_sha256_timeout_or_failure')
+    || message.includes('repair_backup_time_budget_insufficient')
+    || message.includes('repair_parent_backup_sha256_timeout')
+    || message.includes('repair_stage_command_timeout:create-backup')
+    || message.includes('repair_stage_command_timeout:verify-backup')
+    || message.includes('repair_rollback_backup_sha256_timeout_or_failure')
+    || message.includes('repair_rollback_backup_quick_check_timeout_or_failure')) return 'BACKUP_TIMEOUT'
   if (message.includes('repair_runtime_snapshot_invalid')
     || message.includes('repair_runtime_snapshot_official_source_proof_invalid')
     || message.includes('repair_runtime_snapshot_official_source_contract_invalid')
@@ -557,6 +568,9 @@ function operatorAction(error: unknown): string {
     }
     if (classification === 'PRICE_CONFLICT' || classification === 'UNAPPROVED_DRIFT') {
       return 'The database transaction did not start. Production contains a price conflict or unapproved key drift. Preserve the runtime snapshot and investigate the sampled keys; do not widen the repair scope or overwrite rows.'
+    }
+    if (classification === 'BACKUP_TIMEOUT') {
+      return 'The database transaction did not start. Backup creation or full verification exceeded its sealed operation or maintenance budget. Preserve the partial or unverified backup, journal, lock, and timing evidence; do not delete, reuse as rollback, or retry automatically. Restore held writers only through the exact hash-bound no-mutation recovery path, then obtain a fresh package and approval after the timeout cause is resolved.'
     }
     return 'The database transaction did not start. Do not retry automatically. Verify every writer service against writerServices and preserve all evidence. If writers were held, restore them only through the separately hash-approved no-mutation recovery path; then correct only the rejected preflight condition before obtaining fresh exact-hash approval.'
   }

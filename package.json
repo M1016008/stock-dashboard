@@ -157,6 +157,7 @@
     "test:jp-ohlcv-runtime-snapshot": "tsx scripts/test-jp-ohlcv-runtime-snapshot.ts",
     "test:jp-ohlcv-command-adapter": "tsx scripts/test-jp-ohlcv-command-adapter.ts",
     "test:jp-ohlcv-executable-plan-e2e": "tsx scripts/test-jp-ohlcv-executable-plan-e2e.ts",
+    "test:jp-ohlcv-backup-time-budget": "tsx scripts/test-jp-ohlcv-backup-time-budget.ts",
     "capture:jp-ohlcv-official-source": "tsx scripts/capture-jp-ohlcv-official-source.ts",
     "build:jp-ohlcv-production-configuration": "tsx scripts/build-jp-ohlcv-production-configuration.ts",
     "build:jp-ohlcv-final-execution-package": "tsx scripts/build-jp-ohlcv-final-execution-package.ts",

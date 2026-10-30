@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
@@ -29,6 +29,7 @@ import {
   type JpOhlcvProductionExecutionPackage,
 } from '@/lib/jp-ohlcv-executable-plan'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
+import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
 import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-orchestrator'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
@@ -658,6 +659,69 @@ async function main(): Promise<void> {
       }),
       /repair_execution_package_stale_storage_identity_regenerate_required/,
     )
+    const stageEnvironment = (
+      repairTransactionId: string,
+      fixtureConfig: JpOhlcvProductionExecutionConfiguration,
+    ): NodeJS.ProcessEnv => ({
+      ...process.env,
+      NODE_ENV: 'test',
+      USE_LOCAL_DB: '1',
+      STOCKBOARD_DB_PATH: databasePath,
+      STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
+      STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: repairTransactionId,
+      STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      ...jpOhlcvStorageIdentityEnvironment(fixtureConfig),
+    })
+    const insufficientCapacityConfig = {
+      ...config,
+      minimumPostBackupFreeBytes: Number.MAX_SAFE_INTEGER,
+    }
+    const insufficientCapacityConfigPath = path.join(root, 'insufficient-capacity-config.json')
+    writeJson(insufficientCapacityConfigPath, insufficientCapacityConfig)
+    const insufficientCapacity = spawnSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'create-backup',
+      '--config', insufficientCapacityConfigPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: stageEnvironment('fixture-capacity', insufficientCapacityConfig),
+    })
+    assert.notEqual(insufficientCapacity.status, 0)
+    assert.match(insufficientCapacity.stderr, /repair_backup_capacity_insufficient/)
+    assert.equal(fs.existsSync(path.join(backupDirectory, 'fixture-capacity.sqlite')), false)
+
+    const invalidBackupDirectory = path.join(root, 'invalid-backup')
+    fs.mkdirSync(invalidBackupDirectory, { recursive: true })
+    const invalidBackupConfig = { ...config, backupDirectory: invalidBackupDirectory }
+    const invalidBackupConfigPath = path.join(root, 'invalid-backup-config.json')
+    writeJson(invalidBackupConfigPath, invalidBackupConfig)
+    const invalidBackup = path.join(invalidBackupDirectory, 'fixture-invalid-backup.sqlite')
+    fs.writeFileSync(invalidBackup, 'not a sqlite database\n')
+    writeJson(`${invalidBackup}.json`, {
+      version: 1,
+      configSha256: executionConfigurationSha256(invalidBackupConfig),
+      transactionId: 'fixture-invalid-backup',
+      backupRealpath: fs.realpathSync(invalidBackup),
+      backupSha256: sha256File(invalidBackup),
+      sourceGeneration: config.sourceGenerationBefore,
+      servingGeneration: config.servingGenerationBefore,
+    })
+    const invalidBackupVerification = spawnSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'verify-backup',
+      '--config', invalidBackupConfigPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: stageEnvironment('fixture-invalid-backup', invalidBackupConfig),
+    })
+    assert.notEqual(invalidBackupVerification.status, 0)
+    assert.match(invalidBackupVerification.stderr, /repair_rollback_backup_quick_check_timeout_or_failure/)
+    assert.match(invalidBackupVerification.stderr, /"status":"FAILED"/)
+    assert.match(invalidBackupVerification.stderr, /"operation":"rollback_backup_sha256"/)
     const restoreIdentity = {
       version: 1 as const,
       configurationSha256: stableSha256(config),
@@ -720,6 +784,11 @@ async function main(): Promise<void> {
       version: 1,
       officialRows: official,
       approvalScope: scope,
+      timeBudget: {
+        maximumMaintenanceMs: limits.maximumMaintenanceMs,
+        forwardDerivedAggregateMs: limits.forwardDerivedAggregateTimeoutMs,
+        rollbackDerivedAggregateMs: limits.rollbackDerivedAggregateTimeoutMs,
+      },
       commands: {
         createBackup: stageCommand('create-backup'),
         holdReadServices: stageCommand('hold-read-services'),
@@ -865,6 +934,10 @@ async function main(): Promise<void> {
     assert.equal(orchestration.result.status, 'COMMITTED')
     const committedJournal = JSON.parse(fs.readFileSync(committedJournalPath, 'utf8')) as {
       evidence: {
+        BACKUP_VERIFIED: {
+          parentBackupSha256ElapsedMs: number
+          parentBackupSha256TimeoutMs: number
+        }
         RUNTIME_SNAPSHOT_RENEWED: {
           providerRows: number
           acceptedRows: number
@@ -881,6 +954,11 @@ async function main(): Promise<void> {
         }
       }
     }
+    assert.ok(committedJournal.evidence.BACKUP_VERIFIED.parentBackupSha256ElapsedMs >= 0)
+    assert.equal(
+      committedJournal.evidence.BACKUP_VERIFIED.parentBackupSha256TimeoutMs,
+      limits.parentBackupSha256MaxTimeoutMs,
+    )
     assert.deepEqual(committedJournal.evidence.DATA_COMMITTING, {
       approvedMissingRows: 4_067,
       alreadySatisfiedExactRows: 6,

@@ -26,6 +26,11 @@ import {
   type JpOhlcvRuntimeSnapshot,
 } from '@/lib/jp-ohlcv-runtime-snapshot'
 import {
+  assertJpOhlcvBackupMaintenanceBudget,
+  assertJpOhlcvPlanMaintenanceBudget,
+  JP_OHLCV_BACKUP_TIME_LIMITS as backupTimeLimits,
+} from '@/lib/jp-ohlcv-backup-time-budget'
+import {
   assertJQuantsRejectedDailyRowEvidence,
   fetchJQuantsDailyByDateWithEvidence,
   jQuantsDailyByDateSourceContract,
@@ -76,6 +81,11 @@ export type JpOhlcvRepairExecutionPlan = {
   version: 1
   officialRows: JpOfficialOhlcvValue[]
   approvalScope: JpOhlcvMissingOnlyRepairScope
+  timeBudget: {
+    maximumMaintenanceMs: number
+    forwardDerivedAggregateMs: number
+    rollbackDerivedAggregateMs: number
+  }
   commands: {
     createBackup: JpOhlcvRepairStageCommand
     holdReadServices: JpOhlcvRepairStageCommand
@@ -105,6 +115,32 @@ function sha256File(file: string): string {
     fs.closeSync(descriptor)
   }
   return hash.digest('hex')
+}
+
+function sha256BackupFileWithTimeout(file: string): { sha256: string; elapsedMs: number; timeoutMs: number } {
+  const timeoutMs = backupTimeLimits.parentBackupSha256MaxTimeoutMs
+  const startedAt = Date.now()
+  const hash = crypto.createHash('sha256')
+  const descriptor = fs.openSync(file, 'r')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  try {
+    for (;;) {
+      const elapsedMs = Date.now() - startedAt
+      if (elapsedMs > timeoutMs) {
+        throw new Error(`repair_parent_backup_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
+      }
+      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null)
+      if (bytes === 0) break
+      hash.update(buffer.subarray(0, bytes))
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  const elapsedMs = Date.now() - startedAt
+  if (elapsedMs > timeoutMs) {
+    throw new Error(`repair_parent_backup_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
+  }
+  return { sha256: hash.digest('hex'), elapsedMs, timeoutMs }
 }
 
 function atomicJson(file: string, payload: unknown): void {
@@ -198,6 +234,13 @@ export function assertJpOhlcvRepairExecutionPlan(input: {
   if (input.plan.version !== 1 || input.plan.officialRows.length === 0) {
     throw new Error('repair_execution_plan_invalid')
   }
+  if (!input.plan.timeBudget
+    || typeof input.plan.timeBudget !== 'object'
+    || !Number.isSafeInteger(input.plan.timeBudget.maximumMaintenanceMs)
+    || !Number.isSafeInteger(input.plan.timeBudget.forwardDerivedAggregateMs)
+    || !Number.isSafeInteger(input.plan.timeBudget.rollbackDerivedAggregateMs)) {
+    throw new Error('repair_execution_plan_time_budget_missing_regenerate_required')
+  }
   if (input.plan.approvalScope.version !== 1
     || input.plan.approvalScope.status !== 'READY'
     || input.plan.approvalScope.date !== input.targetDate
@@ -233,6 +276,22 @@ export function assertJpOhlcvRepairExecutionPlan(input: {
   for (const command of [...single, ...commands.rebuildDerivedServing, ...commands.rebuildOriginalDerivedServing]) {
     assertCommand(command)
   }
+  assertJpOhlcvPlanMaintenanceBudget({
+    maximumMaintenanceMs: input.plan.timeBudget.maximumMaintenanceMs,
+    timeouts: {
+      createBackupMs: commands.createBackup.timeoutMs,
+      holdReadServicesMs: commands.holdReadServices.timeoutMs,
+      publishSourceGenerationMs: commands.publishSourceGeneration.timeoutMs,
+      verifyDataGenerationMs: commands.verifyDataGeneration.timeoutMs,
+      verifyServingMs: commands.verifyServing.timeoutMs,
+      resumeReadServicesMs: commands.resumeReadServices.timeoutMs,
+      verifyBackupForRollbackMs: commands.verifyBackupForRollback.timeoutMs,
+      restoreBackupMs: commands.restoreBackup.timeoutMs,
+      verifyOriginalServingMs: commands.verifyOriginalServing.timeoutMs,
+      forwardDerivedAggregateMs: input.plan.timeBudget.forwardDerivedAggregateMs,
+      rollbackDerivedAggregateMs: input.plan.timeBudget.rollbackDerivedAggregateMs,
+    },
+  })
 }
 
 function snapshotSealedFiles(input: {
@@ -288,6 +347,9 @@ async function executeStage(input: {
   context: JpOhlcvRepairExecutionContext
 }): Promise<string> {
   assertJpOhlcvRepairExecutionActive()
+  const stageStartedAt = Date.now()
+  const operationIndex = input.spec.args.indexOf('--operation')
+  const operationName = operationIndex >= 0 ? input.spec.args[operationIndex + 1] ?? 'unknown' : 'unknown'
   return new Promise((resolve, reject) => {
     const child = spawn(input.executable, input.args, {
       cwd: fs.realpathSync(input.spec.workingDirectory),
@@ -336,7 +398,11 @@ async function executeStage(input: {
       }
       const shutdownSignal = currentJpOhlcvRepairShutdownSignal()
       if (!failure && shutdownSignal) failure = new Error(`repair_execution_interrupted:${shutdownSignal}`)
-      if (!failure && timedOut) failure = new Error('repair_stage_command_timeout')
+      if (!failure && timedOut) {
+        failure = new Error(
+          `repair_stage_command_timeout:${operationName}:elapsed_${Date.now() - stageStartedAt}:timeout_${input.spec.timeoutMs}`,
+        )
+      }
       if (!failure && outputOverflow) failure = new Error('repair_stage_command_output_limit_exceeded')
       if (!failure && code !== 0) {
         const detail = stageFailureDetail(stderr.toString('utf8'))
@@ -428,6 +494,32 @@ async function runJsonStage<T>(
   }
 }
 
+async function runJsonStageSequenceWithinBudget<T>(input: {
+  commands: JpOhlcvRepairStageCommand[]
+  aggregateTimeoutMs: number
+  context: JpOhlcvRepairExecutionContext
+  errorCode: string
+}): Promise<{ results: T[]; elapsedMs: number; aggregateTimeoutMs: number }> {
+  const startedAt = Date.now()
+  const minimumCommandWindowMs = 60_000
+  const results: T[] = []
+  for (let index = 0; index < input.commands.length; index += 1) {
+    const elapsedMs = Date.now() - startedAt
+    const remainingCommands = input.commands.length - index - 1
+    const reserveMs = remainingCommands * minimumCommandWindowMs
+    const availableMs = input.aggregateTimeoutMs - elapsedMs - reserveMs
+    if (availableMs < minimumCommandWindowMs) {
+      throw new Error(`${input.errorCode}:elapsed_${elapsedMs}:budget_${input.aggregateTimeoutMs}:next_${index}`)
+    }
+    const command = input.commands[index]!
+    results.push(await runJsonStage<T>({
+      ...command,
+      timeoutMs: Math.min(command.timeoutMs, availableMs),
+    }, input.context))
+  }
+  return { results, elapsedMs: Date.now() - startedAt, aggregateTimeoutMs: input.aggregateTimeoutMs }
+}
+
 async function currentRows(date: string): Promise<JpOhlcvValue[]> {
   const { client, ensureReady } = await import('@/lib/db/client')
   await ensureReady()
@@ -489,6 +581,7 @@ export function createJpOhlcvCommandAdapters(input: {
   now?: () => Date
   refreshOfficialSource?: (targetDate: string) => Promise<JpOhlcvOfficialSourceRefresh>
 }): { forward: JpOhlcvRepairAdapter; rollback: JpOhlcvRepairRollbackAdapter } {
+  assertJpOhlcvBackupMaintenanceBudget()
   assertPlan(input)
   let verifiedScope: JpOhlcvRuntimeRepairScope | null = null
   let activeRuntimeSnapshot = input.runtimeSnapshot ?? null
@@ -546,10 +639,15 @@ export function createJpOhlcvCommandAdapters(input: {
       if (fs.realpathSync(evidence.backupRealpath) !== evidence.backupRealpath) {
         throw new Error('repair_backup_realpath_mismatch')
       }
-      if (sha256File(evidence.backupRealpath) !== evidence.backupSha256) {
+      const parentVerification = sha256BackupFileWithTimeout(evidence.backupRealpath)
+      if (parentVerification.sha256 !== evidence.backupSha256) {
         throw new Error('repair_backup_sha256_mismatch')
       }
-      return evidence
+      return {
+        ...evidence,
+        parentBackupSha256ElapsedMs: parentVerification.elapsedMs,
+        parentBackupSha256TimeoutMs: parentVerification.timeoutMs,
+      }
     },
     revalidatePlan: async () => {
       if (!activeRuntimeSnapshot) throw new Error('repair_runtime_snapshot_required')
@@ -769,8 +867,13 @@ export function createJpOhlcvCommandAdapters(input: {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
-      for (const command of input.plan.commands.rebuildDerivedServing) {
-        const result = await runJsonStage<{ status: 'PASS'; rebuilt: string[] }>(command, context)
+      const sequence = await runJsonStageSequenceWithinBudget<{ status: 'PASS'; rebuilt: string[] }>({
+        commands: input.plan.commands.rebuildDerivedServing,
+        aggregateTimeoutMs: input.plan.timeBudget.forwardDerivedAggregateMs,
+        context,
+        errorCode: 'repair_forward_derived_aggregate_budget_exhausted',
+      })
+      for (const result of sequence.results) {
         if (result.status !== 'PASS' || !Array.isArray(result.rebuilt) || result.rebuilt.length === 0) {
           throw new Error('repair_derived_command_evidence_mismatch')
         }
@@ -781,6 +884,8 @@ export function createJpOhlcvCommandAdapters(input: {
         sourceGeneration: input.approval.sourceGenerationAfter,
         servingGeneration: input.approval.servingGenerationAfter,
         rebuilt,
+        aggregateElapsedMs: sequence.elapsedMs,
+        aggregateTimeoutMs: sequence.aggregateTimeoutMs,
       }
     },
     verifyServing: (context) => runJsonStage(input.plan.commands.verifyServing, context),
@@ -803,11 +908,16 @@ export function createJpOhlcvCommandAdapters(input: {
         sourceGeneration: string
         servingGeneration: string
       }>(input.plan.commands.verifyBackupForRollback, context)
+      const parentVerification = sha256BackupFileWithTimeout(evidence.backupRealpath)
       if (fs.realpathSync(evidence.backupRealpath) !== evidence.backupRealpath
-        || sha256File(evidence.backupRealpath) !== evidence.backupSha256) {
+        || parentVerification.sha256 !== evidence.backupSha256) {
         throw new Error('repair_rollback_backup_file_identity_mismatch')
       }
-      return evidence
+      return {
+        ...evidence,
+        parentBackupSha256ElapsedMs: parentVerification.elapsedMs,
+        parentBackupSha256TimeoutMs: parentVerification.timeoutMs,
+      }
     },
     holdReadServices: async (context) => {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
@@ -837,8 +947,13 @@ export function createJpOhlcvCommandAdapters(input: {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
       const rebuilt: string[] = []
-      for (const command of input.plan.commands.rebuildOriginalDerivedServing) {
-        const result = await runJsonStage<{ status: 'PASS'; rebuilt: string[] }>(command, context)
+      const sequence = await runJsonStageSequenceWithinBudget<{ status: 'PASS'; rebuilt: string[] }>({
+        commands: input.plan.commands.rebuildOriginalDerivedServing,
+        aggregateTimeoutMs: input.plan.timeBudget.rollbackDerivedAggregateMs,
+        context,
+        errorCode: 'repair_rollback_derived_aggregate_budget_exhausted',
+      })
+      for (const result of sequence.results) {
         if (result.status !== 'PASS' || !Array.isArray(result.rebuilt) || result.rebuilt.length === 0) {
           throw new Error('repair_rollback_derived_command_evidence_mismatch')
         }
@@ -850,6 +965,8 @@ export function createJpOhlcvCommandAdapters(input: {
         sourceGeneration: approval.sourceGenerationTarget,
         servingGeneration: approval.servingGenerationTarget,
         rebuilt,
+        aggregateElapsedMs: sequence.elapsedMs,
+        aggregateTimeoutMs: sequence.aggregateTimeoutMs,
       }
     },
     verifyOriginalServing: (context) => runJsonStage(input.plan.commands.verifyOriginalServing, context),

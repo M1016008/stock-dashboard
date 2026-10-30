@@ -20,6 +20,11 @@ import {
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  assertJpOhlcvBackupMaintenanceBudget,
+  assertJpOhlcvPlanMaintenanceBudget,
+  JP_OHLCV_BACKUP_TIME_LIMITS as backupTimeLimits,
+} from '@/lib/jp-ohlcv-backup-time-budget'
+import {
   repairApprovalSha256,
   type JpOhlcvRepairApproval,
 } from '@/lib/jp-ohlcv-production-repair'
@@ -78,6 +83,7 @@ if (fs.existsSync(outputDirectory)) {
 
 const config = readJson<JpOhlcvProductionExecutionConfiguration>(configurationPath)
 assertJpOhlcvProductionExecutionConfiguration(config)
+assertJpOhlcvBackupMaintenanceBudget()
 if (config.mode !== 'PRODUCTION') throw new Error('repair_package_production_configuration_required')
 const dryRun = readJson<{ plan?: JpOhlcvBackfillPlan }>(dryRunFile)
 if (!dryRun.plan) throw new Error('repair_package_dry_run_plan_missing')
@@ -176,29 +182,58 @@ const plan: JpOhlcvRepairExecutionPlan = {
   version: 1,
   officialRows,
   approvalScope: scope,
+  timeBudget: {
+    maximumMaintenanceMs: config.maximumMaintenanceMs,
+    forwardDerivedAggregateMs: backupTimeLimits.forwardDerivedAggregateTimeoutMs,
+    rollbackDerivedAggregateMs: backupTimeLimits.rollbackDerivedAggregateTimeoutMs,
+  },
   commands: {
-    createBackup: stage('create-backup', [], 3 * 60 * 60_000),
+    createBackup: stage(
+      'create-backup',
+      [],
+      backupTimeLimits.createBackupStageTimeoutMs + backupTimeLimits.commandTerminationGraceMs,
+    ),
     holdReadServices: stage('hold-read-services', [], 5 * 60_000),
-    publishSourceGeneration: stage('publish-source-generation'),
-    verifyDataGeneration: stage('verify-data-generation'),
+    publishSourceGeneration: stage('publish-source-generation', [], backupTimeLimits.simpleStageTimeoutMs),
+    verifyDataGeneration: stage('verify-data-generation', [], backupTimeLimits.simpleStageTimeoutMs),
     rebuildDerivedServing: forwardCommands.map((command) => stage(
       'run-derived',
       ['--command-id', command.id],
       command.timeoutMs + 60_000,
     )),
-    verifyServing: stage('verify-serving'),
+    verifyServing: stage('verify-serving', [], backupTimeLimits.simpleStageTimeoutMs),
     resumeReadServices: stage('resume-read-services', [], 5 * 60_000),
-    verifyBackupForRollback: stage('verify-backup'),
-    restoreBackup: stage('restore-backup', [], 3 * 60 * 60_000),
+    verifyBackupForRollback: stage(
+      'verify-backup',
+      [],
+      backupTimeLimits.verifyBackupStageTimeoutMs + backupTimeLimits.commandTerminationGraceMs,
+    ),
+    restoreBackup: stage('restore-backup', [], backupTimeLimits.rollbackRestoreMaxTimeoutMs),
     rebuildOriginalDerivedServing: rollbackCommands.map((command) => stage(
       'run-derived',
       ['--command-id', command.id, '--rollback'],
       command.timeoutMs + 60_000,
     )),
-    verifyOriginalServing: stage('verify-original-serving'),
+    verifyOriginalServing: stage('verify-original-serving', [], backupTimeLimits.simpleStageTimeoutMs),
   },
 }
 assertJpOhlcvRepairExecutionPlan({ plan, targetDate: config.targetDate })
+const maintenanceTimeBudget = assertJpOhlcvPlanMaintenanceBudget({
+  maximumMaintenanceMs: config.maximumMaintenanceMs,
+  timeouts: {
+    createBackupMs: plan.commands.createBackup.timeoutMs,
+    holdReadServicesMs: plan.commands.holdReadServices.timeoutMs,
+    publishSourceGenerationMs: plan.commands.publishSourceGeneration.timeoutMs,
+    verifyDataGenerationMs: plan.commands.verifyDataGeneration.timeoutMs,
+    verifyServingMs: plan.commands.verifyServing.timeoutMs,
+    resumeReadServicesMs: plan.commands.resumeReadServices.timeoutMs,
+    verifyBackupForRollbackMs: plan.commands.verifyBackupForRollback.timeoutMs,
+    restoreBackupMs: plan.commands.restoreBackup.timeoutMs,
+    verifyOriginalServingMs: plan.commands.verifyOriginalServing.timeoutMs,
+    forwardDerivedAggregateMs: plan.timeBudget.forwardDerivedAggregateMs,
+    rollbackDerivedAggregateMs: plan.timeBudget.rollbackDerivedAggregateMs,
+  },
+})
 const executionPlanPath = path.join(outputDirectory, 'execution-plan.json')
 writeNew(executionPlanPath, plan)
 
@@ -244,6 +279,7 @@ const approvalBundle = {
     sourceContract: officialSourceContract,
     rejectedRows: officialRejectedRows,
   }),
+  maintenanceTimeBudget,
   productionMutationAuthorized: false,
   executionStatus: 'HOLD_PENDING_EXPLICIT_APPROVAL' as const,
 }
@@ -312,6 +348,7 @@ console.log(JSON.stringify({
   officialSha256: scope.officialSha256,
   planSha256: scope.planSha256,
   executionPlanSha256: stableSha256(plan),
+  maintenanceTimeBudget,
   missingRows: scope.missingRows.length,
   preservedConflicts: scope.preservedConflicts.map((row) => row.ticker),
   unresolvedConflictCount: scope.preservedConflicts.length,

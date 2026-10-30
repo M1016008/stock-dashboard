@@ -12,6 +12,7 @@ import {
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import type { JpOhlcvRepairExecutionPlan, JpOhlcvRepairStageCommand } from '@/lib/jp-ohlcv-command-adapter'
+import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
 
@@ -138,6 +139,11 @@ async function main(): Promise<void> {
     version: 1,
     officialRows,
     approvalScope: scope,
+    timeBudget: {
+      maximumMaintenanceMs: limits.maximumMaintenanceMs,
+      forwardDerivedAggregateMs: limits.forwardDerivedAggregateTimeoutMs,
+      rollbackDerivedAggregateMs: limits.rollbackDerivedAggregateTimeoutMs,
+    },
     commands: {
       createBackup: command({
         databaseRealpath: fs.realpathSync(database),

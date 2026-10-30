@@ -5,6 +5,7 @@ import {
   type JpOhlcvRepairExecutionPlan,
 } from '@/lib/jp-ohlcv-command-adapter'
 import type { JpOfficialOhlcvValue, JpOhlcvMissingOnlyRepairScope } from '@/lib/jp-ohlcv-data-quality'
+import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
 
 function value(flag: string): string {
   const index = process.argv.indexOf(flag)
@@ -30,7 +31,17 @@ const commands = readJson<JpOhlcvRepairExecutionPlan['commands']>(absolute('--co
 const approvalScope = readJson<JpOhlcvMissingOnlyRepairScope>(absolute('--approval-scope'))
 const targetDate = value('--target-date')
 const output = absolute('--output')
-const plan: JpOhlcvRepairExecutionPlan = { version: 1, officialRows, approvalScope, commands }
+const plan: JpOhlcvRepairExecutionPlan = {
+  version: 1,
+  officialRows,
+  approvalScope,
+  timeBudget: {
+    maximumMaintenanceMs: limits.maximumMaintenanceMs,
+    forwardDerivedAggregateMs: limits.forwardDerivedAggregateTimeoutMs,
+    rollbackDerivedAggregateMs: limits.rollbackDerivedAggregateTimeoutMs,
+  },
+  commands,
+}
 assertJpOhlcvRepairExecutionPlan({ plan, targetDate })
 fs.mkdirSync(path.dirname(output), { recursive: true })
 fs.writeFileSync(output, `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
