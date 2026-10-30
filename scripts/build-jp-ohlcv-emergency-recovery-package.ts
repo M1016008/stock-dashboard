@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
-  executionPackageSha256,
   jpOhlcvStorageIdentityEnvironment,
   sha256File,
   type JpOhlcvProductionExecutionConfiguration,
@@ -70,12 +69,20 @@ function main(): void {
   if (!Number.isSafeInteger(expectedRestoredTargetRows) || expectedRestoredTargetRows <= 0) {
     throw new Error('--expected-restored-target-rows_positive_integer_required')
   }
-  fs.mkdirSync(outputDirectory, { recursive: false, mode: 0o700 })
 
   const sourcePackage = readJson<JpOhlcvProductionExecutionPackage>(sourcePackagePath)
   if (sourcePackage.version !== 1
-    || executionPackageSha256(sourcePackage) !== sourcePackageApprovalSha256) {
+    || stableSha256(sourcePackage) !== sourcePackageApprovalSha256) {
     throw new Error('repair_emergency_builder_source_package_identity_mismatch')
+  }
+  for (const [file, expectedSha256] of [
+    [sourcePackage.configurationPath, sourcePackage.configurationSha256],
+    [sourcePackage.approvalBundlePath, sourcePackage.approvalBundleSha256],
+    [sourcePackage.executionPlanPath, sourcePackage.executionPlanSha256],
+  ] as const) {
+    if (sha256File(file) !== expectedSha256) {
+      throw new Error(`repair_emergency_builder_source_artifact_mismatch:${file}`)
+    }
   }
   const originalConfigurationPath = sourcePackage.configurationPath
   const originalConfig = readJson<JpOhlcvProductionExecutionConfiguration>(originalConfigurationPath)
@@ -139,6 +146,8 @@ function main(): void {
     cwd: integrationRoot,
     encoding: 'utf8',
   }).trim()
+
+  fs.mkdirSync(outputDirectory, { recursive: false, mode: 0o700 })
 
   const verifierScript = path.resolve('scripts/verify-jp-ohlcv-repair-derived-state.ts')
   const executeScript = path.resolve('scripts/execute-jp-ohlcv-production-repair.ts')
