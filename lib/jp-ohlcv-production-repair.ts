@@ -601,6 +601,49 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       journalParseFailure = sanitizeFailureText(error instanceof Error ? error.message : error)
     }
   }
+  const rollbackRestoreStatePath = journal?.transactionId
+    ? path.join(paths.stateDirectory, `rollback-restore-${journal.transactionId}.json`)
+    : null
+  type RollbackRestoreStatusState = {
+    version?: unknown
+    configurationSha256?: unknown
+    transactionId?: unknown
+    databaseRealpath?: unknown
+    backupRealpath?: unknown
+    backupSha256?: unknown
+    temporaryPath?: unknown
+    failedPath?: unknown
+    phase?: unknown
+    updatedAt?: unknown
+  }
+  let rollbackRestoreState: RollbackRestoreStatusState | null = null
+  let rollbackRestoreStateParseFailure: string | null = null
+  if (rollbackRestoreStatePath && exists(rollbackRestoreStatePath)) {
+    try {
+      const parsed = readStateJson<RollbackRestoreStatusState>(rollbackRestoreStatePath)
+      const recordedBackup = journal?.evidence.BACKUP_VERIFIED as {
+        backupRealpath?: unknown
+        backupSha256?: unknown
+      } | undefined
+      if (parsed.version !== 1
+        || parsed.transactionId !== journal?.transactionId
+        || parsed.databaseRealpath !== journal?.databaseRealpath
+        || !/^[a-f0-9]{64}$/.test(String(parsed.configurationSha256))
+        || parsed.backupRealpath !== recordedBackup?.backupRealpath
+        || parsed.backupSha256 !== recordedBackup?.backupSha256
+        || parsed.temporaryPath !== `${journal?.databaseRealpath}.restore-${journal?.transactionId}`
+        || parsed.failedPath !== `${journal?.databaseRealpath}.failed-${journal?.transactionId}`
+        || !['PREPARING', 'BACKUP_STAGED', 'PRIMARY_ARCHIVED', 'BACKUP_ACTIVATED',
+          'SOURCE_GENERATION_RESTORED', 'COMPLETED'].includes(String(parsed.phase))
+        || !Number.isFinite(Date.parse(String(parsed.updatedAt)))) {
+        throw new Error('restore state identity or phase is invalid')
+      }
+      rollbackRestoreState = parsed
+    } catch (error) {
+      rollbackRestoreStateParseFailure = sanitizeFailureText(error instanceof Error ? error.message : error)
+      rollbackRestoreState = null
+    }
+  }
   const transactionMatches = Boolean(lock?.transactionId && journal?.transactionId
     && lock.transactionId === journal.transactionId)
   const lockIdentity = typeof lock?.pid === 'number'
@@ -626,6 +669,9 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
   const reasons: string[] = []
   if (lockParseFailure) reasons.push(`LOCK_PARSE_FAILED:${lockParseFailure}`)
   if (journalParseFailure) reasons.push(`JOURNAL_PARSE_FAILED:${journalParseFailure}`)
+  if (rollbackRestoreStateParseFailure) {
+    reasons.push(`ROLLBACK_RESTORE_STATE_PARSE_FAILED:${rollbackRestoreStateParseFailure}`)
+  }
   if (lockExists && !journalExists) reasons.push('LOCK_WITHOUT_JOURNAL')
   if (journalExists && !lockExists) reasons.push('JOURNAL_WITHOUT_LOCK')
   if (lock && journal && !transactionMatches) reasons.push('LOCK_JOURNAL_TRANSACTION_MISMATCH')
@@ -639,6 +685,11 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
     reasons.push(`RECORDED_STAGE_PROCESS_STALE:${activeStageProcessState}`)
   }
   if (journal?.stage === 'HOLD') reasons.push(`TRANSACTION_HOLD:${journal.failure?.originalStage ?? 'UNKNOWN'}`)
+  const rollbackRestoreAttestationIncomplete = rollbackRestoreState?.phase === 'COMPLETED'
+    && !journal?.evidence.ROLLBACK_DATA_RESTORED
+  if (rollbackRestoreAttestationIncomplete) {
+    reasons.push('ROLLBACK_DATABASE_RESTORED_PARENT_ATTESTATION_INCOMPLETE')
+  }
   const lockOwnerUncertain = lockExists && (!lock || lockIdentity === null
     || lockIdentity === 'PID_REUSED_OR_IDENTITY_MISMATCH'
     || (lockIdentity === 'PID_ABSENT' && journal?.stage !== 'HOLD'))
@@ -677,7 +728,7 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       'ROLLBACK_DERIVED_REBUILT', 'ROLLBACK_SERVING_VERIFIED', 'ROLLBACK_READ_SERVICES_RESUMING']
       .includes(effectiveJournalStage)
     : false
-  const journalOperatorAction = journal && effectiveJournalStage?.startsWith('ROLLBACK_')
+  const baseJournalOperatorAction = journal && effectiveJournalStage?.startsWith('ROLLBACK_')
     ? holdOperatorAction({
       stage: effectiveJournalStage,
       transactionId: journal.transactionId,
@@ -685,6 +736,9 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       stateDirectory: paths.stateDirectory,
     })
     : journal?.operatorAction ?? null
+  const journalOperatorAction = rollbackRestoreAttestationIncomplete
+    ? `${baseJournalOperatorAction ?? ''} The durable restore state is COMPLETED, but parent database hash attestation and the ROLLBACK_DATA_RESTORED journal transition are incomplete. Do not rerun restore, resume services, or delete restore artifacts; obtain a new exact hash-bound recovery approval after read-only database and generation verification.`.trim()
+    : baseJournalOperatorAction
   const effectiveConflicts = journal?.preservedConflicts?.tickers
     ?? terminal?.journal?.preservedConflicts?.tickers
     ?? []
@@ -731,6 +785,14 @@ export function inspectJpOhlcvProductionRepair(paths: JpOhlcvRepairPaths): Recor
       operatorAction: journalOperatorAction,
       failure: journal?.failure ?? null,
       failureHistory: journal?.failureHistory ?? [],
+      rollbackRestoreState: rollbackRestoreStatePath && exists(rollbackRestoreStatePath) ? {
+        path: rollbackRestoreStatePath,
+        sha256: rollbackRestoreState ? stableSha256(rollbackRestoreState) : null,
+        phase: rollbackRestoreState?.phase ?? null,
+        updatedAt: rollbackRestoreState?.updatedAt ?? null,
+        parentAttestationComplete: Boolean(journal?.evidence.ROLLBACK_DATA_RESTORED),
+        parseFailure: rollbackRestoreStateParseFailure,
+      } : null,
       readServicesMayBeHeld,
       protectedResources: journal ? {
         database: journal.databaseRealpath,

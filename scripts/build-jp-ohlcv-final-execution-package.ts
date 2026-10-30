@@ -306,7 +306,7 @@ const runner: JpOhlcvNestedCommand = {
     { path: executionPlanPath, sha256: sha256File(executionPlanPath) },
     { path: configurationPath, sha256: configFileSha256 },
   ],
-  timeoutMs: config.maximumMaintenanceMs,
+  timeoutMs: backupTimeLimits.forwardOperationTimeoutMs,
   environment: {
     NODE_ENV: 'production',
     USE_LOCAL_DB: '1',

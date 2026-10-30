@@ -4,6 +4,11 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
+import { JP_OHLCV_BACKUP_TIME_LIMITS } from '@/lib/jp-ohlcv-backup-time-budget'
+import {
+  WEEKLY_BACKUP_READER_LABELS,
+  WEEKLY_BACKUP_WRITER_LABELS,
+} from '@/lib/storage/weekly-backup-policy'
 
 type ReadOnlySchemaDatabase = {
   prepare(sql: string): { all(): unknown[] }
@@ -422,6 +427,16 @@ export function assertJpOhlcvProductionExecutionConfiguration(
   }
   assertServiceSet(config.writerServices, 'WRITER')
   assertServiceSet(config.readServices, 'READ_SERVICE')
+  if (config.mode === 'PRODUCTION') {
+    const writerLabels = config.writerServices.map((service) => service.label).sort()
+    const readerLabels = config.readServices.map((service) => service.label).sort()
+    if (JSON.stringify(writerLabels) !== JSON.stringify([...WEEKLY_BACKUP_WRITER_LABELS].sort())) {
+      throw new Error('repair_execution_configuration_writer_set_invalid')
+    }
+    if (JSON.stringify(readerLabels) !== JSON.stringify([...WEEKLY_BACKUP_READER_LABELS].sort())) {
+      throw new Error('repair_execution_configuration_reader_set_invalid')
+    }
+  }
   const allLabels = [...config.writerServices, ...config.readServices].map((service) => service.label)
   if (new Set(allLabels).size !== allLabels.length) throw new Error('repair_execution_configuration_duplicate_service')
   if (!config.requiredTickers.includes('1306') || !config.requiredTickers.includes('7003')) {
@@ -551,6 +566,7 @@ export function assertJpOhlcvProductionExecutionPackage(
   if (bundle.runner.id !== 'production-repair-runner'
     || bundle.runner.rollback
     || bundle.runner.publishesServingGeneration
+    || bundle.runner.timeoutMs !== JP_OHLCV_BACKUP_TIME_LIMITS.forwardOperationTimeoutMs
     || !path.isAbsolute(bundle.runner.workingDirectory)) {
     throw new Error('repair_execution_package_runner_contract_invalid')
   }

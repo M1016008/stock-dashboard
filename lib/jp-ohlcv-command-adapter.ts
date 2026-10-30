@@ -117,17 +117,20 @@ function sha256File(file: string): string {
   return hash.digest('hex')
 }
 
-function sha256BackupFileWithTimeout(file: string): { sha256: string; elapsedMs: number; timeoutMs: number } {
+export function sha256LargeFileWithTimeout(
+  file: string,
+  now: () => number = Date.now,
+): { sha256: string; elapsedMs: number; timeoutMs: number } {
   const timeoutMs = backupTimeLimits.parentBackupSha256MaxTimeoutMs
-  const startedAt = Date.now()
+  const startedAt = now()
   const hash = crypto.createHash('sha256')
   const descriptor = fs.openSync(file, 'r')
   const buffer = Buffer.allocUnsafe(1024 * 1024)
   try {
     for (;;) {
-      const elapsedMs = Date.now() - startedAt
+      const elapsedMs = now() - startedAt
       if (elapsedMs > timeoutMs) {
-        throw new Error(`repair_parent_backup_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
+        throw new Error(`repair_parent_large_file_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
       }
       const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null)
       if (bytes === 0) break
@@ -136,9 +139,9 @@ function sha256BackupFileWithTimeout(file: string): { sha256: string; elapsedMs:
   } finally {
     fs.closeSync(descriptor)
   }
-  const elapsedMs = Date.now() - startedAt
+  const elapsedMs = now() - startedAt
   if (elapsedMs > timeoutMs) {
-    throw new Error(`repair_parent_backup_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
+    throw new Error(`repair_parent_large_file_sha256_timeout:elapsed_${elapsedMs}:timeout_${timeoutMs}`)
   }
   return { sha256: hash.digest('hex'), elapsedMs, timeoutMs }
 }
@@ -587,7 +590,9 @@ export function createJpOhlcvCommandAdapters(input: {
   let activeRuntimeSnapshot = input.runtimeSnapshot ?? null
   const now = input.now ?? (() => new Date())
   const refreshOfficialSource = input.refreshOfficialSource ?? (async (targetDate) => {
-    const evidence = await fetchJQuantsDailyByDateWithEvidence(targetDate, { timeoutMs: 2 * 60_000 })
+    const evidence = await fetchJQuantsDailyByDateWithEvidence(targetDate, {
+      timeoutMs: backupTimeLimits.officialSourceFetchMaxTimeoutMs,
+    })
     const contract = jQuantsDailyByDateSourceContract(evidence)
     return {
       rows: evidence.rows,
@@ -639,7 +644,7 @@ export function createJpOhlcvCommandAdapters(input: {
       if (fs.realpathSync(evidence.backupRealpath) !== evidence.backupRealpath) {
         throw new Error('repair_backup_realpath_mismatch')
       }
-      const parentVerification = sha256BackupFileWithTimeout(evidence.backupRealpath)
+      const parentVerification = sha256LargeFileWithTimeout(evidence.backupRealpath)
       if (parentVerification.sha256 !== evidence.backupSha256) {
         throw new Error('repair_backup_sha256_mismatch')
       }
@@ -908,7 +913,7 @@ export function createJpOhlcvCommandAdapters(input: {
         sourceGeneration: string
         servingGeneration: string
       }>(input.plan.commands.verifyBackupForRollback, context)
-      const parentVerification = sha256BackupFileWithTimeout(evidence.backupRealpath)
+      const parentVerification = sha256LargeFileWithTimeout(evidence.backupRealpath)
       if (fs.realpathSync(evidence.backupRealpath) !== evidence.backupRealpath
         || parentVerification.sha256 !== evidence.backupSha256) {
         throw new Error('repair_rollback_backup_file_identity_mismatch')
@@ -934,14 +939,19 @@ export function createJpOhlcvCommandAdapters(input: {
         restoreStatePath: string
         restorePhase: 'COMPLETED'
       }>(input.plan.commands.restoreBackup, context)
+      const parentVerification = sha256LargeFileWithTimeout(evidence.databaseRealpath)
       if (fs.realpathSync(evidence.databaseRealpath) !== input.approval.databaseRealpath
-        || sha256File(evidence.databaseRealpath) !== evidence.databaseSha256
+        || parentVerification.sha256 !== evidence.databaseSha256
         || evidence.restorePhase !== 'COMPLETED'
         || path.dirname(evidence.restoreStatePath) !== input.approval.stateDirectory
         || !fs.statSync(evidence.restoreStatePath).isFile()) {
         throw new Error('repair_rollback_restored_database_identity_mismatch')
       }
-      return evidence
+      return {
+        ...evidence,
+        parentRestoredDatabaseSha256ElapsedMs: parentVerification.elapsedMs,
+        parentRestoredDatabaseSha256TimeoutMs: parentVerification.timeoutMs,
+      }
     },
     rebuildOriginalDerivedServing: async (context) => {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')

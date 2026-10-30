@@ -155,6 +155,8 @@ export type JpOhlcvRepairRollbackAdapter = {
     databaseRealpath: string
     databaseSha256: string
     sourceGeneration: string
+    parentRestoredDatabaseSha256ElapsedMs?: number
+    parentRestoredDatabaseSha256TimeoutMs?: number
   }>
   rebuildOriginalDerivedServing: (context: JpOhlcvRepairExecutionContext) => Promise<{
     sourceGeneration: string

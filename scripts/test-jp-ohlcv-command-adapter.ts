@@ -167,7 +167,13 @@ async function main(): Promise<void> {
         sourceGeneration: 'jp-source-before',
         servingGeneration: 'jp-serving-before',
       }),
-      restoreBackup: command({ databaseRealpath: database, databaseSha256: fileSha256(backup), sourceGeneration: 'jp-source-before' }),
+      restoreBackup: command({
+        databaseRealpath: database,
+        databaseSha256: fileSha256(backup),
+        sourceGeneration: 'jp-source-before',
+        restoreStatePath: path.join(stateDirectory, 'rollback-restore-command-adapter-fixture.json'),
+        restorePhase: 'COMPLETED',
+      }),
       rebuildOriginalDerivedServing: [command({ status: 'PASS', rebuilt: ['fixture-derived'] })],
       verifyOriginalServing: command({ sourceGeneration: 'jp-source-before', servingGeneration: 'jp-serving-before', health: 'PASS' }),
     },
@@ -428,6 +434,26 @@ async function main(): Promise<void> {
   } finally {
     uninstallSignalHandlers()
   }
+  const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
+  await closeLocalClientBeforeExternalWriter()
+  fs.copyFileSync(backup, database)
+  const restoreStatePath = path.join(stateDirectory, 'rollback-restore-command-adapter-fixture.json')
+  fs.writeFileSync(restoreStatePath, '{}\n')
+  const rollbackEvidence = await adapters.rollback.restoreBackupAtomically(context)
+  assert.ok((rollbackEvidence.parentRestoredDatabaseSha256ElapsedMs ?? -1) >= 0)
+  assert.equal(
+    rollbackEvidence.parentRestoredDatabaseSha256TimeoutMs,
+    limits.parentBackupSha256MaxTimeoutMs,
+  )
+  const largeFile = path.join(root, 'large-file.bin')
+  fs.writeFileSync(largeFile, Buffer.alloc(2 * 1024 * 1024))
+  const { sha256LargeFileWithTimeout } = await import('@/lib/jp-ohlcv-command-adapter')
+  let timeoutClock = 0
+  assert.throws(() => sha256LargeFileWithTimeout(largeFile, () => {
+    const value = timeoutClock
+    timeoutClock += limits.parentBackupSha256MaxTimeoutMs + 1
+    return value
+  }), /repair_parent_large_file_sha256_timeout/)
   console.log('JP OHLCV command adapter tests: PASS')
 }
 

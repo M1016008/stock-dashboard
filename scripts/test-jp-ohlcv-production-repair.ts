@@ -406,6 +406,53 @@ for (const [name, override, expectedStage] of [
 }
 
 {
+  const name = 'rollback-restored-parent-attestation-timeout'
+  const approval = approvalFor(name)
+  const repairPaths = paths(name)
+  const transaction = new JpOhlcvProductionRepairTransaction({
+    approval,
+    approvalSha256: repairApprovalSha256(approval),
+    paths: repairPaths,
+    transactionId: name,
+  })
+  transaction.prepare()
+  transaction.advance('PREPARED', 'WRITER_LOCKED', { owner: 'fixture-writer' })
+  transaction.advance('WRITER_LOCKED', 'BACKUP_VERIFIED', {
+    backupRealpath: path.join(approval.backupDirectory, 'jp.db.backup'),
+    backupSha256: 'a'.repeat(64),
+  })
+  transaction.advance('BACKUP_VERIFIED', 'DATA_COMMITTED', { fixture: 'forward-data-changed' })
+  transaction.beginRollback({ fixture: 'rollback-started' })
+  transaction.advance('ROLLBACK_STARTED', 'ROLLBACK_READ_SERVICES_HOLDING', { fixture: 'holding' })
+  transaction.advance('ROLLBACK_READ_SERVICES_HOLDING', 'ROLLBACK_READ_SERVICES_HELD', { fixture: 'held' })
+  const restoreStatePath = path.join(repairPaths.stateDirectory, `rollback-restore-${name}.json`)
+  fs.writeFileSync(restoreStatePath, `${JSON.stringify({
+    version: 1,
+    configurationSha256: 'b'.repeat(64),
+    transactionId: name,
+    databaseRealpath: approval.databaseRealpath,
+    backupRealpath: path.join(approval.backupDirectory, 'jp.db.backup'),
+    backupSha256: 'a'.repeat(64),
+    temporaryPath: `${approval.databaseRealpath}.restore-${name}`,
+    failedPath: `${approval.databaseRealpath}.failed-${name}`,
+    phase: 'COMPLETED',
+    updatedAt: new Date().toISOString(),
+  }, null, 2)}\n`)
+  assert.throws(() => transaction.hold(new Error('repair_parent_large_file_sha256_timeout')))
+  const inspection = inspectJpOhlcvProductionRepair(repairPaths) as {
+    reasons: string[]
+    journal: {
+      operatorAction: string
+      rollbackRestoreState: { phase: string; parentAttestationComplete: boolean }
+    }
+  }
+  assert.ok(inspection.reasons.includes('ROLLBACK_DATABASE_RESTORED_PARENT_ATTESTATION_INCOMPLETE'))
+  assert.equal(inspection.journal.rollbackRestoreState.phase, 'COMPLETED')
+  assert.equal(inspection.journal.rollbackRestoreState.parentAttestationComplete, false)
+  assert.match(inspection.journal.operatorAction, /Do not rerun restore/)
+}
+
+{
   const approval = approvalFor('release-failure')
   await assert.rejects(runJpOhlcvProductionRepair({
     approval,

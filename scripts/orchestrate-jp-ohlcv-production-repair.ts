@@ -13,6 +13,7 @@ import {
   type JpOhlcvProductionExecutionPackage,
 } from '@/lib/jp-ohlcv-executable-plan'
 import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-orchestrator'
+import { JP_OHLCV_BACKUP_TIME_LIMITS } from '@/lib/jp-ohlcv-backup-time-budget'
 import {
   isProcessGroupAlive,
   terminateAndWaitForProcessGroup,
@@ -21,7 +22,11 @@ import {
   assertNoUnauthorizedDatabaseHandles,
   createLaunchdWriterHoldDriver,
 } from '@/lib/storage/launchd-writer-hold-driver'
-import type { WriterHoldDriver } from '@/lib/storage/weekly-writer-hold'
+import {
+  WriterHoldError,
+  WriterPreflightError,
+  type WriterHoldDriver,
+} from '@/lib/storage/weekly-writer-hold'
 import { inspectWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import {
   buildJpOhlcvBackfillPlan,
@@ -280,7 +285,9 @@ async function main(): Promise<void> {
     rows: JpOfficialOhlcvValue[]
     proof: JpOhlcvRuntimeSnapshot['officialSourceProof']
   }> => {
-    const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate, { timeoutMs: 2 * 60_000 })
+    const evidence = await fetchJQuantsDailyByDateWithEvidence(config.targetDate, {
+      timeoutMs: JP_OHLCV_BACKUP_TIME_LIMITS.officialSourceFetchMaxTimeoutMs,
+    })
     operatorOfficialSourceEvidence = {
       requestedAt: evidence.requestedAt,
       completedAt: evidence.completedAt,
@@ -363,7 +370,7 @@ async function main(): Promise<void> {
           definitionSha256: service.definitionSha256,
           program: service.program,
         })),
-        timeoutMs: 30_000,
+        timeoutMs: JP_OHLCV_BACKUP_TIME_LIMITS.readerHandleProbeMaxTimeoutMs,
       })
     },
     runTransaction: async (assertWriterHoldValid) => {
@@ -478,6 +485,7 @@ async function main(): Promise<void> {
       : 'Derived serving data uses the inserted rows plus approved keys already satisfied by exact sealed official values. Preserved conflicts retain their pre-repair values.',
     transaction: result.result,
     readServices: finalEvidence.readServices,
+    writerRestoreSloStatus: result.writerHold.restoreWithinSlo ? 'PASS' : 'BREACH',
     writerHold: result.writerHold,
   }))
 }
@@ -503,9 +511,26 @@ async function observeWriterStates(): Promise<Array<Record<string, unknown>> | n
 
 type HoldClass = 'BENIGN_RECAPTURE' | 'WAIT_FOR_UPDATER' | 'SOURCE_REVISED' | 'PRICE_CONFLICT'
   | 'UNAPPROVED_DRIFT' | 'PROVIDER_ENVELOPE_CHANGED' | 'CONCURRENT_STATE_CHANGE' | 'BACKUP_TIMEOUT'
-  | 'SAFETY_GATE' | 'UNCLASSIFIED'
+  | 'WRITER_STATE_MISMATCH' | 'SAFETY_GATE' | 'UNCLASSIFIED'
+
+function backupTimeoutSubtype(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('repair_backup_copy_timeout_or_failure')) return 'BACKUP_COPY'
+  if (message.includes('repair_backup_journal_mode_timeout_or_failure')) return 'JOURNAL_MODE_NORMALIZATION'
+  if (message.includes('repair_backup_quick_check_timeout_or_failure')) return 'FULL_QUICK_CHECK'
+  if (message.includes('repair_backup_sha256_timeout_or_failure')) return 'BACKUP_STAGE_SHA256'
+  if (message.includes('repair_parent_backup_sha256_timeout')
+    || message.includes('repair_parent_large_file_sha256_timeout')) return 'PARENT_SHA256_ATTESTATION'
+  if (message.includes('repair_rollback_backup_sha256_timeout_or_failure')) return 'ROLLBACK_BACKUP_SHA256'
+  if (message.includes('repair_rollback_backup_quick_check_timeout_or_failure')) return 'ROLLBACK_FULL_QUICK_CHECK'
+  if (message.includes('repair_backup_time_budget_insufficient')) return 'STAGE_REMAINING_BUDGET'
+  if (message.includes('repair_stage_command_timeout:create-backup')) return 'CREATE_BACKUP_STAGE'
+  if (message.includes('repair_stage_command_timeout:verify-backup')) return 'VERIFY_BACKUP_STAGE'
+  return null
+}
 
 function holdClass(error: unknown): HoldClass {
+  if (error instanceof WriterPreflightError) return 'WRITER_STATE_MISMATCH'
   const message = error instanceof Error ? error.message : String(error)
   if (message.includes('repair_runtime_snapshot_expired:')) return 'BENIGN_RECAPTURE'
   if (message.includes('repair_runtime_snapshot_source_generation_not_publishable')) return 'WAIT_FOR_UPDATER'
@@ -531,12 +556,17 @@ function holdClass(error: unknown): HoldClass {
     }
   }
   if (message.includes('repair_runtime_snapshot_changed_after_writer_hold')) return 'CONCURRENT_STATE_CHANGE'
+  if (message.includes('WRITER_INITIAL_STATE_MISMATCH:')
+    || message.includes('WRITER_INITIAL_DISABLED_STATE_MISMATCH:')
+    || message.includes('WRITER_EXPECTED_STATE_LABELS_INVALID')
+    || message.includes('WRITER_EXPECTED_DISABLED_LABELS_INVALID')) return 'WRITER_STATE_MISMATCH'
   if (message.includes('repair_backup_copy_timeout_or_failure')
     || message.includes('repair_backup_journal_mode_timeout_or_failure')
     || message.includes('repair_backup_quick_check_timeout_or_failure')
     || message.includes('repair_backup_sha256_timeout_or_failure')
     || message.includes('repair_backup_time_budget_insufficient')
     || message.includes('repair_parent_backup_sha256_timeout')
+    || message.includes('repair_parent_large_file_sha256_timeout')
     || message.includes('repair_stage_command_timeout:create-backup')
     || message.includes('repair_stage_command_timeout:verify-backup')
     || message.includes('repair_rollback_backup_sha256_timeout_or_failure')
@@ -571,6 +601,9 @@ function operatorAction(error: unknown): string {
     }
     if (classification === 'BACKUP_TIMEOUT') {
       return 'The database transaction did not start. Backup creation or full verification exceeded its sealed operation or maintenance budget. Preserve the partial or unverified backup, journal, lock, and timing evidence; do not delete, reuse as rollback, or retry automatically. Restore held writers only through the exact hash-bound no-mutation recovery path, then obtain a fresh package and approval after the timeout cause is resolved.'
+    }
+    if (classification === 'WRITER_STATE_MISMATCH') {
+      return 'No writer stop was attempted. The exact approved loaded, unloaded, or disabled service state did not match Production. Preserve the observed state and repair package; do not normalize services or widen the approved identity set before independent review.'
     }
     return 'The database transaction did not start. Do not retry automatically. Verify every writer service against writerServices and preserve all evidence. If writers were held, restore them only through the separately hash-approved no-mutation recovery path; then correct only the rejected preflight condition before obtaining fresh exact-hash approval.'
   }
@@ -614,6 +647,8 @@ main().catch(async (error) => {
     productionMutationState: operatorMutationState,
     error: redactedError(error),
     holdClass: holdClass(error),
+    holdSubtype: backupTimeoutSubtype(error),
+    writerMutationAttempted: error instanceof WriterPreflightError ? false : null,
     existingRowsEvidenceKind: operatorConfig?.existingEvidence.kind ?? null,
     intendedScope: operatorConfig ? {
       approvedRepairKeys: operatorConfig.repairScope.missingRows,
@@ -630,6 +665,7 @@ main().catch(async (error) => {
       readServiceSnapshotPresent: fs.existsSync(operatorConfig.serviceSnapshotPath),
     } : null,
     writerServices,
+    writerRestoreEvidence: error instanceof WriterHoldError ? error.restoreEvidence : null,
     officialSourceEvidenceFile,
     readServiceWarning: 'If readServiceSnapshotPresent is true, Web/Analog may be held or may have failed post-restore health. Verify the exact saved state and health before any service action.',
     writerServiceWarning: 'Any writer with loaded=false that was loaded before maintenance remains intentionally held until the data state is certain. Do not bootstrap it without exact recovery approval.',

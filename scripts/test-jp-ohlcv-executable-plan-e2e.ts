@@ -597,7 +597,7 @@ async function main(): Promise<void> {
         args: ['fixture-runner', '--execution-configuration', configPath],
         workingDirectory: root,
         sealedFiles: [{ path: configPath, sha256: sha256File(configPath) }],
-        timeoutMs: 60_000,
+        timeoutMs: limits.forwardOperationTimeoutMs,
         environment: {
           ...storageEnvironment,
           STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
@@ -609,6 +609,13 @@ async function main(): Promise<void> {
       requiredApproval: 'EXACT_PACKAGE_AND_REPAIR_APPROVAL_HASHES',
     }
     assert.doesNotThrow(() => assertJpOhlcvProductionExecutionPackage(fixturePackage))
+    assert.throws(
+      () => assertJpOhlcvProductionExecutionPackage({
+        ...fixturePackage,
+        runner: { ...fixturePackage.runner, timeoutMs: config.maximumMaintenanceMs },
+      }),
+      /repair_execution_package_runner_contract_invalid/,
+    )
     assert.throws(
       () => assertJpOhlcvProductionExecutionPackage({
         ...fixturePackage,
@@ -983,6 +990,14 @@ async function main(): Promise<void> {
     })
     assert.deepEqual(orchestration.writerHold.restoredLabels, writers.slice(0, 13).map((writer) => writer.label).reverse())
     assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, writers.slice(13).map((writer) => writer.label))
+    assert.ok(orchestration.writerHold.restoreStartedAtMs <= orchestration.writerHold.restoreCompletedAtMs)
+    assert.equal(
+      orchestration.writerHold.restoreDurationMs,
+      orchestration.writerHold.restoreCompletedAtMs - orchestration.writerHold.restoreStartedAtMs,
+    )
+    assert.ok(orchestration.writerHold.restoreDurationMs <= limits.writerRestoreSloMs)
+    assert.equal(orchestration.writerHold.restoreSloMs, limits.writerRestoreSloMs)
+    assert.equal(orchestration.writerHold.restoreWithinSlo, true)
     assert.equal(fs.existsSync(path.join(backupDirectory, 'fixture-e2e-success.sqlite-wal')), false)
     assert.equal(fs.existsSync(path.join(backupDirectory, 'fixture-e2e-success.sqlite-shm')), false)
 

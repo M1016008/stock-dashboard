@@ -29,7 +29,27 @@ export type WriterHoldReceipt = {
   restoredLabels: string[]
   alreadyLoadedOnRestoreLabels: string[]
   holdDurationMs: number
+  restoreStartedAtMs: number
+  restoreCompletedAtMs: number
+  restoreDurationMs: number
+  restoreSloMs: number | null
+  restoreWithinSlo: boolean | null
   restored: true
+}
+
+export type WriterRestoreEvidence = {
+  restoreStartedAtMs: number
+  restoreCompletedAtMs: number
+  restoreDurationMs: number
+  holdStartedAtMs: number
+  holdElapsedMs: number
+  restoreSloMs: number | null
+  restoreWithinSlo: boolean | null
+  expectedLoadedLabels: string[]
+  restoredLabels: string[]
+  alreadyLoadedOnRestoreLabels: string[]
+  restoreErrorCount: number
+  complete: boolean
 }
 
 function errorMessage(error: unknown): string {
@@ -40,15 +60,30 @@ function errorMessage(error: unknown): string {
 export class WriterHoldError extends AggregateError {
   readonly primaryError: unknown | null
   readonly restoreErrors: readonly unknown[]
+  readonly restoreEvidence: WriterRestoreEvidence
 
-  constructor(primaryError: unknown | null, restoreErrors: readonly unknown[]) {
+  constructor(
+    primaryError: unknown | null,
+    restoreErrors: readonly unknown[],
+    restoreEvidence: WriterRestoreEvidence,
+  ) {
     const errors = [...(primaryError === null ? [] : [primaryError]), ...restoreErrors]
     const primary = primaryError === null ? 'NONE' : errorMessage(primaryError)
     const restore = restoreErrors.length === 0 ? 'NONE' : restoreErrors.map(errorMessage).join('|')
-    super(errors, `WRITER_HOLD_FAILED:primary=${primary};restore=${restore}`)
+    super(errors, `WRITER_HOLD_FAILED:primary=${primary};restore=${restore};restoreDurationMs=${restoreEvidence.restoreDurationMs};restoreComplete=${restoreEvidence.complete}`)
     this.name = 'WriterHoldError'
     this.primaryError = primaryError
     this.restoreErrors = restoreErrors
+    this.restoreEvidence = restoreEvidence
+  }
+}
+
+export class WriterPreflightError extends Error {
+  readonly writerMutationAttempted = false
+
+  constructor(message: string, options: ErrorOptions = {}) {
+    super(message, options)
+    this.name = 'WriterPreflightError'
   }
 }
 
@@ -63,6 +98,10 @@ export async function withWeeklyWriterHold<T>(args: {
   approved: ApprovedWriterIdentity[]
   maximumHoldMs: number
   maximumStopWaitMs?: number
+  restoreSloMs?: number
+  expectedLoadedLabels?: readonly string[]
+  expectedUnloadedLabels?: readonly string[]
+  expectedDisabledLabels?: readonly string[]
   stopPollIntervalMs?: number
   driver: WriterHoldDriver
   operation: (assertHoldValid: () => Promise<void>) => Promise<T>
@@ -80,11 +119,63 @@ export async function withWeeklyWriterHold<T>(args: {
     || stopPollIntervalMs > maximumStopWaitMs) {
     throw new Error('WRITER_STOP_WAIT_INVALID')
   }
+  if (args.restoreSloMs !== undefined
+    && (!Number.isSafeInteger(args.restoreSloMs) || args.restoreSloMs <= 0)) {
+    throw new Error('WRITER_RESTORE_SLO_INVALID')
+  }
+  if ((args.expectedLoadedLabels === undefined) !== (args.expectedUnloadedLabels === undefined)) {
+    throw new Error('WRITER_EXPECTED_STATE_LABELS_INVALID')
+  }
+  if (args.expectedLoadedLabels !== undefined && args.expectedUnloadedLabels !== undefined) {
+    const expectedStateLabels = [...args.expectedLoadedLabels, ...args.expectedUnloadedLabels]
+    if (new Set(expectedStateLabels).size !== expectedStateLabels.length
+      || expectedStateLabels.length !== labels.length
+      || expectedStateLabels.some((label) => !labels.includes(label))) {
+      throw new Error('WRITER_EXPECTED_STATE_LABELS_INVALID')
+    }
+  }
+  if (args.expectedDisabledLabels !== undefined
+    && (new Set(args.expectedDisabledLabels).size !== args.expectedDisabledLabels.length
+      || args.expectedDisabledLabels.some((label) => !labels.includes(label)))) {
+    throw new Error('WRITER_EXPECTED_DISABLED_LABELS_INVALID')
+  }
   const before = new Map<string, WriterRuntimeIdentity>()
   for (const expected of args.approved) {
-    const observed = await args.driver.observe(expected.label)
-    assertIdentity(expected, observed)
-    before.set(expected.label, observed)
+    try {
+      const observed = await args.driver.observe(expected.label)
+      assertIdentity(expected, observed)
+      before.set(expected.label, observed)
+    } catch (error) {
+      throw new WriterPreflightError(errorMessage(error), { cause: error })
+    }
+  }
+  if (args.expectedLoadedLabels !== undefined && args.expectedUnloadedLabels !== undefined) {
+    for (const label of args.expectedLoadedLabels) {
+      if (!before.get(label)!.loaded) {
+        throw new WriterPreflightError(
+          `WRITER_INITIAL_STATE_MISMATCH:${label}:expected_loaded:observed_unloaded`,
+        )
+      }
+    }
+    for (const label of args.expectedUnloadedLabels) {
+      if (before.get(label)!.loaded) {
+        throw new WriterPreflightError(
+          `WRITER_INITIAL_STATE_MISMATCH:${label}:expected_unloaded:observed_loaded`,
+        )
+      }
+    }
+  }
+  if (args.expectedDisabledLabels !== undefined) {
+    const expectedDisabled = new Set(args.expectedDisabledLabels)
+    for (const [label, observed] of before) {
+      if (observed.disabled !== expectedDisabled.has(label)) {
+        throw new WriterPreflightError(
+          `WRITER_INITIAL_DISABLED_STATE_MISMATCH:${label}:expected_`
+          + `${expectedDisabled.has(label) ? 'disabled' : 'enabled'}:observed_`
+          + `${observed.disabled ? 'disabled' : 'enabled'}`,
+        )
+      }
+    }
   }
 
   const startedAt = args.driver.now()
@@ -98,6 +189,8 @@ export async function withWeeklyWriterHold<T>(args: {
   let primaryError: unknown = null
   const restoreErrors: unknown[] = []
   let result: T | undefined
+  let restoreStartedAtMs = 0
+  let restoreCompletedAtMs = 0
 
   const waitForState = async (
     expected: ApprovedWriterIdentity,
@@ -159,6 +252,7 @@ export async function withWeeklyWriterHold<T>(args: {
   } catch (error) {
     primaryError = error
   } finally {
+    restoreStartedAtMs = args.driver.now()
     let restoreSafetyError: unknown = null
     if (args.assertRestoreSafe) {
       try {
@@ -252,10 +346,32 @@ export async function withWeeklyWriterHold<T>(args: {
         ))
       }
     }
+    restoreCompletedAtMs = args.driver.now()
   }
 
   if (primaryError !== null || restoreErrors.length > 0) {
-    throw new WriterHoldError(primaryError, restoreErrors)
+    const expectedLoadedLabels = args.approved
+      .filter((expected) => before.get(expected.label)!.loaded)
+      .map((expected) => expected.label)
+    throw new WriterHoldError(primaryError, restoreErrors, {
+      restoreStartedAtMs,
+      restoreCompletedAtMs,
+      restoreDurationMs: restoreCompletedAtMs - restoreStartedAtMs,
+      holdStartedAtMs: startedAt,
+      holdElapsedMs: restoreCompletedAtMs - startedAt,
+      restoreSloMs: args.restoreSloMs ?? null,
+      restoreWithinSlo: args.restoreSloMs === undefined
+        ? null
+        : restoreCompletedAtMs - restoreStartedAtMs <= args.restoreSloMs,
+      expectedLoadedLabels,
+      restoredLabels: [...restoredLabels],
+      alreadyLoadedOnRestoreLabels: [...alreadyLoadedOnRestoreLabels],
+      restoreErrorCount: restoreErrors.length,
+      complete: restoreErrors.length === 0
+        && expectedLoadedLabels.every((label) => (
+          restoredLabels.includes(label) || alreadyLoadedOnRestoreLabels.includes(label)
+        )),
+    })
   }
   return {
     result: result as T,
@@ -267,6 +383,13 @@ export async function withWeeklyWriterHold<T>(args: {
       restoredLabels,
       alreadyLoadedOnRestoreLabels,
       holdDurationMs: args.driver.now() - startedAt,
+      restoreStartedAtMs,
+      restoreCompletedAtMs,
+      restoreDurationMs: restoreCompletedAtMs - restoreStartedAtMs,
+      restoreSloMs: args.restoreSloMs ?? null,
+      restoreWithinSlo: args.restoreSloMs === undefined
+        ? null
+        : restoreCompletedAtMs - restoreStartedAtMs <= args.restoreSloMs,
       restored: true,
     },
   }
