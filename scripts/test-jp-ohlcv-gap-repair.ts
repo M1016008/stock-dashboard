@@ -149,15 +149,49 @@ const batchSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'batch-o
 assert.match(batchSource, /dateBulkFatalError/)
 assert.match(batchSource, /unresolved_historical_ohlcv_coverage/)
 assert.match(batchSource, /OHLCV update incomplete/)
-assert.match(batchSource, /onConflictDoNothing\(\)/)
+assert.match(batchSource, /applyJpOhlcvIngestionBoundary/)
+assert.match(batchSource, /requireRunningBatchRun: true/)
+assert.match(batchSource, /jp_ohlcv_normal_updater_requires_date_bulk_boundary/)
+assert.match(batchSource, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/)
+assert.match(batchSource, /jquants_corporate_action_requires_approved_history_boundary/)
+assert.match(batchSource, /jp_ohlcv_source_run_finalize_compare_and_swap_failed/)
 assert.match(batchSource, /positiveIntegerSetting/)
-assert.match(batchSource, /action=run_audit_jp_ohlcv_gap/)
 assert.match(batchSource, /historicalCoverageDates/)
 assert.doesNotMatch(
   batchSource.slice(batchSource.indexOf('async function storeRows'), batchSource.indexOf('async function historicalCoverageGaps')),
-  /onConflictDoUpdate/,
+  /onConflictDoUpdate|onConflictDoNothing/,
   'date backfill must never overwrite existing rows',
 )
+const bulkStart = batchSource.indexOf('const providerCoverage')
+const corporateActionHold = batchSource.indexOf('jquants_corporate_action_requires_approved_history_boundary', bulkStart)
+const boundaryWrite = batchSource.indexOf('const stored = await storeRows(rows, runId)', bulkStart)
+assert.ok(corporateActionHold > bulkStart && corporateActionHold < boundaryWrite,
+  'corporate-action history must hold before the daily boundary mutates source rows')
+const refreshCall = batchSource.indexOf('await refreshAfterOhlcv()', boundaryWrite)
+const publicationAssertion = batchSource.indexOf('await publishJpOhlcvSourceRun', refreshCall)
+assert.ok(refreshCall < publicationAssertion,
+  'derived refresh must precede the source-run publication transaction')
+const coverageStoreSource = fs.readFileSync(
+  path.join(process.cwd(), 'lib', 'jp-ohlcv-coverage-store.ts'),
+  'utf8',
+)
+const publicationTransaction = coverageStoreSource.slice(
+  coverageStoreSource.indexOf('export async function publishJpOhlcvSourceRun'),
+)
+assert.match(publicationTransaction, /client\.transaction\('write'\)/)
+assert.ok(
+  publicationTransaction.indexOf('await assertJpOhlcvSourceRunPublishable')
+    < publicationTransaction.indexOf('UPDATE batch_runs'),
+  'coverage-head proof and source-run CAS must share one write transaction',
+)
+const bulkCatch = batchSource.slice(
+  batchSource.indexOf('} catch (err) {', boundaryWrite),
+  batchSource.indexOf('\n  }\n  let nextIndex', boundaryWrite),
+)
+assert.match(bulkCatch, /dateBulkFatalError = message/)
+assert.match(bulkCatch, /tickers = \[\]/)
+assert.doesNotMatch(bulkCatch, /if \(failClosed\)/,
+  'every exhausted date-bulk failure must stop before the legacy per-ticker writer')
 
 async function isolatedApplyRegression(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-jp-gap-repair-'))
