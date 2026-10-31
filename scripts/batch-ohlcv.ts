@@ -22,7 +22,7 @@
 
 import { spawn } from 'node:child_process'
 import { client, db, execAll, execGet, execRun } from '@/lib/db/client'
-import { ohlcvDaily, batchRuns, jquantsSyncRuns } from '@/lib/db/schema'
+import { ohlcvDaily } from '@/lib/db/schema'
 import {
   fetchJQuantsDaily,
   fetchJQuantsDailyByDateWithEvidence,
@@ -38,14 +38,17 @@ import {
   historicalCoverageDates,
 } from '@/lib/jp-ohlcv-data-quality'
 import { applyJpOhlcvIngestionBoundary } from '@/lib/jp-ohlcv-ingestion-boundary'
-import {
-  loadJpOhlcvCoverageHead,
-  publishJpOhlcvSourceRun,
-} from '@/lib/jp-ohlcv-coverage-store'
+import { publishJpOhlcvSourceRun } from '@/lib/jp-ohlcv-coverage-store'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { getJpTradingDates } from '@/lib/server/jp-market-calendar'
+import {
+  clearJpOhlcvSourceRunChild,
+  jpOhlcvProcessGroupStatus,
+  registerJpOhlcvSourceRunChild,
+  startJpOhlcvSourceRun,
+} from '@/lib/jp-ohlcv-source-run-recovery'
 import type { OHLCV } from '@/types/stock'
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 
 function positiveIntegerSetting(value: string | undefined, fallback: number, minimum: number): number {
   const parsed = Number(value ?? fallback)
@@ -89,30 +92,97 @@ type RunResult = {
   signal: NodeJS.Signals | null
 }
 
-function runScript(script: string): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
-      cwd: process.cwd(),
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        USE_LOCAL_DB: '1',
-      },
-    })
-
-    child.on('error', reject)
-    child.on('close', (code, signal) => resolve({ code, signal }))
-  })
+async function stopAndVerifyChildProcessGroup(processGroupId: number): Promise<void> {
+  let status = jpOhlcvProcessGroupStatus(processGroupId)
+  if (status === 'UNKNOWN') throw new Error('child_process_group_liveness_unknown')
+  if (status === 'LIVE') {
+    try { process.kill(-processGroupId, 'SIGTERM') } catch { /* re-probe below */ }
+    const gracefulDeadline = Date.now() + 2_000
+    while (Date.now() < gracefulDeadline && (status = jpOhlcvProcessGroupStatus(processGroupId)) === 'LIVE') {
+      await sleep(25)
+    }
+    if (status === 'LIVE') {
+      try { process.kill(-processGroupId, 'SIGKILL') } catch { /* re-probe below */ }
+    }
+  }
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    status = jpOhlcvProcessGroupStatus(processGroupId)
+    if (status === 'DEAD') return
+    if (status === 'UNKNOWN') throw new Error('child_process_group_liveness_unknown')
+    await sleep(25)
+  }
+  throw new Error('child_process_group_still_active')
 }
 
-async function refreshAfterOhlcv(): Promise<void> {
+async function runScript(script: string, sourceRunId: number): Promise<RunResult> {
+  const child = spawn(process.execPath, [
+    '--import',
+    'tsx',
+    'scripts/lib/run-jp-ohlcv-registered-child.ts',
+    script,
+  ], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    env: {
+      ...process.env,
+      USE_LOCAL_DB: '1',
+      JP_OHLCV_BATCH_PARENT_PID: String(process.pid),
+    },
+  })
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  if (!child.pid) throw new Error(`child_process_identity_unavailable:${script}`)
+  try {
+    await registerJpOhlcvSourceRunChild(client, { sourceRunId, childPid: child.pid })
+    await new Promise<void>((resolve, reject) => {
+      child.send({ type: 'START' }, (error) => error ? reject(error) : resolve())
+    })
+  } catch (error) {
+    try {
+      await stopAndVerifyChildProcessGroup(child.pid)
+      await clearJpOhlcvSourceRunChild(client, sourceRunId)
+    } catch (cleanupError) {
+      throw new Error(
+        `child_process_group_safety_hold:${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error },
+      )
+    }
+    throw error
+  }
+  try {
+    const result = await new Promise<RunResult>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('close', (code, signal) => resolve({ code, signal }))
+    })
+    await stopAndVerifyChildProcessGroup(child.pid)
+    await clearJpOhlcvSourceRunChild(client, sourceRunId)
+    return result
+  } catch (error) {
+    try {
+      await stopAndVerifyChildProcessGroup(child.pid)
+      await clearJpOhlcvSourceRunChild(client, sourceRunId)
+    } catch (cleanupError) {
+      throw new Error(
+        `child_process_group_safety_hold:${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error },
+      )
+    }
+    throw error
+  }
+}
+
+async function refreshAfterOhlcv(sourceRunId: number): Promise<void> {
   if (process.env.POST_OHLCV_REFRESH === '0') {
     console.log('Post-OHLCV refresh skipped: POST_OHLCV_REFRESH=0')
     return
   }
 
   console.log('\n▶ scripts/refresh-after-ohlcv.ts')
-  const result = await runScript('scripts/refresh-after-ohlcv.ts')
+  const result = await runScript('scripts/refresh-after-ohlcv.ts', sourceRunId)
   if (result.code !== 0) {
     throw new Error(`scripts/refresh-after-ohlcv.ts failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
   }
@@ -129,6 +199,70 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw new Error('unreachable')
+}
+
+type SyncEvidence = {
+  expectedRows: number
+  importedRows: number
+  missingTickersJson: string
+}
+
+async function finalizeHeldSourceAndSync(input: {
+  sourceRunId: number
+  syncRunId: number
+  status: 'failed' | 'partial'
+  totalTickers: number
+  succeeded: number
+  failed: number
+  rowsInserted: number
+  errorSummary: string
+  syncEvidence: SyncEvidence | null
+}): Promise<void> {
+  const transaction = await client.transaction('write')
+  try {
+    const sync = input.syncEvidence
+      ? await transaction.execute({
+          sql: `UPDATE jquants_sync_runs
+                SET expected_rows = ?, imported_rows = ?, missing_tickers = ?, status = ?,
+                    finished_at = unixepoch(), error_summary = ?
+                WHERE id = ? AND status = 'running'`,
+          args: [
+            input.syncEvidence.expectedRows,
+            input.syncEvidence.importedRows,
+            input.syncEvidence.missingTickersJson,
+            input.status,
+            input.errorSummary,
+            input.syncRunId,
+          ],
+        })
+      : await transaction.execute({
+          sql: `UPDATE jquants_sync_runs
+                SET status = ?, finished_at = unixepoch(), error_summary = ?
+                WHERE id = ? AND status = 'running'`,
+          args: [input.status, input.errorSummary, input.syncRunId],
+        })
+    if (sync.rowsAffected !== 1) throw new Error('jp_ohlcv_sync_run_finalize_compare_and_swap_failed')
+    const source = await transaction.execute({
+      sql: `UPDATE batch_runs
+            SET finished_at = unixepoch(), status = ?, total_tickers = ?, succeeded = ?,
+                failed = ?, rows_inserted = ?, error_summary = ?
+            WHERE id = ? AND job_type = 'ohlcv_fetch:jquants' AND status = 'running'`,
+      args: [
+        input.status,
+        input.totalTickers,
+        input.succeeded,
+        input.failed,
+        input.rowsInserted,
+        input.errorSummary,
+        input.sourceRunId,
+      ],
+    })
+    if (source.rowsAffected !== 1) throw new Error('jp_ohlcv_source_run_finalize_compare_and_swap_failed')
+    await transaction.commit()
+  } catch (error) {
+    try { await transaction.rollback() } catch { /* preserve the original failure */ }
+    throw error
+  }
 }
 
 async function fetchDateWithRetry(date: string) {
@@ -366,21 +500,9 @@ async function main() {
     || !USE_DATE_BULK || tickerFilter?.length || FORCE_FULL_HISTORY || ENABLE_MISSING_FALLBACK) {
     throw new Error('jp_ohlcv_normal_updater_requires_date_bulk_boundary')
   }
-  if (!await loadJpOhlcvCoverageHead(client)) {
-    throw new Error('jp_ohlcv_coverage_head_bootstrap_required')
-  }
-
-  // 開始記録
-  const [run] = await db
-    .insert(batchRuns)
-    .values({
-      jobType: 'ohlcv_fetch:jquants',
-      startedAt: new Date(),
-      status: 'running',
-    })
-    .returning({ id: batchRuns.id })
-
-  const runId = run.id
+  const execution = await startJpOhlcvSourceRun(client, { targetDate: TARGET_DATE })
+  const runId = execution.sourceRunId
+  const syncRunId = execution.syncRunId
 
   // 対象銘柄
   let tickers: { ticker: string; lastDate: string | null }[]
@@ -412,26 +534,12 @@ async function main() {
   const errors: string[] = []
   let dateBulkFatalError: string | null = null
   let sourcePublicationError: string | null = null
-  let pendingSyncPublication: {
-    id: number
-    expectedRows: number
-    importedRows: number
-    missingTickersJson: string
-  } | null = null
+  let pendingSyncEvidence: SyncEvidence | null = null
 
   console.log(`OHLCV fetch 開始: ${tickers.length} 銘柄`)
   const startTime = Date.now()
 
   if (USE_DATE_BULK && !tickerFilter && TARGET_DATE) {
-    const [syncRun] = await db
-      .insert(jquantsSyncRuns)
-      .values({
-        targetDate: TARGET_DATE,
-        apiType: 'equities/bars/daily:date',
-        status: 'running',
-      })
-      .returning({ id: jquantsSyncRuns.id })
-
     try {
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
       const evidence = await fetchDateWithRetry(TARGET_DATE)
@@ -481,24 +589,10 @@ async function main() {
 
       rowsInserted += stored.inserted + adjustedHistoryRows
       succeeded += Math.max(0, tickers.length - missingTickers.length)
-      if (stored.sourcePublication === 'PUBLISHABLE') {
-        pendingSyncPublication = {
-          id: syncRun.id,
-          expectedRows: storedCoverage.expectedRows,
-          importedRows: stored.stored,
-          missingTickersJson: JSON.stringify(missingTickers),
-        }
-      } else {
-        await db
-          .update(jquantsSyncRuns)
-          .set({
-            expectedRows: storedCoverage.expectedRows,
-            importedRows: stored.stored,
-            missingTickers: JSON.stringify(missingTickers),
-            status: 'partial',
-            finishedAt: new Date(),
-          })
-          .where(eq(jquantsSyncRuns.id, syncRun.id))
+      pendingSyncEvidence = {
+        expectedRows: storedCoverage.expectedRows,
+        importedRows: stored.stored,
+        missingTickersJson: JSON.stringify(missingTickers),
       }
       console.log(
         `J-Quants date bulk 完了: expected=${storedCoverage.expectedRows}, provider=${evidence.providerRows}, stored=${stored.stored}, inserted=${stored.inserted}, corporateActions=${explicitCorporateActionTickers.length}, boundaryCandidates=${boundaryCorporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
@@ -512,14 +606,6 @@ async function main() {
       const message = err instanceof Error ? err.message : String(err)
       const classified = classifyJpFetchFailure(err)
       console.warn(`J-Quants date bulk をスキップ: ${message}`)
-      await db
-        .update(jquantsSyncRuns)
-        .set({
-          status: 'failed',
-          finishedAt: new Date(),
-          errorSummary: message,
-        })
-        .where(eq(jquantsSyncRuns.id, syncRun.id))
       dateBulkFatalError = message
       failed += tickers.length
       errors.push(`date_bulk_fail_closed:${classified.category}:${message}`)
@@ -585,9 +671,10 @@ async function main() {
 
   if (fetchStatus !== 'failed' && !dateBulkFatalError && !historicalCoverageError && !sourcePublicationError) {
     try {
-      await refreshAfterOhlcv()
+      await refreshAfterOhlcv(runId)
     } catch (err) {
       postRefreshError = err instanceof Error ? err.message : String(err)
+      if (postRefreshError.startsWith('child_process_group_safety_hold:')) throw err
       errors.push(`post_ohlcv_refresh: ${postRefreshError}`)
       console.error(`Post-OHLCV refresh failed: ${postRefreshError}`)
     }
@@ -600,7 +687,7 @@ async function main() {
 
   const errorSummary = JSON.stringify(errors.slice(0, 10))
   if (finalStatus === 'success') {
-    if (!pendingSyncPublication) throw new Error('jp_ohlcv_sync_publication_evidence_missing')
+    if (!pendingSyncEvidence) throw new Error('jp_ohlcv_sync_publication_evidence_missing')
     try {
       await publishJpOhlcvSourceRun(client, {
         sourceRunId: runId,
@@ -610,41 +697,35 @@ async function main() {
         failed,
         rowsInserted,
         errorSummary,
-        syncRun: pendingSyncPublication,
+        syncRun: { id: syncRunId, ...pendingSyncEvidence },
       })
     } catch (error) {
       const message = `jp_ohlcv_source_publication_failed:${error instanceof Error ? error.message : String(error)}`
-      const syncHeld = await client.execute({
-        sql: `UPDATE jquants_sync_runs SET status = 'partial', finished_at = unixepoch(), error_summary = ?
-              WHERE id = ? AND status = 'running'`,
-        args: [message, pendingSyncPublication.id],
+      await finalizeHeldSourceAndSync({
+        sourceRunId: runId,
+        syncRunId,
+        status: 'partial',
+        totalTickers: initialTickerCount,
+        succeeded,
+        failed,
+        rowsInserted,
+        errorSummary: JSON.stringify([...errors, message].slice(0, 10)),
+        syncEvidence: pendingSyncEvidence,
       })
-      if (syncHeld.rowsAffected !== 1) throw new Error(`${message}:sync_run_hold_failed`)
-      const held = await client.execute({
-        sql: `UPDATE batch_runs SET finished_at = unixepoch(), status = 'partial', error_summary = ?
-              WHERE id = ? AND job_type = 'ohlcv_fetch:jquants' AND status = 'running'`,
-        args: [JSON.stringify([...errors, message].slice(0, 10)), runId],
-      })
-      if (held.rowsAffected !== 1) throw new Error(`${message}:source_run_hold_failed`)
       throw new Error(message)
     }
   } else {
-    if (pendingSyncPublication) {
-      const syncHeld = await client.execute({
-        sql: `UPDATE jquants_sync_runs SET status = 'partial', finished_at = unixepoch(), error_summary = ?
-              WHERE id = ? AND status = 'running'`,
-        args: [errorSummary, pendingSyncPublication.id],
-      })
-      if (syncHeld.rowsAffected !== 1) throw new Error('jp_ohlcv_sync_run_hold_failed')
-    }
-    const finalized = await client.execute({
-      sql: `UPDATE batch_runs
-            SET finished_at = unixepoch(), status = ?, total_tickers = ?, succeeded = ?,
-                failed = ?, rows_inserted = ?, error_summary = ?
-            WHERE id = ? AND job_type = 'ohlcv_fetch:jquants' AND status = 'running'`,
-      args: [finalStatus, initialTickerCount, succeeded, failed, rowsInserted, errorSummary, runId],
+    await finalizeHeldSourceAndSync({
+      sourceRunId: runId,
+      syncRunId,
+      status: finalStatus,
+      totalTickers: initialTickerCount,
+      succeeded,
+      failed,
+      rowsInserted,
+      errorSummary,
+      syncEvidence: pendingSyncEvidence,
     })
-    if (finalized.rowsAffected !== 1) throw new Error('jp_ohlcv_source_run_finalize_compare_and_swap_failed')
   }
 
   console.log(`完了: ${succeeded} 成功 / ${failed} 失敗 / 計 ${rowsInserted} 行 / ステータス: ${finalStatus}`)

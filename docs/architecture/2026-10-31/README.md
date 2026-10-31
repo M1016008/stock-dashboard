@@ -67,6 +67,16 @@ Phase 1:
 - `data-lineage-matrix.md`
 - `rollback-state-diagram.md`
 
+Phase 2 stacked drafts:
+
+- `ADR-jp-ohlcv-publication-policy.md`
+- `phase2-pr-h-normal-updater.md`
+- `phase2-pr-i-process-e2e-and-running-recovery.md`
+- `phase2-pr-i-claude-review.md`
+- `jp-source-reader-lineage-inventory.md`
+- `ADR-jp-ohlcv-known-conflict-publication.md`
+- `jp-ohlcv-production-bootstrap-and-corporate-action.md`
+
 ## Implementation sequence
 
 1. Freeze the current safety contract with characterization tests and evidence
@@ -101,7 +111,7 @@ approved. A design document alone does not make Production repair ready.
 
 The existing isolated repair E2E passes as characterization only. Phase 1 design
 remains HOLD until the two P0 defects and the P1 design findings in the ADR are
-closed. Phase 2 has not started on this branch.
+closed. Phase 2 is active in stacked Draft PRs; none authorizes Production.
 
 The overall architecture project is complete only when dependency cycles are
 removed, critical logic has one owner, temporary recovery code is isolated or

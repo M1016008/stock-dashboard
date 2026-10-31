@@ -338,6 +338,8 @@
     "batch:ml-horizon-200:us": "tsx --env-file=.env.local scripts/run-ml-horizon-backfill.ts us",
     "batch:ohlcv": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
     "batch:ohlcv:fetch-only": "USE_LOCAL_DB=1 POST_OHLCV_REFRESH=0 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
+    "batch:ohlcv:recover-running": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/recover-jp-ohlcv-running-source-run.ts",
+    "test:jp-ohlcv-batch-process-e2e": "NODE_ENV=test EXTERNAL_STORAGE_REQUIRED=false tsx scripts/test-jp-ohlcv-batch-process-e2e.ts",
     "audit:jp-ohlcv-gap": "tsx --env-file-if-exists=.env.local scripts/repair-jp-ohlcv-gap.ts",
     "audit:jp-ohlcv-coverage": "tsx scripts/audit-jp-ohlcv-coverage.ts",
     "test:jp-ohlcv-gap-repair": "tsx scripts/test-jp-ohlcv-gap-repair.ts",
