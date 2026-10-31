@@ -45,7 +45,10 @@ import type { JQuantsRejectedDailyRowEvidence } from '@/lib/jquants'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
-import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
+import {
+  WEEKLY_BACKUP_READER_LABELS,
+  WEEKLY_BACKUP_WRITER_LABELS,
+} from '@/lib/storage/weekly-backup-policy'
 
 type SqliteRow = Record<string, string | number | bigint | null>
 type SqliteStatement = {
@@ -900,10 +903,22 @@ async function main(): Promise<void> {
       },
       officialSourceContract: approval.officialSourceContract,
     })
+    const readIsolationStages: string[] = []
     const adapters = createJpOhlcvCommandAdapters({
       approval,
       plan,
       runtimeSnapshot,
+      readIsolationProbe: async (stage, transactionId) => {
+        readIsolationStages.push(stage)
+        return {
+          version: 1,
+          transactionId,
+          stage,
+          checkedAt: new Date().toISOString(),
+          heldServices: [...WEEKLY_BACKUP_READER_LABELS].sort(),
+          databaseHandleCount: 0,
+        }
+      },
       refreshOfficialSource: async () => {
         const at = new Date()
         return {
@@ -953,6 +968,14 @@ async function main(): Promise<void> {
         assert.equal(JSON.parse(fs.readFileSync(servingPointer, 'utf8')).generation, config.servingGenerationAfter)
       },
     })
+    assert.deepEqual(readIsolationStages, [
+      'after_read_services_held',
+      'pre_insert',
+      'after_data_commit_before_source_publish',
+      'before_derived_rebuild',
+      'after_derived_rebuild',
+      'after_serving_verification_before_read_resume',
+    ])
     assert.equal(orchestration.result.status, 'COMMITTED')
     const committedJournal = JSON.parse(fs.readFileSync(committedJournalPath, 'utf8')) as {
       evidence: {
@@ -974,6 +997,16 @@ async function main(): Promise<void> {
           alreadySatisfiedExactRows: number
           residualMissingRows: number
         }
+        READ_SERVICES_HELD: { readIsolation: { stage: string; databaseHandleCount: number } }
+        DATA_COMMITTED: {
+          readIsolationBefore: { stage: string; databaseHandleCount: number }
+          readIsolationAfter: { stage: string; databaseHandleCount: number }
+        }
+        DERIVED_VERIFIED: {
+          readIsolationBefore: { stage: string; databaseHandleCount: number }
+          readIsolationAfter: { stage: string; databaseHandleCount: number }
+        }
+        SERVING_VERIFIED: { readIsolation: { stage: string; databaseHandleCount: number } }
       }
     }
     assert.ok(committedJournal.evidence.BACKUP_VERIFIED.parentBackupSha256ElapsedMs >= 0)
@@ -1003,6 +1036,21 @@ async function main(): Promise<void> {
       noTradeRows: 224,
       unexpectedRejectedRows: 0,
     })
+    assert.deepEqual([
+      committedJournal.evidence.READ_SERVICES_HELD.readIsolation,
+      committedJournal.evidence.DATA_COMMITTED.readIsolationBefore,
+      committedJournal.evidence.DATA_COMMITTED.readIsolationAfter,
+      committedJournal.evidence.DERIVED_VERIFIED.readIsolationBefore,
+      committedJournal.evidence.DERIVED_VERIFIED.readIsolationAfter,
+      committedJournal.evidence.SERVING_VERIFIED.readIsolation,
+    ].map((receipt) => [receipt.stage, receipt.databaseHandleCount]), [
+      ['after_read_services_held', 0],
+      ['pre_insert', 0],
+      ['after_data_commit_before_source_publish', 0],
+      ['before_derived_rebuild', 0],
+      ['after_derived_rebuild', 0],
+      ['after_serving_verification_before_read_resume', 0],
+    ])
     assert.deepEqual(orchestration.writerHold.restoredLabels, [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse())
     assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, ['com.stockboard.large-holder-update'])
     assert.deepEqual(orchestration.writerHold.intentionallyDisabledLabels, [...JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS])

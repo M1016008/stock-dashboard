@@ -14,6 +14,7 @@ import {
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  assertProductionReadIsolation,
   runJpOhlcvProductionRepair,
   runJpOhlcvProductionRepairPrewriteCleanup,
   runJpOhlcvProductionRepairResumeReadServices,
@@ -240,6 +241,47 @@ function adapter(approval: JpOhlcvRepairApproval, overrides: Partial<JpOhlcvRepa
 }
 
 async function main(): Promise<void> {
+  {
+    const productionApproval = { ...approvalFor('read-isolation-evidence'), executionScope: 'PRODUCTION' as const }
+    const transactionId = 'fixture-read-isolation-evidence'
+    const receipt = {
+      version: 1 as const,
+      transactionId,
+      stage: 'pre_insert' as const,
+      checkedAt: new Date().toISOString(),
+      heldServices: [
+        'com.stockboard.web',
+        'com.stockboard.analog-search',
+        'com.stockboard.friend-readonly-gateway',
+        'com.stockboard.web-health',
+      ].sort(),
+      databaseHandleCount: 0 as const,
+    }
+    assert.doesNotThrow(() => assertProductionReadIsolation(
+      productionApproval,
+      receipt,
+      'pre_insert',
+      transactionId,
+    ))
+    assert.throws(() => assertProductionReadIsolation(
+      productionApproval,
+      undefined,
+      'pre_insert',
+      transactionId,
+    ), /repair_read_isolation_evidence_missing:pre_insert/)
+    assert.throws(() => assertProductionReadIsolation(
+      productionApproval,
+      { ...receipt, transactionId: 'fixture-unrelated-transaction' },
+      'pre_insert',
+      transactionId,
+    ), /repair_read_isolation_receipt_invalid:pre_insert/)
+    assert.throws(() => assertProductionReadIsolation(
+      productionApproval,
+      { ...receipt, stage: 'after_derived_rebuild' },
+      'pre_insert',
+      transactionId,
+    ), /repair_read_isolation_receipt_invalid:pre_insert/)
+  }
 {
   const barrier = paths('barrier')
   fs.mkdirSync(barrier.stateDirectory, { recursive: true })
@@ -1194,7 +1236,16 @@ for (const [name, override, expectedStage] of [
     resumeApproval,
     resumeApprovalSha256: repairResumeServicesApprovalSha256(resumeApproval),
     paths: repairPaths,
-    adapter: adapter(approval),
+    adapter: adapter(approval, {
+      verifyServing: async (_context, mode) => {
+        assert.equal(mode, 'READ_SERVICE_RECOVERY')
+        return {
+          sourceGeneration: 'jp-source-after',
+          servingGeneration: 'jp-serving-after',
+          health: 'PASS',
+        }
+      },
+    }),
   })
   assert.equal(result.status, 'COMMITTED')
   assert.equal(result.recoveredReadServices, true)

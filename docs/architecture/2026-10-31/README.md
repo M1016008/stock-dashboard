@@ -73,6 +73,9 @@ Phase 2 stacked drafts:
 - `phase2-pr-h-normal-updater.md`
 - `phase2-pr-i-process-e2e-and-running-recovery.md`
 - `phase2-pr-i-claude-review.md`
+- `phase2-pr-j-repair-read-hold.md`
+- `phase2-pr-j-claude-review.md`
+- `phase2-evidence-matrix.md`
 - `jp-source-reader-lineage-inventory.md`
 - `ADR-jp-ohlcv-known-conflict-publication.md`
 - `jp-ohlcv-production-bootstrap-and-corporate-action.md`

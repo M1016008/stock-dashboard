@@ -163,6 +163,7 @@
     "test:jp-ohlcv-coverage-store": "tsx scripts/test-jp-ohlcv-coverage-store.ts",
     "test:jp-ohlcv-ingestion-boundary": "tsx scripts/test-jp-ohlcv-ingestion-boundary.ts",
     "test:jp-ohlcv-command-adapter": "tsx scripts/test-jp-ohlcv-command-adapter.ts",
+    "test:jp-ohlcv-repair-read-isolation": "tsx scripts/test-jp-ohlcv-repair-read-isolation.ts",
     "test:jp-ohlcv-executable-plan-e2e": "tsx scripts/test-jp-ohlcv-executable-plan-e2e.ts",
     "test:jp-ohlcv-backup-time-budget": "tsx scripts/test-jp-ohlcv-backup-time-budget.ts",
     "test:jp-ohlcv-candidate-maintenance-budget": "tsx scripts/test-jp-ohlcv-candidate-maintenance-budget.ts",

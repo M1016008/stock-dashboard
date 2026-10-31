@@ -26,6 +26,11 @@ import {
   assertJpOhlcvRuntimeSnapshot,
   type JpOhlcvRuntimeSnapshot,
 } from '@/lib/jp-ohlcv-runtime-snapshot'
+import { assertJpOhlcvRepairReadIsolation } from '@/lib/jp-ohlcv-repair-read-isolation'
+import {
+  assertNoUnauthorizedDatabaseHandles,
+  createLaunchdWriterHoldDriver,
+} from '@/lib/storage/launchd-writer-hold-driver'
 
 type ApprovalBundle = {
   version: 1
@@ -233,6 +238,30 @@ async function main(): Promise<void> {
   const { installJpOhlcvRepairSignalHandlers, assertJpOhlcvRepairExecutionActive } = await import('@/lib/jp-ohlcv-repair-process-supervisor')
   const uninstallSignalHandlers = installJpOhlcvRepairSignalHandlers()
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
+  const readServiceDriver = createLaunchdWriterHoldDriver(config.readServices.map((service) => ({
+    label: service.label,
+    plistPath: service.plistPath,
+    definitionSha256: service.definitionSha256,
+    program: service.program,
+  })))
+  const readIsolationProbe = async (
+    stage: Parameters<typeof assertJpOhlcvRepairReadIsolation>[0]['stage'],
+    transactionId: string,
+  ) => {
+    const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
+    await closeLocalClientBeforeExternalWriter()
+    return assertJpOhlcvRepairReadIsolation({
+      transactionId,
+      stage,
+      readServiceLabels: config.readServices.map((service) => service.label),
+      observeService: (label) => readServiceDriver.observe(label),
+      inspectDatabaseHandles: () => assertNoUnauthorizedDatabaseHandles({
+        databasePath: config.databaseRealpath,
+        approvedReaders: [],
+        timeoutMs: 30_000,
+      }),
+    })
+  }
   try {
     if (cleanupApprovalFile) {
       if (!path.isAbsolute(cleanupApprovalFile)) throw new Error('--prewrite-cleanup-approval_absolute_path_required')
@@ -255,7 +284,12 @@ async function main(): Promise<void> {
     }
     if (rollbackApprovalFile) {
       const { runJpOhlcvProductionRepairRollback } = await import('@/lib/jp-ohlcv-repair-runner')
-      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, rollbackApproval: rollbackApproval! })
+      const adapters = createJpOhlcvCommandAdapters({
+        approval: bundle.approval,
+        plan,
+        rollbackApproval: rollbackApproval!,
+        readIsolationProbe,
+      })
       executionEntered = true
       const result = await runJpOhlcvProductionRepairRollback({
         approval: bundle.approval,
@@ -277,7 +311,7 @@ async function main(): Promise<void> {
         throw new Error('repair_resume_services_exact_approval_hash_required')
       }
       const { runJpOhlcvProductionRepairResumeReadServices } = await import('@/lib/jp-ohlcv-repair-runner')
-      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan })
+      const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, readIsolationProbe })
       executionEntered = true
       const result = await runJpOhlcvProductionRepairResumeReadServices({
         approval: bundle.approval,
@@ -292,7 +326,12 @@ async function main(): Promise<void> {
       return
     }
     const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
-    const adapters = createJpOhlcvCommandAdapters({ approval: bundle.approval, plan, runtimeSnapshot: runtimeSnapshot! })
+    const adapters = createJpOhlcvCommandAdapters({
+      approval: bundle.approval,
+      plan,
+      runtimeSnapshot: runtimeSnapshot!,
+      readIsolationProbe,
+    })
     executionEntered = true
     const result = await runJpOhlcvProductionRepair({
       approval: bundle.approval,

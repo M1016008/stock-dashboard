@@ -22,6 +22,11 @@ import {
   withJpOhlcvRepairBarrierOwner,
 } from '@/lib/jp-ohlcv-repair-barrier'
 import { assertJpOhlcvRepairExecutionActive } from '@/lib/jp-ohlcv-repair-process-supervisor'
+import {
+  assertJpOhlcvReadIsolationReceipt,
+  type JpOhlcvReadIsolationReceipt,
+  type JpOhlcvReadIsolationStage,
+} from '@/lib/jp-ohlcv-repair-read-isolation'
 
 function fileSha256(file: string): string {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -84,11 +89,14 @@ export type JpOhlcvRepairAdapter = {
     web: 'HELD'
     analog: 'HELD'
     snapshotSha256: string
+    readIsolation?: JpOhlcvReadIsolationReceipt
   }>
   insertMissingRowsAtomically: (scope: JpOhlcvRuntimeRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
     insertedRows: number
     missingRowsSha256: string
     sourceGeneration: string
+    readIsolationBefore?: JpOhlcvReadIsolationReceipt
+    readIsolationAfter?: JpOhlcvReadIsolationReceipt
   }>
   verifyData: (scope: JpOhlcvRuntimeRepairScope, context: JpOhlcvRepairExecutionContext) => Promise<{
     missingRows: 0
@@ -100,11 +108,17 @@ export type JpOhlcvRepairAdapter = {
     sourceGeneration: string
     servingGeneration: string
     rebuilt: string[]
+    readIsolationBefore?: JpOhlcvReadIsolationReceipt
+    readIsolationAfter?: JpOhlcvReadIsolationReceipt
   }>
-  verifyServing: (context: JpOhlcvRepairExecutionContext) => Promise<{
+  verifyServing: (
+    context: JpOhlcvRepairExecutionContext,
+    mode: 'FORWARD' | 'READ_SERVICE_RECOVERY',
+  ) => Promise<{
     sourceGeneration: string
     servingGeneration: string
     health: 'PASS'
+    readIsolation?: JpOhlcvReadIsolationReceipt
   }>
   resumeReadServices: (context: JpOhlcvRepairExecutionContext) => Promise<{
     web: 'PASS'
@@ -136,6 +150,17 @@ function stageMayContainDataMutation(stage: ReturnType<JpOhlcvProductionRepairTr
     'ROLLBACK_READ_SERVICES_RESUMED',
     'COMMITTED',
   ].includes(stage)
+}
+
+export function assertProductionReadIsolation(
+  approval: JpOhlcvRepairApproval,
+  receipt: JpOhlcvReadIsolationReceipt | undefined,
+  stage: JpOhlcvReadIsolationStage,
+  transactionId: string,
+): void {
+  if (approval.executionScope !== 'PRODUCTION') return
+  if (!receipt) throw new Error(`repair_read_isolation_evidence_missing:${stage}`)
+  assertJpOhlcvReadIsolationReceipt(receipt, stage, transactionId)
 }
 
 export type JpOhlcvRepairRollbackAdapter = {
@@ -298,6 +323,12 @@ export async function runJpOhlcvProductionRepair(input: {
       if (held.web !== 'HELD' || held.analog !== 'HELD' || !/^[a-f0-9]{64}$/.test(held.snapshotSha256)) {
         throw new Error('repair_read_service_hold_evidence_mismatch')
       }
+      assertProductionReadIsolation(
+        input.approval,
+        held.readIsolation,
+        'after_read_services_held',
+        transaction.transactionId,
+      )
       transaction.advance('READ_SERVICES_HOLDING', 'READ_SERVICES_HELD', held)
       const preinsert = await input.adapter.assertPreinsertRuntimeSnapshot(context)
       context.assertExecutionActive()
@@ -321,6 +352,18 @@ export async function runJpOhlcvProductionRepair(input: {
         || dataCommit.sourceGeneration !== input.approval.sourceGenerationAfter) {
         throw new Error('repair_data_commit_evidence_mismatch')
       }
+      assertProductionReadIsolation(
+        input.approval,
+        dataCommit.readIsolationBefore,
+        'pre_insert',
+        transaction.transactionId,
+      )
+      assertProductionReadIsolation(
+        input.approval,
+        dataCommit.readIsolationAfter,
+        'after_data_commit_before_source_publish',
+        transaction.transactionId,
+      )
       transaction.advance('DATA_COMMITTING', 'DATA_COMMITTED', dataCommit)
       const dataVerification = await input.adapter.verifyData(renewed.runtimeScope, context)
       context.assertExecutionActive()
@@ -339,12 +382,30 @@ export async function runJpOhlcvProductionRepair(input: {
         || derived.sourceGeneration !== input.approval.sourceGenerationAfter
         || derived.servingGeneration !== input.approval.servingGenerationAfter
         || derived.rebuilt.length === 0) throw new Error('repair_derived_evidence_mismatch')
+      assertProductionReadIsolation(
+        input.approval,
+        derived.readIsolationBefore,
+        'before_derived_rebuild',
+        transaction.transactionId,
+      )
+      assertProductionReadIsolation(
+        input.approval,
+        derived.readIsolationAfter,
+        'after_derived_rebuild',
+        transaction.transactionId,
+      )
       transaction.advance('DERIVED_REBUILDING', 'DERIVED_VERIFIED', derived)
-      const serving = await input.adapter.verifyServing(context)
+      const serving = await input.adapter.verifyServing(context, 'FORWARD')
       context.assertExecutionActive()
       if (serving.sourceGeneration !== input.approval.sourceGenerationAfter
         || serving.servingGeneration !== input.approval.servingGenerationAfter
         || serving.health !== 'PASS') throw new Error('repair_serving_evidence_mismatch')
+      assertProductionReadIsolation(
+        input.approval,
+        serving.readIsolation,
+        'after_serving_verification_before_read_resume',
+        transaction.transactionId,
+      )
       transaction.advance('DERIVED_VERIFIED', 'SERVING_VERIFIED', serving)
       transaction.advance('SERVING_VERIFIED', 'READ_SERVICES_RESUMING', {
         requestedAt: new Date().toISOString(),
@@ -431,7 +492,7 @@ export async function runJpOhlcvProductionRepairResumeReadServices(input: {
       context.assertExecutionActive()
       writer = await input.adapter.acquireWriterLock(context)
       context.assertExecutionActive()
-      const serving = await input.adapter.verifyServing(context)
+      const serving = await input.adapter.verifyServing(context, 'READ_SERVICE_RECOVERY')
       context.assertExecutionActive()
       if (serving.sourceGeneration !== input.resumeApproval.sourceGeneration
         || serving.servingGeneration !== input.resumeApproval.servingGeneration
