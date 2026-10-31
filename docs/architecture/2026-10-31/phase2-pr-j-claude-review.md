@@ -37,4 +37,3 @@ Probe time remains part of the existing maintenance reserve rather than a
 separate budget line. Production-scale time evidence is still an open Phase 2
 P0, so this PR makes no 12-hour readiness claim. The deterministic executable
 E2E and the real `lsof` integration test are separate by design.
-

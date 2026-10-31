@@ -108,4 +108,3 @@ restore artifacts. This PR does not replace or broaden that recovery contract.
 - Temporary code retirement: this contract can be removed from daily paths once
   all affected readers consume immutable Versioned Serving; Historical Repair
   may retain it as a maintenance guard.
-

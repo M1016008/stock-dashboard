@@ -41,4 +41,3 @@ the cited immutable evidence. `UNKNOWN` is never treated as PASS.
    read-only Coverage evidence.
 4. Build the Coverage bootstrap package and complete dynamic Reader/cache
    lineage before proposing a new Production package.
-
