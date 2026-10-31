@@ -1,0 +1,75 @@
+{
+  "version": 2,
+  "capturedAt": "2026-10-31T13:43:08Z",
+  "gitHead": "4a6562a9f7713681b26039acbb8977feb53b4d64",
+  "scope": "tracked JS/TS-family files unless stated otherwise",
+  "code": {
+    "files": 1344,
+    "lines": 357786,
+    "filesAtLeast1000Lines": 53,
+    "functionLikeNodes": 24604,
+    "functionsAtLeast100Lines": 504,
+    "functionsComplexityAtLeast20": 605,
+    "functionsComplexityAtLeast40": 185
+  },
+  "entrypoints": {
+    "nextApiRoutes": 168,
+    "nextPages": 57,
+    "npmScripts": 477,
+    "testScripts": 205,
+    "auditScripts": 17,
+    "installScripts": 19,
+    "testLikeFiles": 246
+  },
+  "dependencies": {
+    "nodes": 1344,
+    "edges": 3946,
+    "stronglyConnectedCycles": 2,
+    "highestFanIn": {
+      "lib/db/client.ts": 314,
+      "types/stock.ts": 68,
+      "components/ui/PageTitle.tsx": 53,
+      "lib/market-universe.ts": 52,
+      "lib/storage/external-storage-guard.ts": 45
+    }
+  },
+  "jpOhlcvRepair": {
+    "baseline": "034310b72f57163ee4607c05d1057310277a787d",
+    "changedFiles": 39,
+    "insertedLines": 17399,
+    "deletedLines": 0,
+    "currentFamilyApproxFiles": 40,
+    "currentFamilyApproxLines": 17566,
+    "metricScope": "paths narrowly matched to the JP OHLCV repair family"
+  },
+  "fullBranchDelta": {
+    "baseline": "034310b72f57163ee4607c05d1057310277a787d",
+    "changedFiles": 365,
+    "insertedLines": 76595,
+    "deletedLines": 1634
+  },
+  "productionReadOnlyObservation": {
+    "filesystem": "APFS",
+    "volumeUuid": "11FDA3F5-D89E-414D-9B95-C2069FF0B204",
+    "databaseBytes": 551171977216,
+    "walBytes": 4247752,
+    "freeBytesApproxGiB": 915,
+    "targetDate": "2026-07-17",
+    "providerRows": 4442,
+    "acceptedRows": 4218,
+    "noTradeRows": 224,
+    "invalidRows": 0,
+    "existingRows": 157,
+    "matchingRows": 155,
+    "missingRows": 4061,
+    "conflicts": 2,
+    "latestSourceRunId": 8718,
+    "latestPublishableSourceRunId": 8718,
+    "runningSourceRuns": 0
+  },
+  "methodNotes": [
+    "Function complexity is an AST branch-count approximation, not a substitute for behavioral review.",
+    "Dependency counts include tracked static relative and @ alias imports; dynamic and process edges were reviewed separately.",
+    "Production observations used bounded read-only indexed queries and one official provider fetch."
+  ]
+}
