@@ -46,6 +46,11 @@ import {
   registerActiveStageProcess,
   terminateAndWaitForProcessGroup,
 } from '@/lib/jp-ohlcv-repair-process-supervisor'
+import {
+  assertJpOhlcvReadIsolationReceipt,
+  type JpOhlcvReadIsolationReceipt,
+  type JpOhlcvReadIsolationStage,
+} from '@/lib/jp-ohlcv-repair-read-isolation'
 
 const RESERVED_STAGE_ENVIRONMENT = new Set([
   'NODE_ENV',
@@ -595,6 +600,10 @@ export function createJpOhlcvCommandAdapters(input: {
   runtimeSnapshot?: JpOhlcvRuntimeSnapshot
   now?: () => Date
   refreshOfficialSource?: (targetDate: string) => Promise<JpOhlcvOfficialSourceRefresh>
+  readIsolationProbe?: (
+    stage: JpOhlcvReadIsolationStage,
+    transactionId: string,
+  ) => Promise<JpOhlcvReadIsolationReceipt>
 }): { forward: JpOhlcvRepairAdapter; rollback: JpOhlcvRepairRollbackAdapter } {
   assertJpOhlcvBackupMaintenanceBudget()
   assertPlan(input)
@@ -623,6 +632,18 @@ export function createJpOhlcvCommandAdapters(input: {
       },
     }
   })
+  if (input.approval.executionScope === 'PRODUCTION' && !input.readIsolationProbe) {
+    throw new Error('repair_production_read_isolation_probe_required')
+  }
+  const assertReadIsolation = async (
+    stage: JpOhlcvReadIsolationStage,
+    context: JpOhlcvRepairExecutionContext,
+  ): Promise<JpOhlcvReadIsolationReceipt | undefined> => {
+    if (!input.readIsolationProbe) return undefined
+    const receipt = await input.readIsolationProbe(stage, context.transactionId)
+    assertJpOhlcvReadIsolationReceipt(receipt, stage, context.transactionId)
+    return receipt
+  }
   const acquireWriterLock = async (context: JpOhlcvRepairExecutionContext) => {
     const { acquireUpdateLock, EXCLUSIVE_UPDATE_JOB_TYPES } = await import('@/lib/server/update-lock')
     const lock = await acquireUpdateLock(
@@ -776,6 +797,8 @@ export function createJpOhlcvCommandAdapters(input: {
         stage: 'post_read_service_hold',
         now: checkedAt,
       })
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
+      await closeLocalClientBeforeExternalWriter()
       return {
         snapshotSha256: activeRuntimeSnapshot.snapshotSha256,
         checkedAt: checkedAt.toISOString(),
@@ -786,7 +809,15 @@ export function createJpOhlcvCommandAdapters(input: {
     holdReadServices: async (context) => {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
-      return runJsonStage(input.plan.commands.holdReadServices, context)
+      const held = await runJsonStage<{
+        status: 'HELD'
+        web: 'HELD'
+        analog: 'HELD'
+        services: string[]
+        snapshotSha256: string
+      }>(input.plan.commands.holdReadServices, context)
+      const readIsolation = await assertReadIsolation('after_read_services_held', context)
+      return { ...held, readIsolation }
     },
     insertMissingRowsAtomically: async (scope, context) => {
       if (!verifiedScope || stableSha256(verifiedScope) !== stableSha256(scope)) {
@@ -809,6 +840,9 @@ export function createJpOhlcvCommandAdapters(input: {
         stage: 'pre_insert',
         now: checkedAt,
       })
+      const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
+      await closeLocalClientBeforeExternalWriter()
+      const readIsolationBefore = await assertReadIsolation('pre_insert', context)
       const { client } = await import('@/lib/db/client')
       const transaction = await client.transaction('write')
       let insertedRows = 0
@@ -847,6 +881,8 @@ export function createJpOhlcvCommandAdapters(input: {
         try { await transaction.rollback() } catch { /* retain original failure */ }
         throw error
       }
+      await closeLocalClientBeforeExternalWriter()
+      const readIsolationAfter = await assertReadIsolation('after_data_commit_before_source_publish', context)
       const published = await runJsonStage<{ status: 'PASS'; sourceGeneration: string }>(
         input.plan.commands.publishSourceGeneration,
         context,
@@ -854,7 +890,13 @@ export function createJpOhlcvCommandAdapters(input: {
       if (published.status !== 'PASS' || published.sourceGeneration !== input.approval.sourceGenerationAfter) {
         throw new Error('repair_source_generation_publication_mismatch')
       }
-      return { insertedRows, missingRowsSha256: scope.missingRowsSha256, sourceGeneration: published.sourceGeneration }
+      return {
+        insertedRows,
+        missingRowsSha256: scope.missingRowsSha256,
+        sourceGeneration: published.sourceGeneration,
+        readIsolationBefore,
+        readIsolationAfter,
+      }
     },
     verifyData: async (scope, context) => {
       const after = revalidatedScope({
@@ -883,6 +925,7 @@ export function createJpOhlcvCommandAdapters(input: {
     rebuildDerivedServing: async (context) => {
       const { closeLocalClientBeforeExternalWriter } = await import('@/lib/db/client')
       await closeLocalClientBeforeExternalWriter()
+      const readIsolationBefore = await assertReadIsolation('before_derived_rebuild', context)
       const rebuilt: string[] = []
       const sequence = await runJsonStageSequenceWithinBudget<{ status: 'PASS'; rebuilt: string[] }>({
         commands: input.plan.commands.rebuildDerivedServing,
@@ -896,6 +939,7 @@ export function createJpOhlcvCommandAdapters(input: {
         }
         rebuilt.push(...result.rebuilt)
       }
+      const readIsolationAfter = await assertReadIsolation('after_derived_rebuild', context)
       return {
         derivedPlanSha256: input.approval.derivedPlanSha256,
         sourceGeneration: input.approval.sourceGenerationAfter,
@@ -903,9 +947,21 @@ export function createJpOhlcvCommandAdapters(input: {
         rebuilt,
         aggregateElapsedMs: sequence.elapsedMs,
         aggregateTimeoutMs: sequence.aggregateTimeoutMs,
+        readIsolationBefore,
+        readIsolationAfter,
       }
     },
-    verifyServing: (context) => runJsonStage(input.plan.commands.verifyServing, context),
+    verifyServing: async (context, mode) => {
+      const result = await runJsonStage<{
+        sourceGeneration: string
+        servingGeneration: string
+        health: 'PASS'
+      }>(input.plan.commands.verifyServing, context)
+      const readIsolation = mode === 'FORWARD'
+        ? await assertReadIsolation('after_serving_verification_before_read_resume', context)
+        : undefined
+      return { ...result, readIsolation }
+    },
     resumeReadServices: (context) => runJsonStage(input.plan.commands.resumeReadServices, context),
   }
 

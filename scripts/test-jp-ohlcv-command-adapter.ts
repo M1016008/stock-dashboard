@@ -213,6 +213,10 @@ async function main(): Promise<void> {
   }
   const { createJpOhlcvCommandAdapters } = await import('@/lib/jp-ohlcv-command-adapter')
   const { runJpOhlcvProductionRepair } = await import('@/lib/jp-ohlcv-repair-runner')
+  assert.throws(() => createJpOhlcvCommandAdapters({
+    approval: { ...approval, executionScope: 'PRODUCTION' },
+    plan,
+  }), /repair_production_read_isolation_probe_required/)
   const initialNow = new Date('2026-10-29T00:00:00.000Z')
   let logicalNow = initialNow
   const sourceProof = (at: Date) => ({
@@ -310,6 +314,18 @@ async function main(): Promise<void> {
     recordStageProcessStopped: () => {},
     assertExecutionActive: () => {},
   }
+  let recoveryProbeCalled = false
+  const recoveryAdapters = createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    readIsolationProbe: async () => {
+      recoveryProbeCalled = true
+      throw new Error('fixture_read_isolation_must_not_run_during_service_resume_recovery')
+    },
+  })
+  const recoveryServing = await recoveryAdapters.forward.verifyServing(context, 'READ_SERVICE_RECOVERY')
+  assert.equal(recoveryServing.health, 'PASS')
+  assert.equal(recoveryProbeCalled, false)
   const postCommitNow = new Date(logicalNow)
   const postCommitSnapshot = captureJpOhlcvRuntimeSnapshot({
     databasePath: database,
