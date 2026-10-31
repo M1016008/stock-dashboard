@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import {
+  assertJpOhlcvRepairExecutionPlan,
+  type JpOhlcvRepairExecutionPlan,
+  type JpOhlcvRepairStageCommand,
+} from '@/lib/jp-ohlcv-command-adapter'
+import {
   assertJpOhlcvProductionExecutionConfiguration,
   assertJpOhlcvStorageIdentityEnvironment,
   isHealthyJpOhlcvRepairResponseBody,
@@ -21,6 +26,22 @@ import { isProcessGroupAlive, terminateAndWaitForProcessGroup } from '@/lib/jp-o
 import { createLaunchdWriterHoldDriver } from '@/lib/storage/launchd-writer-hold-driver'
 
 type SealedFile = { path: string; sha256: string }
+
+function planCommands(plan: JpOhlcvRepairExecutionPlan): JpOhlcvRepairStageCommand[] {
+  return [
+    plan.commands.createBackup,
+    plan.commands.holdReadServices,
+    plan.commands.publishSourceGeneration,
+    plan.commands.verifyDataGeneration,
+    ...plan.commands.rebuildDerivedServing,
+    plan.commands.verifyServing,
+    plan.commands.resumeReadServices,
+    plan.commands.verifyBackupForRollback,
+    plan.commands.restoreBackup,
+    ...plan.commands.rebuildOriginalDerivedServing,
+    plan.commands.verifyOriginalServing,
+  ]
+}
 
 export type JpOhlcvEmergencyRecoveryPackage = {
   version: 1
@@ -205,7 +226,9 @@ async function runRollback(
 }
 
 async function main(): Promise<void> {
-  if (!process.argv.includes('--execute')) throw new Error('--execute_required')
+  const execute = process.argv.includes('--execute')
+  const preflightOnly = process.argv.includes('--preflight-only')
+  if (execute === preflightOnly) throw new Error('--execute_or_preflight_only_required')
   const packagePath = path.resolve(value('--package'))
   if (!path.isAbsolute(packagePath)) throw new Error('--package_absolute_path_required')
   const pkg = readJson<JpOhlcvEmergencyRecoveryPackage>(packagePath)
@@ -232,6 +255,9 @@ async function main(): Promise<void> {
   }).trim()
   if (integrationHead !== pkg.integrationHead || integrationTreeId !== pkg.integrationTreeId || trackedStatus) {
     throw new Error('repair_emergency_integration_identity_mismatch')
+  }
+  if (fs.realpathSync(pkg.runner.workingDirectory) !== integrationRoot) {
+    throw new Error('repair_emergency_runner_working_directory_mismatch')
   }
   if (sha256File(pkg.orchestratorScriptPath) !== pkg.orchestratorScriptSha256) {
     throw new Error('repair_emergency_orchestrator_identity_mismatch')
@@ -271,7 +297,9 @@ async function main(): Promise<void> {
     return index >= 0 ? pkg.runner.args[index + 1] ?? null : null
   }
   const recoveryPlanPath = argumentValue(planFlag)
-  if (!recoveryPlanPath || stableSha256(readJson(recoveryPlanPath)) !== pkg.recoveryExecutionPlanSha256
+  const recoveryPlan = recoveryPlanPath ? readJson<JpOhlcvRepairExecutionPlan>(recoveryPlanPath) : null
+  if (!recoveryPlanPath || !recoveryPlan
+    || stableSha256(recoveryPlan) !== pkg.recoveryExecutionPlanSha256
     || argumentValue(configFlag) !== pkg.configurationPath
     || argumentValue(approvalFlag) !== pkg.rollbackApprovalPath
     || argumentValue(approvalHashFlag) !== pkg.rollbackApprovalSha256) {
@@ -304,6 +332,12 @@ async function main(): Promise<void> {
     || rollbackApproval.emergencyRecovery.readServiceSnapshotFileSha256 !== pkg.readServiceSnapshotFileSha256) {
     throw new Error('repair_emergency_inherited_evidence_contract_mismatch')
   }
+  assertJpOhlcvRepairExecutionPlan({ plan: recoveryPlan, targetDate: config.targetDate })
+  const commands = planCommands(recoveryPlan)
+  const commandCount = commands.length + config.nestedCommands.length + 1
+  const sealedFileCount = commands.reduce((count, command) => count + command.sealedFiles.length, 0)
+    + config.nestedCommands.reduce((count, command) => count + command.sealedFiles.length, 0)
+    + pkg.runner.sealedFiles.length + pkg.sourceFiles.length
   const archivePath = `${pkg.activeJournalPath}.rolled-back-${pkg.transactionId}`
   const rollbackPending = fs.existsSync(pkg.activeJournalPath)
   const readSnapshotPath = rollbackPending
@@ -358,8 +392,21 @@ async function main(): Promise<void> {
       || serving.sourceGeneration !== pkg.sourceGenerationTarget) {
       throw new Error('repair_emergency_pre_rollback_generation_mismatch')
     }
+    if (preflightOnly) {
+      console.log(JSON.stringify({
+        status: 'PASS',
+        productionMutationAuthorized: false,
+        transactionId: pkg.transactionId,
+        commandCount,
+        sealedFileCount,
+        mismatchCount: 0,
+      }))
+      return
+    }
     const rollbackResult = await runRollback(pkg)
     archivedJournal = rollbackResult.archivedJournal
+  } else if (preflightOnly) {
+    throw new Error('repair_emergency_preflight_active_journal_required')
   }
 
   const assertRecoverySafe = async () => {

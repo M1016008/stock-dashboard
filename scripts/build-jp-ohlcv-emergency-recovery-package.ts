@@ -1,13 +1,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import {
+  assertJpOhlcvProductionExecutionConfiguration,
   jpOhlcvStorageIdentityEnvironment,
   sha256File,
   type JpOhlcvProductionExecutionConfiguration,
   type JpOhlcvProductionExecutionPackage,
 } from '@/lib/jp-ohlcv-executable-plan'
-import type { JpOhlcvRepairExecutionPlan, JpOhlcvRepairStageCommand } from '@/lib/jp-ohlcv-command-adapter'
+import {
+  assertJpOhlcvRepairExecutionPlan,
+  type JpOhlcvRepairExecutionPlan,
+  type JpOhlcvRepairStageCommand,
+} from '@/lib/jp-ohlcv-command-adapter'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
   repairRollbackApprovalSha256,
@@ -41,23 +47,86 @@ function writeNew(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
 }
 
-function replacePath(args: string[], from: string, to: string): string[] {
-  return args.map((arg) => arg === from ? to : arg)
+type CommandIdentity = Pick<
+  JpOhlcvRepairStageCommand,
+  'executable' | 'executableSha256' | 'sealedFiles' | 'args' | 'workingDirectory'
+>
+
+function pathRelativeToRoot(root: string, candidate: string): string | null {
+  if (!path.isAbsolute(candidate)) return null
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+    ? relative
+    : null
 }
 
-function replaceConfigurationInCommand(
-  command: JpOhlcvRepairStageCommand,
+function currentTreePath(
+  candidate: string,
+  originalRoot: string,
+  currentRoot: string,
+  trackedSourceFiles: ReadonlySet<string>,
+): { path: string; remapped: boolean } {
+  const originalRelative = pathRelativeToRoot(originalRoot, candidate)
+  const currentRelative = pathRelativeToRoot(currentRoot, candidate)
+  const relative = originalRelative ?? currentRelative
+  if (relative === '') return { path: currentRoot, remapped: true }
+  if (relative !== null && trackedSourceFiles.has(relative)) {
+    return { path: path.join(currentRoot, relative), remapped: true }
+  }
+  if (originalRelative !== null) {
+    throw new Error(`repair_emergency_builder_untracked_source_reference:${candidate}`)
+  }
+  return { path: candidate, remapped: false }
+}
+
+export function resealEmergencyRecoveryCommand<T extends CommandIdentity>(
+  command: T,
+  originalRoot: string,
+  currentRoot: string,
   originalConfigurationPath: string,
   recoveryConfigurationPath: string,
-  recoveryConfigurationSha256: string,
-): JpOhlcvRepairStageCommand {
-  return {
-    ...command,
-    args: replacePath(command.args, originalConfigurationPath, recoveryConfigurationPath),
-    sealedFiles: command.sealedFiles.map((file) => file.path === originalConfigurationPath
-      ? { ...file, path: recoveryConfigurationPath, sha256: recoveryConfigurationSha256 }
-      : file),
+  trackedSourceFiles: ReadonlySet<string>,
+): T {
+  const resolve = (candidate: string): { path: string; remapped: boolean } => (
+    candidate === originalConfigurationPath
+      ? { path: recoveryConfigurationPath, remapped: true }
+      : currentTreePath(candidate, originalRoot, currentRoot, trackedSourceFiles)
+  )
+  const executable = resolve(command.executable)
+  const workingDirectory = resolve(command.workingDirectory)
+  const executableSha256 = sha256File(executable.path)
+  if (!executable.remapped && executableSha256 !== command.executableSha256) {
+    throw new Error(`repair_emergency_builder_external_executable_drift:${command.executable}`)
   }
+  const result = {
+    ...command,
+    executable: executable.path,
+    executableSha256,
+    workingDirectory: workingDirectory.path,
+    args: command.args.map((argument) => resolve(argument).path),
+    sealedFiles: command.sealedFiles.map((file) => {
+      const sealed = resolve(file.path)
+      const sha256 = sha256File(sealed.path)
+      if (!sealed.remapped && sha256 !== file.sha256) {
+        throw new Error(`repair_emergency_builder_external_sealed_file_drift:${file.path}`)
+      }
+      return { ...file, path: sealed.path, sha256 }
+    }),
+  } as T
+  if (originalRoot !== currentRoot) {
+    const references = [
+      result.executable,
+      result.workingDirectory,
+      ...result.args,
+      ...result.sealedFiles.map((file) => file.path),
+      ...Object.values(('environment' in result ? result.environment : {}) ?? {}),
+    ]
+    if (references.some((value) => typeof value === 'string'
+      && pathRelativeToRoot(originalRoot, value) !== null)) {
+      throw new Error('repair_emergency_builder_stale_integration_root_reference')
+    }
+  }
+  return result
 }
 
 function main(): void {
@@ -194,6 +263,10 @@ function main(): void {
     cwd: integrationRoot,
     encoding: 'utf8',
   }).trim()
+  const trackedSourceFiles = new Set(execFileSync('/usr/bin/git', ['ls-files', '-z'], {
+    cwd: integrationRoot,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean))
 
   fs.mkdirSync(outputDirectory, { recursive: false, mode: 0o700 })
 
@@ -225,16 +298,26 @@ function main(): void {
       missingRows: originalConfig.repairScope.officialRows - expectedRestoredTargetRows,
     },
     nestedCommands: originalConfig.nestedCommands.map((command) => {
-      const args = replacePath(command.args, originalConfigurationPath, recoveryConfigurationPath)
+      const currentCommand = resealEmergencyRecoveryCommand(
+        command,
+        originalConfig.integrationRoot,
+        integrationRoot,
+        originalConfigurationPath,
+        recoveryConfigurationPath,
+        trackedSourceFiles,
+      )
+      const args = [...currentCommand.args]
       const verifierScriptIndex = args.findIndex((arg) => arg.endsWith('/verify-jp-ohlcv-repair-derived-state.ts'))
-      const sealedFiles = command.sealedFiles.map((file) => (
+      const sealedFiles = currentCommand.sealedFiles.map((file) => (
         file.path.endsWith('/verify-jp-ohlcv-repair-derived-state.ts')
           ? { ...file, path: verifierScript, sha256: sha256File(verifierScript) }
           : file
       ))
       if (verifierScriptIndex >= 0) args[verifierScriptIndex] = verifierScript
-      if (command.id !== 'verify-restored-derived-state') return { ...command, args, sealedFiles }
-      if (verifierScriptIndex < 0 || !command.rollback) {
+      if (currentCommand.id !== 'verify-restored-derived-state') {
+        return { ...currentCommand, args, sealedFiles }
+      }
+      if (verifierScriptIndex < 0 || !currentCommand.rollback) {
         throw new Error('repair_emergency_builder_rollback_verifier_missing')
       }
       const targetRowsFlagIndex = args.indexOf('--rollback-expected-target-rows')
@@ -244,19 +327,22 @@ function main(): void {
         args.push('--rollback-expected-target-rows', String(expectedRestoredTargetRows))
       }
       return {
-        ...command,
+        ...currentCommand,
         args,
         sealedFiles,
       }
     }),
   }
+  assertJpOhlcvProductionExecutionConfiguration(recoveryConfig)
   writeNew(recoveryConfigurationPath, recoveryConfig)
   const recoveryConfigurationSha256 = sha256File(recoveryConfigurationPath)
-  const replace = (command: JpOhlcvRepairStageCommand) => replaceConfigurationInCommand(
+  const replace = (command: JpOhlcvRepairStageCommand) => resealEmergencyRecoveryCommand(
     command,
+    originalConfig.integrationRoot,
+    integrationRoot,
     originalConfigurationPath,
     recoveryConfigurationPath,
-    recoveryConfigurationSha256,
+    trackedSourceFiles,
   )
   const recoveryPlan: JpOhlcvRepairExecutionPlan = {
     ...originalPlan,
@@ -274,6 +360,7 @@ function main(): void {
       verifyOriginalServing: replace(originalPlan.commands.verifyOriginalServing),
     },
   }
+  assertJpOhlcvRepairExecutionPlan({ plan: recoveryPlan, targetDate: recoveryConfig.targetDate })
   writeNew(recoveryPlanPath, recoveryPlan)
   const recoveryPlanSha256 = stableSha256(recoveryPlan)
   const recoveryApproval: JpOhlcvRepairRollbackApproval = {
@@ -297,6 +384,14 @@ function main(): void {
   writeNew(recoveryApprovalPath, recoveryApproval)
   const recoveryApprovalSha256 = repairRollbackApprovalSha256(recoveryApproval)
 
+  const sourceRuntimePath = sourcePackage.runner.args[0]
+  const sourceRuntimeIdentity = sourcePackage.runner.sealedFiles.find(
+    (file) => file.path === sourceRuntimePath,
+  )
+  if (!sourceRuntimeIdentity || sha256File(sourceRuntimePath) !== sourceRuntimeIdentity.sha256) {
+    throw new Error('repair_emergency_builder_source_runtime_drift')
+  }
+
   const runner = {
     executable: sourcePackage.runner.executable,
     executableSha256: sourcePackage.runner.executableSha256,
@@ -310,7 +405,7 @@ function main(): void {
       '--rollback-approval', recoveryApprovalPath,
       '--rollback-approval-sha256', recoveryApprovalSha256,
     ],
-    workingDirectory: sourcePackage.runner.workingDirectory,
+    workingDirectory: integrationRoot,
     timeoutMs: 8 * 60 * 60_000,
     environment: {
       NODE_ENV: 'production',
@@ -321,13 +416,16 @@ function main(): void {
       STOCKBOARD_JP_OHLCV_PRODUCTION_REPAIR_APPROVED: approvalBundle.approvalSha256,
     },
     sealedFiles: [
-      { path: sourcePackage.runner.args[0], sha256: sha256File(sourcePackage.runner.args[0]) },
+      sourceRuntimeIdentity,
       { path: executeScript, sha256: sha256File(executeScript) },
       { path: sourcePackage.approvalBundlePath, sha256: sha256File(sourcePackage.approvalBundlePath) },
       { path: recoveryPlanPath, sha256: sha256File(recoveryPlanPath) },
       { path: recoveryConfigurationPath, sha256: recoveryConfigurationSha256 },
       { path: recoveryApprovalPath, sha256: sha256File(recoveryApprovalPath) },
     ],
+  }
+  if (sha256File(runner.executable) !== runner.executableSha256) {
+    throw new Error('repair_emergency_builder_runner_executable_drift')
   }
   const sourceFiles = [
     'lib/jp-ohlcv-production-repair.ts',
@@ -386,13 +484,45 @@ function main(): void {
     sourceFiles,
   }
   writeNew(recoveryPackagePath, recoveryPackage)
+  const recoveryPackageApprovalSha256 = stableSha256(recoveryPackage)
+  const preflight = execFileSync(runner.executable, [
+    runner.args[0],
+    orchestratorScript,
+    '--preflight-only',
+    '--package', recoveryPackagePath,
+  ], {
+    cwd: integrationRoot,
+    encoding: 'utf8',
+    timeout: 120_000,
+    env: {
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      HOME: process.env.HOME,
+      USER: process.env.USER,
+      LOGNAME: process.env.LOGNAME,
+      TMPDIR: process.env.TMPDIR,
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      TZ: process.env.TZ,
+      NODE_ENV: 'production',
+      STOCKBOARD_JP_OHLCV_EMERGENCY_RECOVERY_APPROVED: recoveryPackageApprovalSha256,
+    },
+  }).trim()
+  const preflightResult = JSON.parse(preflight.split('\n').filter(Boolean).at(-1) ?? '{}') as {
+    status?: unknown
+    commandCount?: unknown
+    sealedFileCount?: unknown
+    mismatchCount?: unknown
+  }
+  if (preflightResult.status !== 'PASS' || preflightResult.mismatchCount !== 0) {
+    throw new Error('repair_emergency_builder_recursive_identity_preflight_failed')
+  }
   console.log(JSON.stringify({
     status: 'PASS',
     productionMutationAuthorized: false,
     transactionId: recoveryPackage.transactionId,
     expectedRestoredTargetRows,
     recoveryPackagePath,
-    recoveryPackageApprovalSha256: stableSha256(recoveryPackage),
+    recoveryPackageApprovalSha256,
     recoveryPackageFileSha256: sha256File(recoveryPackagePath),
     rollbackApprovalPath: recoveryApprovalPath,
     rollbackApprovalSha256: recoveryApprovalSha256,
@@ -402,7 +532,11 @@ function main(): void {
     activeJournalFileSha256: recoveryPackage.activeJournalFileSha256,
     activeLockFileSha256: recoveryPackage.activeLockFileSha256,
     backupSha256: recoveryPackage.backupSha256,
+    recursiveIdentityPreflight: preflightResult,
   }))
 }
 
-main()
+const invokedPath = process.argv[1] && fs.existsSync(process.argv[1])
+  ? pathToFileURL(fs.realpathSync(process.argv[1])).href
+  : null
+if (invokedPath === import.meta.url) main()
