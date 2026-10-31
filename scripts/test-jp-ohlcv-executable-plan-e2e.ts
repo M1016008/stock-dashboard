@@ -303,7 +303,8 @@ function fakeWriterDriver(
   writers: ReturnType<typeof service>[],
   initiallyLoaded: ReadonlySet<string>,
   disabled: ReadonlySet<string> = new Set(),
-): WriterHoldDriver {
+  failBootstrapLabel?: string,
+): WriterHoldDriver & { loadedLabels: () => Set<string> } {
   const loaded = new Map(writers.map((writer) => [writer.label, initiallyLoaded.has(writer.label)]))
   let now = Date.now()
   const writerFor = (label: string) => {
@@ -328,10 +329,14 @@ function fakeWriterDriver(
   return {
     observe: async (label) => observed(label),
     bootout: async (label) => { loaded.set(label, false) },
-    bootstrap: async (label) => { loaded.set(label, true) },
+    bootstrap: async (label) => {
+      if (label === failBootstrapLabel) throw new Error(`fixture_writer_bootstrap_failure:${label}`)
+      loaded.set(label, true)
+    },
     processGroupAlive: async () => false,
     sleep: async (milliseconds) => { now += milliseconds },
     now: () => now,
+    loadedLabels: () => new Set([...loaded].filter(([, active]) => active).map(([label]) => label)),
   }
 }
 
@@ -1241,13 +1246,24 @@ async function main(): Promise<void> {
       assert.deepEqual(restoredReadRuntime[before.label], { loaded: before.loaded, disabled: before.disabled })
     }
     let recoverySafeChecks = 0
+    const partialProgress: string[][] = []
+    const reverseLoaded = [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse()
+    const partialDriver = fakeWriterDriver(writers, new Set(), disabledWriterLabels, reverseLoaded[2])
+    await assert.rejects(() => restoreJpOhlcvMaintenanceWriters({
+      config,
+      driver: partialDriver,
+      assertRecoverySafe: async () => { recoverySafeChecks += 1 },
+      onProgress: (progress) => { partialProgress.push([...progress.restoredLabels]) },
+    }), /fixture_writer_bootstrap_failure/)
+    assert.deepEqual([...partialDriver.loadedLabels()].sort(), reverseLoaded.slice(0, 2).sort())
+    assert.deepEqual(partialProgress.at(-1), reverseLoaded.slice(0, 2))
     const writerRecovery = await restoreJpOhlcvMaintenanceWriters({
       config,
-      driver: fakeWriterDriver(writers, new Set(), disabledWriterLabels),
+      driver: fakeWriterDriver(writers, partialDriver.loadedLabels(), disabledWriterLabels),
       assertRecoverySafe: async () => { recoverySafeChecks += 1 },
     })
-    assert.deepEqual(writerRecovery.restoredLabels, [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse())
-    assert.deepEqual(writerRecovery.alreadyLoadedLabels, [])
+    assert.deepEqual(writerRecovery.restoredLabels, reverseLoaded.slice(2))
+    assert.deepEqual(writerRecovery.alreadyLoadedLabels, reverseLoaded.slice(0, 2))
     assert.deepEqual(writerRecovery.preservedUnloadedLabels, [...JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS])
     assert.ok(recoverySafeChecks >= JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS.length + 2)
     const restoredSource = JSON.parse(fs.readFileSync(sourcePointer, 'utf8'))

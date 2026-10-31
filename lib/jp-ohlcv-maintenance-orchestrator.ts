@@ -45,6 +45,11 @@ export type JpOhlcvWriterRecoveryReceipt = {
   durationMs: number
 }
 
+export type JpOhlcvWriterRecoveryProgress = Pick<
+  JpOhlcvWriterRecoveryReceipt,
+  'restoredLabels' | 'alreadyLoadedLabels' | 'preservedUnloadedLabels' | 'startedAtMs'
+>
+
 function assertWriterRecoveryIdentity(
   expected: ApprovedWriterIdentity,
   observed: WriterRuntimeIdentity,
@@ -63,6 +68,7 @@ export async function restoreJpOhlcvMaintenanceWriters(input: {
   config: JpOhlcvProductionExecutionConfiguration
   driver: WriterHoldDriver
   assertRecoverySafe: () => Promise<void>
+  onProgress?: (progress: JpOhlcvWriterRecoveryProgress) => Promise<void> | void
   maximumWaitMs?: number
   pollIntervalMs?: number
 }): Promise<JpOhlcvWriterRecoveryReceipt> {
@@ -120,12 +126,20 @@ export async function restoreJpOhlcvMaintenanceWriters(input: {
   const startedAtMs = input.driver.now()
   const restoredLabels: string[] = []
   const alreadyLoadedLabels: string[] = []
+  const reportProgress = async () => input.onProgress?.({
+    restoredLabels: [...restoredLabels],
+    alreadyLoadedLabels: [...alreadyLoadedLabels],
+    preservedUnloadedLabels: [...JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS],
+    startedAtMs,
+  })
+  await reportProgress()
   for (const expected of [...approved].reverse()) {
     if (expectedUnloaded.has(expected.label)) continue
     await input.assertRecoverySafe()
     const observed = await observe(expected)
     if (observed.loaded) {
       alreadyLoadedLabels.push(expected.label)
+      await reportProgress()
       continue
     }
     if (observed.instances !== 0 || observed.disabled) {
@@ -134,6 +148,7 @@ export async function restoreJpOhlcvMaintenanceWriters(input: {
     await input.driver.bootstrap(expected.label)
     await waitLoaded(expected)
     restoredLabels.push(expected.label)
+    await reportProgress()
   }
 
   await input.assertRecoverySafe()

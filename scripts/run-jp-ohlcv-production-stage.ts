@@ -27,6 +27,7 @@ import {
   createLaunchdWriterHoldDriver,
   type LaunchdRuntimeIdentity,
 } from '@/lib/storage/launchd-writer-hold-driver'
+import { waitForStableServiceReadiness } from '@/lib/service-readiness'
 
 type GenerationPointer = {
   version: 1
@@ -770,6 +771,26 @@ async function health(url: string): Promise<void> {
   }
 }
 
+async function waitForReadServiceReady(label: string, url: string): Promise<Record<string, unknown>> {
+  if (config.mode === 'ISOLATED_FIXTURE') {
+    await health(url)
+    return { label, fixture: true, health: 'PASS' }
+  }
+  const service = config.readServices.find((entry) => entry.label === label)
+  if (!service) throw new Error(`repair_read_service_identity_missing:${label}`)
+  const driver = createLaunchdWriterHoldDriver([launchdIdentity(service)])
+  return waitForStableServiceReadiness({
+    label,
+    observe: () => driver.observe(label),
+    probe: () => health(url),
+    timeoutMs: 120_000,
+    intervalMs: 2_000,
+    consecutivePasses: 5,
+    minimumStableMs: 30_000,
+    maximumPidChanges: 2,
+  })
+}
+
 async function runNested(command: JpOhlcvNestedCommand): Promise<void> {
   if (sha256File(fs.realpathSync(command.executable)) !== command.executableSha256) {
     throw new Error(`repair_nested_executable_changed:${command.id}`)
@@ -1077,9 +1098,11 @@ async function main(): Promise<Record<string, unknown>> {
   }
   if (operation === 'resume-read-services') {
     const snapshot = await restoreServices(config.serviceSnapshotPath, false)
+    let webReady: Record<string, unknown>
+    let analogReady: Record<string, unknown>
     try {
-      await health(config.healthUrls.web)
-      await health(config.healthUrls.analog)
+      webReady = await waitForReadServiceReady('com.stockboard.web', config.healthUrls.web)
+      analogReady = await waitForReadServiceReady('com.stockboard.analog-search', config.healthUrls.analog)
     } catch (error) {
       throw new Error(`repair_read_services_restored_but_health_failed:${error instanceof Error ? error.message : String(error)}`)
     }
@@ -1090,6 +1113,8 @@ async function main(): Promise<Record<string, unknown>> {
       web: 'PASS',
       analog: 'PASS',
       health: 'PASS',
+      webReady,
+      analogReady,
     }
   }
   if (operation === 'verify-backup') {

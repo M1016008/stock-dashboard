@@ -254,6 +254,61 @@ export type JpOhlcvRepairResumeServicesApproval = {
   staleStageProcessRecovery?: JpOhlcvRepairStaleProcessRecovery
 }
 
+export type JpOhlcvRollbackFinalizationApproval = {
+  version: 1
+  action: 'FINALIZE_RESTORED_ROLLBACK'
+  repairApprovalSha256: string
+  transactionId: string
+  journalSha256: string
+  journalFileSha256: string
+  lockFileSha256: string
+  restoreStatePath: string
+  restoreStateSha256: string
+  restoreStateFileSha256: string
+  backupSha256: string
+  sourceGeneration: string
+  servingGeneration: string
+  expectedRestoredTargetRows: number
+  preservedConflictsSha256: string
+  readServiceSnapshotPath: string
+  readServiceSnapshotFileSha256: string
+  originalReadServiceConfigurationSha256: string
+  finalizationPlanSha256: string
+  gatewayMigration: {
+    label: 'com.stockboard.friend-readonly-gateway'
+    plistPath: string
+    oldPlistSha256: string
+    newPlistSha256: string
+    runtimeSourcePath: string
+    runtimeTargetPath: string
+    runtimeSha256: string
+    manifestPath: string
+    manifestSha256: string
+    nodeExecutable: string
+    nodeExecutableSha256: string
+    listen: 'http://127.0.0.1:3136'
+    origin: 'http://127.0.0.1:3000'
+  }
+  originalRunnerRecovery: JpOhlcvRepairRunnerRecovery
+}
+
+export type JpOhlcvRollbackFinalizationContinuationApproval = {
+  version: 1
+  action: 'CONTINUE_ROLLBACK_FINALIZATION'
+  repairApprovalSha256: string
+  finalizationApprovalSha256: string
+  transactionId: string
+  journalSha256: string
+  journalFileSha256: string
+  lockFileSha256: string
+  writerRecoveryStateSha256: string
+  stage: Extract<JpOhlcvRepairStage,
+    | 'ROLLBACK_READ_SERVICES_RESUMING'
+    | 'ROLLBACK_READ_SERVICES_RESUMED'
+    | 'ROLLBACK_VERIFIED'
+    | 'ROLLED_BACK'>
+}
+
 export type JpOhlcvRepairUpdateLockSnapshot = {
   version: 1
   checkedAt: string
@@ -303,6 +358,10 @@ function exists(file: string): boolean {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw error
   }
+}
+
+function fileSha256(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
 function sanitizeFailureText(value: unknown): string {
@@ -438,6 +497,47 @@ export function repairPrewriteCleanupApprovalSha256(approval: JpOhlcvRepairPrewr
 
 export function repairResumeServicesApprovalSha256(approval: JpOhlcvRepairResumeServicesApproval): string {
   return stableSha256(approval)
+}
+
+export function repairRollbackFinalizationApprovalSha256(
+  approval: JpOhlcvRollbackFinalizationApproval,
+): string {
+  return stableSha256(approval)
+}
+
+export function repairRollbackFinalizationContinuationApprovalSha256(
+  approval: JpOhlcvRollbackFinalizationContinuationApproval,
+): string {
+  return stableSha256(approval)
+}
+
+export function completeInterruptedRollbackArchive(input: {
+  paths: JpOhlcvRepairPaths
+  transactionId: string
+  repairApprovalSha256: string
+  finalizationApprovalSha256: string
+  expectedLockFileSha256: string
+}): string {
+  const archived = `${input.paths.journal}.rolled-back-${input.transactionId}`
+  const activeExists = exists(input.paths.journal)
+  const archiveExists = exists(archived)
+  if (activeExists === archiveExists || !exists(input.paths.lock)
+    || fileSha256(input.paths.lock) !== input.expectedLockFileSha256) {
+    throw new Error('repair_rollback_archive_continuation_state_invalid')
+  }
+  const journalPath = activeExists ? input.paths.journal : archived
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as JpOhlcvRepairJournal
+  const verified = journal.evidence.ROLLBACK_VERIFIED as Record<string, unknown> | undefined
+  if (journal.transactionId !== input.transactionId
+    || journal.approvalSha256 !== input.repairApprovalSha256
+    || journal.stage !== 'ROLLED_BACK'
+    || verified?.finalizationApprovalSha256 !== input.finalizationApprovalSha256) {
+    throw new Error('repair_rollback_archive_continuation_evidence_invalid')
+  }
+  if (activeExists) fs.renameSync(input.paths.journal, archived)
+  fs.unlinkSync(input.paths.lock)
+  syncDirectory(input.paths.stateDirectory)
+  return archived
 }
 
 export function assertRepairApproval(input: {
@@ -971,6 +1071,126 @@ export class JpOhlcvProductionRepairTransaction {
     return transaction
   }
 
+  static resumeForRollbackFinalization(input: {
+    approval: JpOhlcvRepairApproval
+    approvalSha256: string
+    finalizationApproval: JpOhlcvRollbackFinalizationApproval
+    finalizationApprovalSha256: string
+    continuationApproval?: JpOhlcvRollbackFinalizationContinuationApproval
+    continuationApprovalSha256?: string
+    continuationWriterRecoveryStateSha256?: string
+    paths: JpOhlcvRepairPaths
+  }): JpOhlcvProductionRepairTransaction {
+    if (repairApprovalSha256(input.approval) !== input.approvalSha256) {
+      throw new Error('repair_approval_hash_mismatch')
+    }
+    if (repairRollbackFinalizationApprovalSha256(input.finalizationApproval)
+        !== input.finalizationApprovalSha256) {
+      throw new Error('repair_rollback_finalization_approval_hash_mismatch')
+    }
+    if (!exists(input.paths.lock) || !exists(input.paths.journal)) {
+      throw new Error('repair_rollback_finalization_incomplete_state_required')
+    }
+    const journal = JSON.parse(fs.readFileSync(input.paths.journal, 'utf8')) as JpOhlcvRepairJournal
+    const finalization = input.finalizationApproval
+    const continuation = input.continuationApproval
+    const continuing = journal.stage !== 'HOLD'
+    if (continuing && (!continuation || !input.continuationApprovalSha256
+      || repairRollbackFinalizationContinuationApprovalSha256(continuation)
+        !== input.continuationApprovalSha256
+      || continuation.version !== 1 || continuation.action !== 'CONTINUE_ROLLBACK_FINALIZATION'
+      || continuation.repairApprovalSha256 !== input.approvalSha256
+      || continuation.finalizationApprovalSha256 !== input.finalizationApprovalSha256
+      || continuation.transactionId !== journal.transactionId
+      || continuation.journalSha256 !== stableSha256(journal)
+      || continuation.journalFileSha256 !== fileSha256(input.paths.journal)
+      || continuation.lockFileSha256 !== fileSha256(input.paths.lock)
+      || continuation.writerRecoveryStateSha256
+        !== input.continuationWriterRecoveryStateSha256
+      || continuation.stage !== journal.stage)) {
+      throw new Error('repair_rollback_finalization_continuation_approval_mismatch')
+    }
+    const restored = journal.evidence.ROLLBACK_DATA_RESTORED as Record<string, unknown> | undefined
+    const derived = journal.evidence.ROLLBACK_DERIVED_REBUILT as Record<string, unknown> | undefined
+    const serving = journal.evidence.ROLLBACK_SERVING_VERIFIED as Record<string, unknown> | undefined
+    const finalizationStarted = journal.evidence.ROLLBACK_READ_SERVICES_RESUMING as
+      | Record<string, unknown> | undefined
+    if (finalization.version !== 1
+      || finalization.action !== 'FINALIZE_RESTORED_ROLLBACK'
+      || finalization.repairApprovalSha256 !== input.approvalSha256
+      || finalization.transactionId !== journal.transactionId
+      || (!continuing && finalization.journalSha256 !== stableSha256(journal))
+      || (!continuing && finalization.journalFileSha256 !== fileSha256(input.paths.journal))
+      || finalization.lockFileSha256 !== fileSha256(input.paths.lock)
+      || finalization.backupSha256 !== restored?.databaseSha256
+      || restored?.databaseRealpath !== input.approval.databaseRealpath
+      || restored?.sourceGeneration !== input.approval.sourceGenerationBefore
+      || finalization.sourceGeneration !== input.approval.sourceGenerationBefore
+      || finalization.servingGeneration !== input.approval.servingGenerationBefore
+      || derived?.sourceGeneration !== finalization.sourceGeneration
+      || derived?.servingGeneration !== finalization.servingGeneration
+      || serving?.sourceGeneration !== finalization.sourceGeneration
+      || serving?.servingGeneration !== finalization.servingGeneration
+      || serving?.health !== 'PASS'
+      || finalization.preservedConflictsSha256 !== journal.preservedConflicts.sha256
+      || !Number.isSafeInteger(finalization.expectedRestoredTargetRows)
+      || finalization.expectedRestoredTargetRows <= 0
+      || (!continuing && journal.stage !== 'HOLD')
+      || (!continuing && journal.failure?.originalStage !== 'ROLLBACK_READ_SERVICES_RESUMING')
+      || (continuing && ![
+        'ROLLBACK_READ_SERVICES_RESUMING',
+        'ROLLBACK_READ_SERVICES_RESUMED',
+        'ROLLBACK_VERIFIED',
+        'ROLLED_BACK',
+      ].includes(journal.stage))
+      || (continuing
+        && finalizationStarted?.finalizationApprovalSha256 !== input.finalizationApprovalSha256)
+      || journal.activeStageProcess !== undefined) {
+      throw new Error('repair_rollback_finalization_state_mismatch')
+    }
+    for (const [file, canonicalSha256, rawSha256, code] of [
+      [finalization.restoreStatePath, finalization.restoreStateSha256, finalization.restoreStateFileSha256,
+        'repair_rollback_finalization_restore_state'],
+      [finalization.readServiceSnapshotPath, '', finalization.readServiceSnapshotFileSha256,
+        'repair_rollback_finalization_read_snapshot'],
+    ] as const) {
+      if (!path.isAbsolute(file) || !exists(file) || fs.lstatSync(file).isSymbolicLink()
+        || fileSha256(file) !== rawSha256) throw new Error(`${code}_identity_mismatch`)
+      if (canonicalSha256 && stableSha256(JSON.parse(fs.readFileSync(file, 'utf8'))) !== canonicalSha256) {
+        throw new Error(`${code}_canonical_hash_mismatch`)
+      }
+    }
+    const restoreState = JSON.parse(fs.readFileSync(finalization.restoreStatePath, 'utf8')) as {
+      phase?: unknown
+      transactionId?: unknown
+      backupSha256?: unknown
+    }
+    const readSnapshot = JSON.parse(fs.readFileSync(finalization.readServiceSnapshotPath, 'utf8')) as {
+      transactionId?: unknown
+      configurationSha256?: unknown
+    }
+    if (restoreState.phase !== 'COMPLETED'
+      || restoreState.transactionId !== journal.transactionId
+      || restoreState.backupSha256 !== finalization.backupSha256
+      || readSnapshot.transactionId !== journal.transactionId
+      || !/^[a-f0-9]{64}$/.test(finalization.finalizationPlanSha256)
+      || readSnapshot.configurationSha256 !== finalization.originalReadServiceConfigurationSha256) {
+      throw new Error('repair_rollback_finalization_inherited_evidence_mismatch')
+    }
+    if (!finalization.gatewayMigration.runtimeTargetPath.startsWith('/')) {
+      throw new Error('repair_rollback_finalization_gateway_target_invalid')
+    }
+    assertOriginalTransactionOwnerStopped(input.paths, journal.transactionId, finalization.originalRunnerRecovery)
+    const transaction = new JpOhlcvProductionRepairTransaction({
+      approval: input.approval,
+      approvalSha256: input.approvalSha256,
+      paths: input.paths,
+      transactionId: journal.transactionId,
+    })
+    transaction.journal = journal
+    return transaction
+  }
+
   static resumeForPrewriteCleanup(input: {
     approval: JpOhlcvRepairApproval
     approvalSha256: string
@@ -1361,6 +1581,24 @@ export class JpOhlcvProductionRepairTransaction {
     })
   }
 
+  beginRollbackFinalization(evidence: Record<string, unknown>): void {
+    if (!this.journal) throw new Error('repair_rollback_finalization_journal_missing')
+    if ([
+      'ROLLBACK_READ_SERVICES_RESUMING',
+      'ROLLBACK_READ_SERVICES_RESUMED',
+      'ROLLBACK_VERIFIED',
+      'ROLLED_BACK',
+    ].includes(this.journal.stage)) return
+    if (this.journal.stage !== 'HOLD'
+      || this.journal.failure?.originalStage !== 'ROLLBACK_READ_SERVICES_RESUMING') {
+      throw new Error(`repair_rollback_finalization_stage_invalid:${this.journal?.stage ?? 'missing'}`)
+    }
+    this.advance('HOLD', 'ROLLBACK_READ_SERVICES_RESUMING', {
+      ...evidence,
+      recoveryOfFailure: this.journal.failure,
+    })
+  }
+
   archivePrewriteHold(input: {
     cleanupApprovalSha256: string
     writerLockEvidence: JpOhlcvRepairPrewriteCleanupApproval['writerLockEvidence']
@@ -1429,14 +1667,17 @@ export class JpOhlcvProductionRepairTransaction {
   }
 
   markRollbackVerified(evidence: Record<string, unknown>): string {
-    if (!this.journal || this.journal.stage !== 'ROLLBACK_READ_SERVICES_RESUMED') {
-      throw new Error('repair_rollback_stage_invalid')
-    }
+    if (!this.journal) throw new Error('repair_rollback_stage_invalid')
     const archived = `${this.paths.journal}.rolled-back-${this.transactionId}`
     if (exists(archived)) throw new Error(`repair_rollback_archive_exists:${archived}`)
     this.assertLockOwnership()
-    this.advance('ROLLBACK_READ_SERVICES_RESUMED', 'ROLLBACK_VERIFIED', evidence)
-    this.advance('ROLLBACK_VERIFIED', 'ROLLED_BACK', { completedAt: new Date().toISOString() })
+    if (this.journal.stage === 'ROLLBACK_READ_SERVICES_RESUMED') {
+      this.advance('ROLLBACK_READ_SERVICES_RESUMED', 'ROLLBACK_VERIFIED', evidence)
+    }
+    if (this.journal.stage === 'ROLLBACK_VERIFIED') {
+      this.advance('ROLLBACK_VERIFIED', 'ROLLED_BACK', { completedAt: new Date().toISOString() })
+    }
+    if (this.journal.stage !== 'ROLLED_BACK') throw new Error('repair_rollback_stage_invalid')
     fs.renameSync(this.paths.journal, archived)
     fs.unlinkSync(this.paths.lock)
     syncDirectory(this.paths.stateDirectory)
