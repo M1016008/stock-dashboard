@@ -6,6 +6,10 @@ import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
+import {
+  assertCloudflareAccessEvidence,
+  type CloudflareAccessEvidence,
+} from '@/lib/rollback-finalization-monitoring'
 import { isProcessDefinitelyAbsent } from '@/lib/hash-bound-operation-lease'
 import {
   repairApprovalSha256,
@@ -94,6 +98,7 @@ function argumentValue(args: string[], flag: string): string {
 async function main(): Promise<void> {
   const sourceEmergencyPackagePath = value('--source-emergency-package')
   const outputDirectory = value('--output-directory')
+  const cloudflareAccessAuditPath = value('--cloudflare-access-audit')
   const productionRuntimeRoot = optional('--production-runtime-root')
     ?? FRIEND_READONLY_GATEWAY_DEFAULT_PRODUCTION_RUNTIME_ROOT
   if (fs.existsSync(outputDirectory)) throw new Error('rollback_finalization_builder_output_exists')
@@ -112,6 +117,8 @@ async function main(): Promise<void> {
     encoding: 'utf8',
   }).trim()
   const sourceEmergencyPackage = readJson<JpOhlcvEmergencyRecoveryPackage>(sourceEmergencyPackagePath)
+  const cloudflareAccessEvidence = readJson<CloudflareAccessEvidence>(cloudflareAccessAuditPath)
+  assertCloudflareAccessEvidence(cloudflareAccessEvidence)
   const sourceExecutionPackage = readJson<JpOhlcvProductionExecutionPackage>(
     sourceEmergencyPackage.sourcePackagePath,
   )
@@ -184,6 +191,12 @@ async function main(): Promise<void> {
     throw new Error('rollback_finalization_builder_tunnel_executable_invalid')
   }
   fs.mkdirSync(outputDirectory, { mode: 0o700 })
+  const cloudflareAccessEvidencePath = path.join(outputDirectory, 'cloudflare-access-evidence.json')
+  writeNewBytes(
+    cloudflareAccessEvidencePath,
+    fs.readFileSync(cloudflareAccessAuditPath),
+    0o400,
+  )
   const trackedSourceFiles = new Set(execFileSync('/usr/bin/git', ['ls-files', '-z'], {
     cwd: integrationRoot,
     encoding: 'utf8',
@@ -269,6 +282,7 @@ async function main(): Promise<void> {
       listen: 'http://127.0.0.1:3136',
       origin: 'http://127.0.0.1:3000',
     },
+    cloudflareAccessEvidenceSha256: stableSha256(cloudflareAccessEvidence),
     orderedStages: [
       { id: 'READ_ONLY_IDENTITY_PREFLIGHT', productionMutation: false, failureState: 'HOLD_PRESERVE_EVIDENCE' },
       { id: 'VERIFY_EXISTING_WEB_ANALOG', productionMutation: false, failureState: 'HOLD_PRESERVE_EVIDENCE' },
@@ -342,6 +356,7 @@ async function main(): Promise<void> {
     'lib/jp-ohlcv-maintenance-orchestrator.ts',
     'lib/jp-ohlcv-production-repair.ts',
     'lib/jp-ohlcv-repair-runner.ts',
+    'lib/rollback-finalization-monitoring.ts',
     'lib/service-readiness.ts',
     'lib/storage/external-storage-guard.ts',
     'lib/storage/launchd-writer-hold-driver.ts',
@@ -444,6 +459,12 @@ async function main(): Promise<void> {
       executablePath: fs.realpathSync(tunnelExecutable),
       executableSha256: sha256File(fs.realpathSync(tunnelExecutable)),
     },
+    externalAccess: {
+      evidencePath: cloudflareAccessEvidencePath,
+      evidenceFileSha256: sha256File(cloudflareAccessEvidencePath),
+      evidenceSha256: stableSha256(cloudflareAccessEvidence),
+      evidence: cloudflareAccessEvidence,
+    },
     sourceFiles,
   }
   writeNew(packagePath, pkg)
@@ -493,6 +514,8 @@ async function main(): Promise<void> {
     gatewayRuntimeSha256: gateway.bundleSha256,
     gatewayManifestSha256: gateway.manifestSha256,
     gatewayPlistSha256: gateway.plistSha256,
+    cloudflareAccessEvidenceSha256: stableSha256(cloudflareAccessEvidence),
+    cloudflareAccessEvidenceFileSha256: sha256File(cloudflareAccessEvidencePath),
     preflight: preflightResult,
   }))
 }

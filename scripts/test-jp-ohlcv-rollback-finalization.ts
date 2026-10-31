@@ -5,6 +5,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  assessFreshnessMonitoring,
+  assessFreshnessSchedule,
+  assertCloudflareAccessChallenge,
+  assertCloudflareAccessEvidence,
+  type CloudflareAccessEvidence,
+} from '@/lib/rollback-finalization-monitoring'
+import {
   completeInterruptedRollbackArchive,
   repairApprovalSha256,
   repairRollbackFinalizationApprovalSha256,
@@ -25,6 +32,129 @@ function write(file: string, value: unknown): void {
 }
 
 async function main(): Promise<void> {
+  const recoveryCompletedAtMs = Date.parse('2026-10-31T01:00:00.000Z')
+  assert.equal(assessFreshnessSchedule({
+    runAtLoad: false,
+    startIntervalSeconds: 900,
+    startCalendarIntervalCount: 0,
+    reportPersistenceEnabled: true,
+    waitBudgetMs: 300_000,
+  }).postRecoveryReportGuaranteedWithinWait, false)
+  assert.equal(assessFreshnessSchedule({
+    runAtLoad: false,
+    startIntervalSeconds: null,
+    startCalendarIntervalCount: 18,
+    reportPersistenceEnabled: true,
+    waitBudgetMs: 300_000,
+  }).postRecoveryReportGuaranteedWithinWait, false)
+  assert.equal(assessFreshnessSchedule({
+    runAtLoad: true,
+    startIntervalSeconds: 60,
+    startCalendarIntervalCount: 0,
+    reportPersistenceEnabled: true,
+    waitBudgetMs: 300_000,
+  }).postRecoveryReportGuaranteedWithinWait, true)
+  assert.equal(assessFreshnessSchedule({
+    runAtLoad: true,
+    startIntervalSeconds: 60,
+    startCalendarIntervalCount: 0,
+    reportPersistenceEnabled: false,
+    waitBudgetMs: 300_000,
+  }).postRecoveryReportGuaranteedWithinWait, false)
+  assert.equal(assessFreshnessSchedule({
+    runAtLoad: false,
+    startIntervalSeconds: null,
+    startCalendarIntervalCount: 0,
+    reportPersistenceEnabled: false,
+    waitBudgetMs: 300_000,
+  }).postRecoveryReportGuaranteedWithinWait, false)
+  assert.equal(assessFreshnessMonitoring({
+    report: { status: 'ok', checkedAt: '2026-10-31T01:01:00.000Z' },
+    reportMtimeMs: recoveryCompletedAtMs + 60_000,
+    recoveryCompletedAtMs,
+  }).status, 'PASS')
+  assert.equal(assessFreshnessMonitoring({
+    report: { status: 'attention', checkedAt: '2026-10-31T01:01:00.000Z' },
+    reportMtimeMs: recoveryCompletedAtMs + 60_000,
+    recoveryCompletedAtMs,
+  }).status, 'ATTENTION')
+  assert.equal(assessFreshnessMonitoring({
+    report: { status: 'unavailable', checkedAt: '2026-10-31T01:01:00.000Z' },
+    reportMtimeMs: recoveryCompletedAtMs + 60_000,
+    recoveryCompletedAtMs,
+  }).status, 'UNAVAILABLE')
+  assert.equal(assessFreshnessMonitoring({
+    report: { status: 'ok', checkedAt: '2026-10-31T00:59:00.000Z' },
+    reportMtimeMs: recoveryCompletedAtMs - 60_000,
+    recoveryCompletedAtMs,
+  }).status, 'PENDING_SCHEDULED_CHECK')
+  assert.equal(assessFreshnessMonitoring({
+    report: null,
+    reportMtimeMs: null,
+    recoveryCompletedAtMs,
+  }).status, 'PENDING_SCHEDULED_CHECK')
+  const accessEvidence: CloudflareAccessEvidence = {
+    version: 1,
+    capturedAt: '2026-10-31T00:00:00.000Z',
+    expiresAt: '2026-11-01T00:00:00.000Z',
+    hostname: 'stock.marketframe.jp',
+    teamDomain: 'lingering-credit-876f.cloudflareaccess.com',
+    applicationId: '71c9b27f-812c-43a2-91ac-2d7912bbd674',
+    applicationAudience: '5de8100db079acab3f2c2b7cdca933ae6093d726011942632098bd3f2b96e324',
+    applicationType: 'SELF_HOSTED',
+    policyId: 'a33fd2fa-cad0-46e3-8f73-c5e025ea425e',
+    policyName: 'Allow StockBoard Friend',
+    policyAction: 'ALLOW',
+    bypassPolicyCount: 0,
+    allowedIdentityCount: 2,
+    allowedIdentitiesSha256: 'c0307ac95554a0be26cee2ea45075244342f86844dee5b0bc847198f89fa9cca',
+    authenticationMethod: 'ONE_TIME_PIN',
+    tunnelId: '13b88266-b902-43b4-aadb-0c325baff9b3',
+    tunnelHostname: 'stock.marketframe.jp',
+    tunnelOrigin: 'http://127.0.0.1:3136',
+    tunnelFallback: 'http_status:404',
+    tunnelWarpRoutingEnabled: false,
+  }
+  assert.doesNotThrow(() => assertCloudflareAccessEvidence(
+    accessEvidence,
+    Date.parse('2026-10-31T12:00:00.000Z'),
+  ))
+  assert.throws(() => assertCloudflareAccessEvidence(
+    { ...accessEvidence, bypassPolicyCount: 1 as 0 },
+    Date.parse('2026-10-31T12:00:00.000Z'),
+  ), /cloudflare_access_evidence_invalid/)
+  assert.throws(() => assertCloudflareAccessEvidence(
+    accessEvidence,
+    Date.parse('2026-11-02T00:00:00.000Z'),
+  ), /cloudflare_access_evidence_invalid/)
+  assert.doesNotThrow(() => assertCloudflareAccessChallenge({
+    evidence: accessEvidence,
+    status: 302,
+    location: `https://${accessEvidence.teamDomain}/cdn-cgi/access/login/stock.marketframe.jp?kid=${accessEvidence.applicationAudience}`,
+    wwwAuthenticate: 'Cloudflare-Access',
+    loginBody: '<form id="verify-code">Send login code</form>',
+  }))
+  assert.throws(() => assertCloudflareAccessChallenge({
+    evidence: accessEvidence,
+    status: 302,
+    location: `https://${accessEvidence.teamDomain}/cdn-cgi/access/login/stock.marketframe.jp?kid=${'f'.repeat(64)}`,
+    wwwAuthenticate: 'Cloudflare-Access',
+    loginBody: '<form id="verify-code">Send login code</form>',
+  }), /cloudflare_access_boundary_invalid/)
+  assert.throws(() => assertCloudflareAccessChallenge({
+    evidence: accessEvidence,
+    status: 302,
+    location: `https://example.com/cdn-cgi/access/login/stock.marketframe.jp?kid=${accessEvidence.applicationAudience}`,
+    wwwAuthenticate: 'Cloudflare-Access',
+    loginBody: '<form id="verify-code">Send login code</form>',
+  }), /cloudflare_access_boundary_invalid/)
+  assert.throws(() => assertCloudflareAccessChallenge({
+    evidence: accessEvidence,
+    status: 302,
+    location: `https://${accessEvidence.teamDomain}/cdn-cgi/access/login/stock.marketframe.jp?kid=${accessEvidence.applicationAudience}`,
+    wwwAuthenticate: 'Cloudflare-Access',
+    loginBody: '<form>single sign-on only</form>',
+  }), /cloudflare_access_boundary_invalid/)
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jp-rollback-finalization-'))
   try {
     const paths = {
@@ -265,7 +395,7 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(interruptedPaths.journal), false)
     assert.equal(fs.existsSync(interruptedPaths.lock), false)
     assert.equal(fs.existsSync(interruptedArchive), true)
-    console.log('JP OHLCV rollback finalization regression: PASS (terminal transition, interrupted archive, tamper rejection)')
+    console.log('JP OHLCV rollback finalization regression: PASS (freshness contract, access boundary, terminal transition, interrupted archive, tamper rejection)')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

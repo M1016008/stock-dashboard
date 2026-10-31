@@ -7,6 +7,10 @@ import {
   assertFriendReadonlyRuntimeManifest,
   type FriendReadonlyRuntimeManifest,
 } from '@/lib/friend-readonly-runtime'
+import {
+  friendReadonlyDecision,
+} from '@/lib/friend-readonly-gateway'
+import { FRIEND_READ_ONLY_JSON_POST_PATHS } from '@/lib/friend-readonly-policy'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
   acquireHashBoundOperationLease,
@@ -38,6 +42,14 @@ import {
   readProcessIdentity,
 } from '@/lib/jp-ohlcv-repair-process-supervisor'
 import { waitForStableServiceReadiness, type StableServiceReadiness } from '@/lib/service-readiness'
+import {
+  assessFreshnessMonitoring,
+  assessFreshnessSchedule,
+  assertCloudflareAccessChallenge,
+  assertCloudflareAccessEvidence,
+  type CloudflareAccessEvidence,
+  type FreshnessScheduleEvidence,
+} from '@/lib/rollback-finalization-monitoring'
 import {
   assertJpOhlcvProductionExecutionConfiguration,
   isHealthyJpOhlcvRepairResponseBody,
@@ -98,6 +110,7 @@ export type JpOhlcvRollbackFinalizationPlan = {
     listen: 'http://127.0.0.1:3136'
     origin: 'http://127.0.0.1:3000'
   }
+  cloudflareAccessEvidenceSha256: string
   orderedStages: Array<{
     id: string
     productionMutation: boolean
@@ -199,6 +212,12 @@ export type JpOhlcvRollbackFinalizationPackage = {
     plistSha256: string
     executablePath: string
     executableSha256: string
+  }
+  externalAccess: {
+    evidencePath: string
+    evidenceFileSha256: string
+    evidenceSha256: string
+    evidence: CloudflareAccessEvidence
   }
   sourceFiles: SealedFile[]
 }
@@ -307,6 +326,39 @@ function plistValue(plistPath: string, keyPath: string): string {
   }).trim()
 }
 
+function freshnessSchedule(plistPath: string): FreshnessScheduleEvidence {
+  const plist = JSON.parse(execFileSync('/usr/bin/plutil', [
+    '-convert', 'json', '-o', '-', plistPath,
+  ], { encoding: 'utf8' })) as {
+    RunAtLoad?: unknown
+    StartInterval?: unknown
+    StartCalendarInterval?: unknown
+    EnvironmentVariables?: { DATA_FRESHNESS_GUARD_DRY_RUN?: unknown }
+    ProgramArguments?: unknown
+  }
+  const startIntervalSeconds = Number.isInteger(plist.StartInterval)
+    && Number(plist.StartInterval) > 0
+    ? Number(plist.StartInterval)
+    : null
+  const startCalendarIntervalCount = Array.isArray(plist.StartCalendarInterval)
+    ? plist.StartCalendarInterval.length
+    : plist.StartCalendarInterval && typeof plist.StartCalendarInterval === 'object' ? 1 : 0
+  const programArguments = Array.isArray(plist.ProgramArguments)
+    ? plist.ProgramArguments.filter((value): value is string => typeof value === 'string')
+    : []
+  const argumentDryRun = programArguments.some((value) => (
+    value === '--dry-run' || /(^|\s)--dry-run(?:\s|$)/.test(value)
+  ))
+  return assessFreshnessSchedule({
+    runAtLoad: plist.RunAtLoad === true,
+    startIntervalSeconds,
+    startCalendarIntervalCount,
+    reportPersistenceEnabled: plist.EnvironmentVariables?.DATA_FRESHNESS_GUARD_DRY_RUN !== '1'
+      && !argumentDryRun,
+    waitBudgetMs: 300_000,
+  })
+}
+
 function assertFinalizationContracts(input: {
   pkg: JpOhlcvRollbackFinalizationPackage
   plan: JpOhlcvRollbackFinalizationPlan
@@ -352,6 +404,7 @@ function assertFinalizationContracts(input: {
     || stableSha256(approval.gatewayMigration) !== stableSha256(expectedGatewayApproval)
     || plan.version !== 1 || plan.action !== 'FINALIZE_RESTORED_ROLLBACK'
     || stableSha256(plan.gateway) !== stableSha256(expectedPlanGateway)
+    || plan.cloudflareAccessEvidenceSha256 !== pkg.externalAccess.evidenceSha256
     || stableSha256(plan.orderedStages) !== stableSha256(FINALIZATION_STAGES)
     || stableSha256(plan.forbiddenStages) !== stableSha256(FINALIZATION_FORBIDDEN_STAGES)) {
     throw new Error('rollback_finalization_contract_mismatch')
@@ -517,6 +570,20 @@ async function assertGatewayReadOnlyPolicy(pid: number): Promise<void> {
     cache: 'no-store', signal: AbortSignal.timeout(10_000),
   })
   if (privatePath.status !== 404) throw new Error('rollback_finalization_gateway_private_path_not_blocked')
+  for (const allowedPostPath of FRIEND_READ_ONLY_JSON_POST_PATHS) {
+    if (!friendReadonlyDecision('POST', allowedPostPath).allowed) {
+      throw new Error(`rollback_finalization_gateway_read_post_missing:${allowedPostPath}`)
+    }
+  }
+  if (friendReadonlyDecision('POST', '/api/health').allowed
+    || friendReadonlyDecision('POST', '/api/trigger-discovery/saved').allowed
+    || friendReadonlyDecision('PUT', '/api/trigger-discovery/search').allowed
+    || friendReadonlyDecision('PATCH', '/api/trigger-discovery/search').allowed
+    || friendReadonlyDecision('DELETE', '/api/trigger-discovery/search').allowed
+    || friendReadonlyDecision('GET', '/api/admin/update-latest').allowed
+    || friendReadonlyDecision('GET', '/%2561dmin/db').allowed) {
+    throw new Error('rollback_finalization_gateway_policy_contract_invalid')
+  }
 }
 
 async function assertGatewayPolicyOrStop(
@@ -531,6 +598,62 @@ async function assertGatewayPolicyOrStop(
     if (observed.loaded) await driver.bootout(service.label)
     throw error
   }
+}
+
+async function assertExternalAccessBoundary(pkg: JpOhlcvRollbackFinalizationPackage): Promise<void> {
+  assertFile(pkg.externalAccess.evidencePath, pkg.externalAccess.evidenceFileSha256,
+    'rollback_finalization_cloudflare_access_evidence')
+  const evidence = readJson<CloudflareAccessEvidence>(pkg.externalAccess.evidencePath)
+  if (stableSha256(evidence) !== pkg.externalAccess.evidenceSha256
+    || stableSha256(evidence) !== stableSha256(pkg.externalAccess.evidence)) {
+    throw new Error('rollback_finalization_cloudflare_access_evidence_mismatch')
+  }
+  assertCloudflareAccessEvidence(evidence)
+  const assertRedirect = async (requestPath: string, init: RequestInit = {}) => {
+    const response = await fetch(`https://${evidence.hostname}${requestPath}`, {
+      ...init,
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    })
+    const location = response.headers.get('location')
+    let loginUrl: URL
+    try {
+      loginUrl = new URL(location ?? '')
+    } catch {
+      throw new Error('rollback_finalization_cloudflare_access_location_invalid')
+    }
+    if (response.status !== 302
+      || loginUrl.protocol !== 'https:'
+      || loginUrl.hostname !== evidence.teamDomain
+      || !loginUrl.pathname.startsWith(`/cdn-cgi/access/login/${evidence.hostname}`)
+      || loginUrl.searchParams.get('kid') !== evidence.applicationAudience
+      || !response.headers.get('www-authenticate')?.includes('Cloudflare-Access')) {
+      throw new Error('rollback_finalization_cloudflare_access_boundary_invalid')
+    }
+    return { response, loginUrl }
+  }
+  const homepage = await assertRedirect('/')
+  await assertRedirect('/api/health')
+  await assertRedirect('/api/trigger-discovery/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })
+  const login = await fetch(homepage.loginUrl, {
+    redirect: 'manual',
+    cache: 'no-store',
+    signal: AbortSignal.timeout(15_000),
+  })
+  const loginBody = await login.text()
+  if (!login.ok) throw new Error(`rollback_finalization_cloudflare_access_login_failed:${login.status}`)
+  assertCloudflareAccessChallenge({
+    evidence,
+    status: homepage.response.status,
+    location: homepage.loginUrl.href,
+    wwwAuthenticate: homepage.response.headers.get('www-authenticate'),
+    loginBody,
+  })
 }
 
 async function waitForGenerationConsistency(
@@ -562,29 +685,24 @@ async function waitForGenerationConsistency(
   throw new Error(`rollback_finalization_generation_consistency_timeout:${last}`)
 }
 
-async function waitForFreshnessReport(
+function assessFreshnessReport(
   reportPath: string,
   notBeforeMs: number,
-): Promise<{ status: 'healthy' | 'attention'; checkedAt: string }> {
-  const deadline = Date.now() + 300_000
-  let last = 'not_observed'
-  while (Date.now() <= deadline) {
-    assertJpOhlcvRepairExecutionActive()
-    try {
-      const stat = fs.statSync(reportPath)
-      const report = readJson<{ status?: unknown; checkedAt?: unknown }>(reportPath)
-      const checkedAtMs = typeof report.checkedAt === 'string' ? Date.parse(report.checkedAt) : Number.NaN
-      last = `${String(report.status)}:${String(report.checkedAt)}:${stat.mtimeMs}`
-      if (report.status === 'healthy'
-        && Number.isFinite(checkedAtMs) && checkedAtMs >= notBeforeMs && stat.mtimeMs >= notBeforeMs) {
-        return report as { status: 'healthy' | 'attention'; checkedAt: string }
-      }
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error)
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000))
+): ReturnType<typeof assessFreshnessMonitoring> {
+  try {
+    const stat = fs.statSync(reportPath)
+    return assessFreshnessMonitoring({
+      report: readJson<unknown>(reportPath),
+      reportMtimeMs: stat.mtimeMs,
+      recoveryCompletedAtMs: notBeforeMs,
+    })
+  } catch {
+    return assessFreshnessMonitoring({
+      report: null,
+      reportMtimeMs: null,
+      recoveryCompletedAtMs: notBeforeMs,
+    })
   }
-  throw new Error(`rollback_finalization_freshness_report_timeout:${last}`)
 }
 
 async function restoreWritersWithReceipt(input: {
@@ -673,6 +791,16 @@ async function restoreWritersWithReceipt(input: {
     assertRecoverySafe: assertWriterBootstrapSafe,
     onProgress,
   })
+  const freshnessService = input.config.writerServices.find(
+    (service) => service.label === 'com.stockboard.data-freshness-guard',
+  )
+  if (!freshnessService) throw new Error('rollback_finalization_freshness_service_missing')
+  const freshnessGuardState = await writerDriver.observe(freshnessService.label)
+  if (!freshnessGuardState.loaded || freshnessGuardState.disabled
+    || freshnessGuardState.instances > 1) {
+    throw new Error('rollback_finalization_freshness_service_state_invalid')
+  }
+  const freshnessGuardSchedule = freshnessSchedule(freshnessService.plistPath)
   const generations = await waitForGenerationConsistency(input.config)
   await stableReady({ service: web, healthUrl: input.config.healthUrls.web })
   await stableReady({ service: analog, healthUrl: input.config.healthUrls.analog })
@@ -681,7 +809,7 @@ async function restoreWritersWithReceipt(input: {
     healthUrl: 'http://127.0.0.1:3136/api/health',
   })
   await assertGatewayPolicyOrStop(gatewayService, finalGatewayReady.pid)
-  const freshness = await waitForFreshnessReport(
+  const freshness = assessFreshnessReport(
     input.pkg.freshnessReportPath,
     writerRecovery.completedAtMs,
   )
@@ -710,10 +838,15 @@ async function restoreWritersWithReceipt(input: {
   }
   writeJsonAtomic(input.pkg.writerRecoveryStatePath, completed)
   return {
+    recoverySafetyStatus: 'PASS',
+    operationalMonitoringStatus: freshness.status,
+    operationalMonitoringFollowUpRequired: freshness.operatorFollowUpRequired,
     writerRecovery,
     generations,
     finalGenerations,
     freshness,
+    freshnessGuardState,
+    freshnessGuardSchedule,
     webHealthState,
     writerRecoveryStateSha256: stableSha256(completed),
   }
@@ -899,6 +1032,7 @@ async function main(): Promise<void> {
     throw new Error('rollback_finalization_runtime_path_contract_invalid')
   }
   assertLiveStorageGuard(pkg, config)
+  if (preflightOnly || execute) await assertExternalAccessBoundary(pkg)
   if (resumeWriters) {
     const operationLeaseOwner = acquireHashBoundOperationLease({
       leasePath: pkg.finalizationOperationLeasePath,
@@ -1135,7 +1269,7 @@ async function main(): Promise<void> {
       productionMutationAuthorized: false,
       transactionId: pkg.transactionId,
       sourceFileCount: pkg.sourceFiles.length,
-      sealedFileCount: pkg.sourceFiles.length + 11,
+      sealedFileCount: pkg.sourceFiles.length + 12,
       mismatchCount: 0,
     }))
     return
