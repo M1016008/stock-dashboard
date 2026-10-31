@@ -120,17 +120,17 @@ function finitePositive(value: number): boolean {
   return Number.isFinite(value) && value > 0
 }
 
-function normalizeTicker(ticker: string): string {
+export function normalizeJpOhlcvTicker(ticker: string): string {
   return ticker.trim().toUpperCase().replace(/\.T$/, '')
 }
 
 function normalizeValue<T extends JpOhlcvValue>(row: T): T {
-  return { ...row, ticker: normalizeTicker(row.ticker) }
+  return { ...row, ticker: normalizeJpOhlcvTicker(row.ticker) }
 }
 
 export function validateJpOhlcvValue(row: JpOhlcvValue): string[] {
   const errors: string[] = []
-  if (!/^[0-9A-Z]{4,5}$/.test(normalizeTicker(row.ticker))) errors.push('ticker_invalid')
+  if (!/^[0-9A-Z]{4,5}$/.test(normalizeJpOhlcvTicker(row.ticker))) errors.push('ticker_invalid')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) errors.push('date_invalid')
   if (![row.open, row.high, row.low, row.close].every(finitePositive)) errors.push('price_invalid')
   if (finitePositive(row.high) && row.high < Math.max(row.open, row.low, row.close)) errors.push('high_invalid')
@@ -150,7 +150,7 @@ export function sameJpOhlcvValue(left: JpOhlcvValue, right: JpOhlcvValue): boole
     && left.volume === right.volume
 }
 
-function sorted<T extends JpOhlcvValue>(rows: readonly T[]): T[] {
+export function sortJpOhlcvRows<T extends JpOhlcvValue>(rows: readonly T[]): T[] {
   return rows.map(normalizeValue).sort((left, right) => (
     left.ticker.localeCompare(right.ticker) || left.date.localeCompare(right.date)
   ))
@@ -162,7 +162,7 @@ function uniqueRows<T extends JpOhlcvValue>(
 ): { rows: Map<string, T>; conflicts: JpOhlcvConflict[] } {
   const byKey = new Map<string, T>()
   const conflicts: JpOhlcvConflict[] = []
-  for (const value of sorted(rows)) {
+  for (const value of sortJpOhlcvRows(rows)) {
     const key = `${value.ticker}:${value.date}`
     const previous = byKey.get(key)
     if (!previous) {
@@ -193,7 +193,7 @@ export function buildJpOhlcvBackfillPlan(input: {
     if (!Number.isFinite(row.adjustmentFactor) || row.adjustmentFactor <= 0) errors.push('adjustment_factor_invalid')
     if (row.date !== input.date) errors.push('target_date_mismatch')
     return errors.map((reason) => ({
-      ticker: normalizeTicker(row.ticker),
+      ticker: normalizeJpOhlcvTicker(row.ticker),
       date: row.date,
       reason: 'OFFICIAL_VALUE_INVALID' as const,
       official: { ...normalizeValue(row), adjustmentFactor: row.adjustmentFactor },
@@ -201,7 +201,7 @@ export function buildJpOhlcvBackfillPlan(input: {
     }))
   })
   const invalidExisting = input.existingRows.flatMap((row) => validateJpOhlcvValue(row).map((reason) => ({
-    ticker: normalizeTicker(row.ticker),
+    ticker: normalizeJpOhlcvTicker(row.ticker),
     date: row.date,
     reason: 'EXISTING_VALUE_INVALID' as const,
     existing: normalizeValue(row),
@@ -245,8 +245,8 @@ export function buildJpOhlcvBackfillPlan(input: {
     }
   }
 
-  const officialRows = sorted([...official.rows.values()])
-  const existingRows = sorted([...existing.rows.values()])
+  const officialRows = sortJpOhlcvRows([...official.rows.values()])
+  const existingRows = sortJpOhlcvRows([...existing.rows.values()])
   const body = {
     version: 1 as const,
     date: input.date,
@@ -255,9 +255,9 @@ export function buildJpOhlcvBackfillPlan(input: {
     officialRows: officialRows.length,
     existingRows: existingRows.length,
     matchingRows,
-    missingRows: sorted(missingRows),
+    missingRows: sortJpOhlcvRows(missingRows),
     conflicts: conflicts.sort((left, right) => left.ticker.localeCompare(right.ticker) || left.reason.localeCompare(right.reason)),
-    rollbackDeleteKeys: sorted(missingRows).map(({ ticker, date }) => ({ ticker, date })),
+    rollbackDeleteKeys: sortJpOhlcvRows(missingRows).map(({ ticker, date }) => ({ ticker, date })),
     officialSha256: stableSha256(officialRows),
     existingSha256: stableSha256(existingRows),
   }
@@ -268,11 +268,11 @@ export function buildJpOhlcvMissingOnlyRepairScope(input: {
   plan: JpOhlcvBackfillPlan
   approvedConflictTickers: readonly string[]
 }): JpOhlcvMissingOnlyRepairScope {
-  const approved = [...new Set(input.approvedConflictTickers.map(normalizeTicker))].sort()
+  const approved = [...new Set(input.approvedConflictTickers.map(normalizeJpOhlcvTicker))].sort()
   const conflicts = [...input.plan.conflicts].sort((left, right) => (
     left.ticker.localeCompare(right.ticker) || left.reason.localeCompare(right.reason)
   ))
-  const conflictTickers = [...new Set(conflicts.map((conflict) => normalizeTicker(conflict.ticker)))].sort()
+  const conflictTickers = [...new Set(conflicts.map((conflict) => normalizeJpOhlcvTicker(conflict.ticker)))].sort()
   const reasons: string[] = []
   if (input.plan.missingRows.length === 0) reasons.push('missing_rows_empty')
   if (conflicts.some((conflict) => conflict.reason !== 'EXISTING_VALUE_CONFLICT')) {
@@ -284,7 +284,7 @@ export function buildJpOhlcvMissingOnlyRepairScope(input: {
   if (conflicts.some((conflict) => !conflict.existing || !conflict.official)) {
     reasons.push('conflict_evidence_incomplete')
   }
-  const missingRows = sorted(input.plan.missingRows)
+  const missingRows = sortJpOhlcvRows(input.plan.missingRows)
   return {
     version: 1,
     date: input.plan.date,
@@ -301,7 +301,7 @@ export function buildJpOhlcvMissingOnlyRepairScope(input: {
 }
 
 function rowKey(row: Pick<JpOhlcvValue, 'ticker' | 'date'>): string {
-  return `${normalizeTicker(row.ticker)}:${row.date}`
+  return `${normalizeJpOhlcvTicker(row.ticker)}:${row.date}`
 }
 
 export function jpOhlcvApprovedRepairKeysSha256(rows: readonly JpOhlcvValue[]): string {
@@ -330,8 +330,8 @@ export function buildJpOhlcvRuntimeRepairScope(input: {
   if (runtimePlan.officialSha256 !== approval.officialSha256) reasons.add('official_source_hash_changed')
 
   const approvedRows = new Map(approval.missingRows.map((row) => [rowKey(row), normalizeValue(row)]))
-  const officialRows = new Map(sorted(input.officialRows).map((row) => [rowKey(row), row]))
-  const existingRows = new Map(sorted(input.existingRows).map((row) => [rowKey(row), row]))
+  const officialRows = new Map(sortJpOhlcvRows(input.officialRows).map((row) => [rowKey(row), row]))
+  const existingRows = new Map(sortJpOhlcvRows(input.existingRows).map((row) => [rowKey(row), row]))
   const residualMissingRows: JpOfficialOhlcvValue[] = []
   const alreadySatisfiedRows: JpOfficialOhlcvValue[] = []
 
@@ -370,8 +370,8 @@ export function buildJpOhlcvRuntimeRepairScope(input: {
     }
   }
 
-  const missingRows = sorted(residualMissingRows)
-  const satisfiedRows = sorted(alreadySatisfiedRows)
+  const missingRows = sortJpOhlcvRows(residualMissingRows)
+  const satisfiedRows = sortJpOhlcvRows(alreadySatisfiedRows)
   return {
     version: 1,
     date: approval.date,
