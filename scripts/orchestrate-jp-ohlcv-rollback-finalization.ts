@@ -144,6 +144,9 @@ export type JpOhlcvRollbackFinalizationPackage = {
   sourceEmergencyPackageApprovalSha256: string
   approvalBundlePath: string
   approvalBundleFileSha256: string
+  sourceRecoveryConfigurationPath: string
+  sourceRecoveryConfigurationFileSha256: string
+  sourceRecoveryConfigurationSha256: string
   configurationPath: string
   configurationFileSha256: string
   configurationSha256: string
@@ -861,6 +864,12 @@ async function main(): Promise<void> {
     throw new Error('rollback_finalization_source_recovery_approval_mismatch')
   }
   assertFile(pkg.approvalBundlePath, pkg.approvalBundleFileSha256, 'rollback_finalization_approval_bundle')
+  assertFile(pkg.sourceRecoveryConfigurationPath, pkg.sourceRecoveryConfigurationFileSha256,
+    'rollback_finalization_source_recovery_configuration')
+  if (stableSha256(readJson(pkg.sourceRecoveryConfigurationPath))
+      !== pkg.sourceRecoveryConfigurationSha256) {
+    throw new Error('rollback_finalization_source_recovery_configuration_canonical_mismatch')
+  }
   assertFile(pkg.configurationPath, pkg.configurationFileSha256, 'rollback_finalization_configuration')
   assertFile(pkg.finalizationApprovalPath, pkg.finalizationApprovalFileSha256,
     'rollback_finalization_approval_file')

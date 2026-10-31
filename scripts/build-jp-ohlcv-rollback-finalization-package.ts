@@ -26,6 +26,7 @@ import {
   FRIEND_READONLY_GATEWAY_DEFAULT_PRODUCTION_RUNTIME_ROOT,
   buildFriendReadonlyGatewayRuntime,
 } from '@/scripts/build-friend-readonly-gateway-runtime'
+import { resealEmergencyRecoveryCommand } from '@/scripts/build-jp-ohlcv-emergency-recovery-package'
 import type {
   JpOhlcvEmergencyRecoveryPackage,
 } from '@/scripts/orchestrate-jp-ohlcv-emergency-recovery'
@@ -116,8 +117,14 @@ async function main(): Promise<void> {
   )
   const approvalBundlePath = sourceExecutionPackage.approvalBundlePath
   const approvalBundle = readJson<ApprovalBundle>(approvalBundlePath)
-  const config = readJson<JpOhlcvProductionExecutionConfiguration>(sourceEmergencyPackage.configurationPath)
-  assertJpOhlcvProductionExecutionConfiguration(config)
+  const sourceRecoveryConfig = readJson<JpOhlcvProductionExecutionConfiguration>(
+    sourceEmergencyPackage.configurationPath,
+  )
+  if (sha256File(sourceEmergencyPackage.configurationPath)
+      !== sourceEmergencyPackage.configurationFileSha256) {
+    throw new Error('rollback_finalization_builder_source_configuration_identity_mismatch')
+  }
+  let config = sourceRecoveryConfig
   if (repairApprovalSha256(approvalBundle.approval) !== approvalBundle.approvalSha256
     || approvalBundle.approvalSha256 !== sourceEmergencyPackage.repairApprovalSha256) {
     throw new Error('rollback_finalization_builder_repair_approval_mismatch')
@@ -177,6 +184,30 @@ async function main(): Promise<void> {
     throw new Error('rollback_finalization_builder_tunnel_executable_invalid')
   }
   fs.mkdirSync(outputDirectory, { mode: 0o700 })
+  const trackedSourceFiles = new Set(execFileSync('/usr/bin/git', ['ls-files', '-z'], {
+    cwd: integrationRoot,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean))
+  const finalizationConfigurationPath = path.join(
+    outputDirectory,
+    'rollback-finalization-configuration.json',
+  )
+  config = {
+    ...sourceRecoveryConfig,
+    integrationRoot,
+    integrationCommit: integrationHead,
+    integrationTreeId,
+    nestedCommands: sourceRecoveryConfig.nestedCommands.map((command) => resealEmergencyRecoveryCommand(
+      command,
+      sourceRecoveryConfig.integrationRoot,
+      integrationRoot,
+      sourceEmergencyPackage.configurationPath,
+      finalizationConfigurationPath,
+      trackedSourceFiles,
+    )),
+  }
+  assertJpOhlcvProductionExecutionConfiguration(config)
+  writeNew(finalizationConfigurationPath, config)
   const gatewayDirectory = path.join(outputDirectory, 'friend-readonly-gateway')
   const gateway = await buildFriendReadonlyGatewayRuntime({
     outputDirectory: gatewayDirectory,
@@ -315,6 +346,7 @@ async function main(): Promise<void> {
     'lib/storage/external-storage-guard.ts',
     'lib/storage/launchd-writer-hold-driver.ts',
     'scripts/build-friend-readonly-gateway-runtime.ts',
+    'scripts/build-jp-ohlcv-emergency-recovery-package.ts',
     'scripts/build-jp-ohlcv-rollback-finalization-package.ts',
     'scripts/orchestrate-jp-ohlcv-rollback-finalization.ts',
     'scripts/run-friend-readonly-gateway.ts',
@@ -335,8 +367,11 @@ async function main(): Promise<void> {
     sourceEmergencyPackageApprovalSha256: stableSha256(sourceEmergencyPackage),
     approvalBundlePath,
     approvalBundleFileSha256: sha256File(approvalBundlePath),
-    configurationPath: sourceEmergencyPackage.configurationPath,
-    configurationFileSha256: sha256File(sourceEmergencyPackage.configurationPath),
+    sourceRecoveryConfigurationPath: sourceEmergencyPackage.configurationPath,
+    sourceRecoveryConfigurationFileSha256: sha256File(sourceEmergencyPackage.configurationPath),
+    sourceRecoveryConfigurationSha256: stableSha256(sourceRecoveryConfig),
+    configurationPath: finalizationConfigurationPath,
+    configurationFileSha256: sha256File(finalizationConfigurationPath),
     configurationSha256: stableSha256(config),
     finalizationApprovalPath,
     finalizationApprovalFileSha256: sha256File(finalizationApprovalPath),
