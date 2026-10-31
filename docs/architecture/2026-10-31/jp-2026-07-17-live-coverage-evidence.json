@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "status": "HOLD_PRESERVED_CONFLICTS",
+  "capturedAt": "2026-10-31T13:42:12.904Z",
+  "targetDate": "2026-07-17",
+  "productionMutation": false,
+  "gitHead": "4a6562a9f7713681b26039acbb8977feb53b4d64",
+  "provider": {
+    "endpoint": "/v2/equities/bars/daily",
+    "priceBasis": "jquants-adjusted-ohlcv-v1",
+    "providerRows": 4442,
+    "acceptedRows": 4218,
+    "noTradeRows": 224,
+    "unexpectedRejectedRows": 0,
+    "acceptedContentSha256": "cfbf6d48f9b0f2438484f04154a800a55bd41d03a2d5622f9be44e4c7ac2bb20",
+    "rejectedRowsSha256": "f9c18e76c8de56a50ccbe6f3b668a893f279be8d20aa47f5f30df4e86b4c722f",
+    "rawEvidenceFileSha256": "19f64ca873512efbb0107b8ea131e0aaf1b0ec1b671eb37cbf88b8775f7b74a7"
+  },
+  "productionDatabase": {
+    "path": "/Volumes/OWC Express 1M2 80G/stock-dashboard/stockboard.db",
+    "bytes": 551171977216,
+    "inode": 1961766,
+    "mtimeLocal": "2026-10-31T21:00:29+09:00",
+    "walBytesAtObservation": 4247752,
+    "queryMode": "sqlite3 -readonly",
+    "queryPlan": "SEARCH ohlcv_daily USING INDEX ohlcv_date_ticker_idx (date=?)",
+    "existingRowsFileSha256": "9927b0fcf08185185f275a6e2db09ee9a77a2440ed1766c9d53aa80403dbf2bb"
+  },
+  "classification": {
+    "officialTradingRows": 4218,
+    "existingRows": 157,
+    "matchingRows": 155,
+    "residualMissingRows": 4061,
+    "conflicts": 2,
+    "existingRowsSha256": "fc4df58629fead4d9dcdd11bc78287194aafc8776ed69f6e9ed5985a3ef4b179",
+    "planSha256": "269cca5954a9bd580ba788c91fa4c5f1982d27837316489416c2753ee8b5f08c",
+    "planFileSha256": "789cf821e48ec550d0f23e40dfb05fb5929ccada60c7d81135217de36e2a3a24"
+  },
+  "preservedConflicts": [
+    {
+      "ticker": "1447",
+      "disposition": "PRESERVE_EXISTING_HOLD",
+      "existing": { "open": 273.5, "high": 284.9, "low": 266.8, "close": 270.2, "volume": 1049400 },
+      "official": { "open": 273.7, "high": 285.1, "low": 267.0, "close": 270.4, "volume": 1049400, "adjustmentFactor": 1 }
+    },
+    {
+      "ticker": "2164",
+      "disposition": "PRESERVE_EXISTING_HOLD",
+      "existing": { "open": 112.8, "high": 112.8, "low": 104.8, "close": 108.2, "volume": 82100 },
+      "official": { "open": 113.0, "high": 113.0, "low": 105.0, "close": 108.3, "volume": 82100, "adjustmentFactor": 1 }
+    }
+  ],
+  "adjacentSessionCounts": [
+    { "date": "2026-07-13", "rows": 4205 },
+    { "date": "2026-07-14", "rows": 4203 },
+    { "date": "2026-07-15", "rows": 4206 },
+    { "date": "2026-07-16", "rows": 4208 },
+    { "date": "2026-07-17", "rows": 157 },
+    { "date": "2026-07-21", "rows": 4224 },
+    { "date": "2026-07-22", "rows": 4211 },
+    { "date": "2026-07-23", "rows": 4191 },
+    { "date": "2026-07-24", "rows": 4202 }
+  ],
+  "sourceWatermark": {
+    "latestRunId": 8718,
+    "latestPublishableRunId": 8718,
+    "runningCount": 0,
+    "latestStatus": "success",
+    "latestStartedAt": 1793346040,
+    "latestFinishedAt": 1793346050
+  },
+  "servingWatermark": {
+    "dailySnapshots": { "rows": 13334306, "latestDate": "2026-10-30", "latestComputedAt": 1793346086 },
+    "screening": { "rows": 52, "latestAsOf": "2026-10-30", "latestCalculatedAt": 1793362444 },
+    "dashboard": { "rows": 105, "latestDate": "2026-10-30", "latestComputedAt": 1793367130 }
+  },
+  "runtimeObservation": {
+    "web": "running",
+    "analog": "running",
+    "friendGateway": "running",
+    "updateLatest": "loaded_idle",
+    "freshnessGuard": "loaded_idle_last_exit_0",
+    "triggerHistoricalScan": "running",
+    "weeklyOptimization": "loaded_idle"
+  },
+  "externalEvidence": {
+    "directory": "/Users/yoshio/Documents/ChatGPT/株サイト/.audit/architecture-ohlcv-phase0-20261031",
+    "officialFile": "official-2026-07-17.json",
+    "existingRowsFile": "production-existing-2026-07-17.json",
+    "planFile": "live-gap-plan-2026-07-17.json"
+  },
+  "gate": {
+    "phase0ReadOnlyEvidence": "PASS",
+    "missingRowRepair": "HOLD_REQUIRES_PHASE2_AND_SEPARATE_PRODUCTION_APPROVAL",
+    "conflictAdjudication": "HOLD_OUT_OF_SCOPE"
+  }
+}
