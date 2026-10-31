@@ -34,6 +34,13 @@ export type JpOhlcvEmergencyRecoveryPackage = {
   rollbackApprovalSha256: string
   repairApprovalSha256: string
   recoveryExecutionPlanSha256: string
+  sourcePackagePath: string
+  sourcePackageFileSha256: string
+  sourcePackageApprovalSha256: string
+  originalConfigurationSha256: string
+  originalConfigurationFileSha256: string
+  backupMetadataFileSha256: string
+  readServiceSnapshotFileSha256: string
   expectedRestoredTargetRows: number
   backupRuntimeSnapshotPath: string
   backupRuntimeSnapshotSha256: string
@@ -219,6 +226,10 @@ async function main(): Promise<void> {
   if (sha256File(pkg.orchestratorScriptPath) !== pkg.orchestratorScriptSha256) {
     throw new Error('repair_emergency_orchestrator_identity_mismatch')
   }
+  assertSealedFile({ path: pkg.sourcePackagePath, sha256: pkg.sourcePackageFileSha256 })
+  if (stableSha256(readJson(pkg.sourcePackagePath)) !== pkg.sourcePackageApprovalSha256) {
+    throw new Error('repair_emergency_source_package_approval_mismatch')
+  }
   for (const sealed of [...pkg.runner.sealedFiles, ...pkg.sourceFiles]) assertSealedFile(sealed)
   if (sha256File(pkg.runner.executable) !== pkg.runner.executableSha256) {
     throw new Error('repair_emergency_runner_executable_mismatch')
@@ -258,6 +269,25 @@ async function main(): Promise<void> {
     || rollbackApproval.emergencyRecovery.backupRuntimeSnapshotFileSha256
       !== pkg.backupRuntimeSnapshotFileSha256) {
     throw new Error('repair_emergency_rollback_approval_mismatch')
+  }
+  const inherited = config.emergencyRecoveryEvidence
+  if (!inherited
+    || inherited.sourcePackageApprovalSha256 !== pkg.sourcePackageApprovalSha256
+    || inherited.originalConfigurationSha256 !== pkg.originalConfigurationSha256
+    || inherited.originalConfigurationFileSha256 !== pkg.originalConfigurationFileSha256
+    || inherited.backupMetadataFileSha256 !== pkg.backupMetadataFileSha256
+    || inherited.readServiceSnapshotFileSha256 !== pkg.readServiceSnapshotFileSha256
+    || rollbackApproval.emergencyRecovery.sourcePackageApprovalSha256 !== pkg.sourcePackageApprovalSha256
+    || rollbackApproval.emergencyRecovery.originalConfigurationSha256 !== pkg.originalConfigurationSha256
+    || rollbackApproval.emergencyRecovery.originalConfigurationFileSha256 !== pkg.originalConfigurationFileSha256
+    || rollbackApproval.emergencyRecovery.backupMetadataFileSha256 !== pkg.backupMetadataFileSha256
+    || rollbackApproval.emergencyRecovery.readServiceSnapshotFileSha256 !== pkg.readServiceSnapshotFileSha256) {
+    throw new Error('repair_emergency_inherited_evidence_contract_mismatch')
+  }
+  const backupMetadataPath = `${pkg.backupRealpath}.json`
+  if (sha256File(backupMetadataPath) !== pkg.backupMetadataFileSha256
+    || sha256File(config.serviceSnapshotPath) !== pkg.readServiceSnapshotFileSha256) {
+    throw new Error('repair_emergency_inherited_evidence_file_changed')
   }
   if (config.repairScope.existingRows !== pkg.expectedRestoredTargetRows
     || rollbackApproval.journalSha256 !== pkg.activeJournalCanonicalSha256) {

@@ -189,6 +189,11 @@ export type JpOhlcvRepairRollbackApproval = {
     expectedRestoredTargetRows: number
     backupRuntimeSnapshotSha256: string
     backupRuntimeSnapshotFileSha256: string
+    sourcePackageApprovalSha256: string
+    originalConfigurationSha256: string
+    originalConfigurationFileSha256: string
+    backupMetadataFileSha256: string
+    readServiceSnapshotFileSha256: string
   }
 }
 
@@ -919,6 +924,11 @@ export class JpOhlcvProductionRepairTransaction {
         || !/^[a-f0-9]{64}$/.test(emergency.recoveryConfigurationFileSha256)
         || !/^[a-f0-9]{64}$/.test(emergency.backupRuntimeSnapshotSha256)
         || !/^[a-f0-9]{64}$/.test(emergency.backupRuntimeSnapshotFileSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.sourcePackageApprovalSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.originalConfigurationSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.originalConfigurationFileSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.backupMetadataFileSha256)
+        || !/^[a-f0-9]{64}$/.test(emergency.readServiceSnapshotFileSha256)
         || emergency.originalExecutionPlanSha256 !== input.approval.derivedPlanSha256
         || !Number.isSafeInteger(emergency.expectedRestoredTargetRows)
         || emergency.expectedRestoredTargetRows <= 0) {

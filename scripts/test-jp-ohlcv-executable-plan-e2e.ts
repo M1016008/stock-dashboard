@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
@@ -675,6 +675,7 @@ async function main(): Promise<void> {
     const stageEnvironment = (
       repairTransactionId: string,
       fixtureConfig: JpOhlcvProductionExecutionConfiguration,
+      fixtureConfigPath: string,
     ): NodeJS.ProcessEnv => ({
       ...process.env,
       NODE_ENV: 'test',
@@ -683,6 +684,7 @@ async function main(): Promise<void> {
       STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
       STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: repairTransactionId,
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(fixtureConfigPath),
       ...jpOhlcvStorageIdentityEnvironment(fixtureConfig),
     })
     const insufficientCapacityConfig = {
@@ -699,7 +701,7 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      env: stageEnvironment('fixture-capacity', insufficientCapacityConfig),
+      env: stageEnvironment('fixture-capacity', insufficientCapacityConfig, insufficientCapacityConfigPath),
     })
     assert.notEqual(insufficientCapacity.status, 0)
     assert.match(insufficientCapacity.stderr, /repair_backup_capacity_insufficient/)
@@ -729,7 +731,7 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      env: stageEnvironment('fixture-invalid-backup', invalidBackupConfig),
+      env: stageEnvironment('fixture-invalid-backup', invalidBackupConfig, invalidBackupConfigPath),
     })
     assert.notEqual(invalidBackupVerification.status, 0)
     assert.match(invalidBackupVerification.stderr, /repair_rollback_backup_quick_check_timeout_or_failure/)
@@ -777,6 +779,7 @@ async function main(): Promise<void> {
         STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
         STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
         STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+        STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
         ...storageEnvironment,
       },
     })
@@ -868,6 +871,7 @@ async function main(): Promise<void> {
       EXTERNAL_STORAGE_REQUIRED: 'false',
       STOCKBOARD_DB_PATH: databasePath,
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
       SKIP_SCHEMA_ENSURE: '1',
       ...storageEnvironment,
     })
@@ -1037,13 +1041,7 @@ async function main(): Promise<void> {
       transactionId: 'fixture-e2e-success',
     }), /repair_.*(?:terminal|committed|exists|state)/i)
 
-    const restoreArgs = [
-      tsxExecutable,
-      stageScript,
-      '--operation', 'restore-backup',
-      '--config', configPath,
-    ]
-    const restoreEnvironment: NodeJS.ProcessEnv = {
+    const originalRestoreEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       NODE_ENV: 'test',
       USE_LOCAL_DB: '1',
@@ -1051,6 +1049,7 @@ async function main(): Promise<void> {
       STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
       STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
     }
     execFileSync(process.execPath, [
       tsxExecutable,
@@ -1060,8 +1059,89 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
+      env: originalRestoreEnvironment,
+    })
+    const backupMetadataPath = path.join(backupDirectory, 'fixture-e2e-success.sqlite.json')
+    const originalConfigurationSha256 = executionConfigurationSha256(config)
+    const originalBackupMetadataBytes = fs.readFileSync(backupMetadataPath)
+    const originalReadSnapshotBytes = fs.readFileSync(serviceSnapshotPath)
+    const originalReadSnapshot = JSON.parse(originalReadSnapshotBytes.toString('utf8')) as {
+      services: Array<{ label: string; loaded: boolean; disabled: boolean }>
+    }
+    assert.equal(JSON.parse(originalBackupMetadataBytes.toString('utf8')).configSha256, originalConfigurationSha256)
+    assert.equal(JSON.parse(originalReadSnapshotBytes.toString('utf8')).configurationSha256, originalConfigurationSha256)
+    const emergencyRecoveryConfigPath = path.join(root, 'emergency-recovery-config.json')
+    const emergencyRecoveryConfig: JpOhlcvProductionExecutionConfiguration = {
+      ...config,
+      repairScope: {
+        ...config.repairScope,
+        existingRows: beforeRows.length,
+        matchingRows: beforeRows.length - config.repairScope.conflicts,
+        missingRows: config.repairScope.officialRows - beforeRows.length,
+      },
+      emergencyRecoveryEvidence: {
+        version: 1,
+        sourcePackageApprovalSha256: 'a'.repeat(64),
+        originalConfigurationSha256,
+        originalConfigurationFileSha256: sha256File(configPath),
+        backupMetadataFileSha256: sha256File(backupMetadataPath),
+        readServiceSnapshotFileSha256: sha256File(serviceSnapshotPath),
+      },
+    }
+    writeJson(emergencyRecoveryConfigPath, emergencyRecoveryConfig)
+    assert.notEqual(executionConfigurationSha256(emergencyRecoveryConfig), originalConfigurationSha256)
+    const restoreEnvironment: NodeJS.ProcessEnv = {
+      ...originalRestoreEnvironment,
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(emergencyRecoveryConfigPath),
+    }
+    const runRecoveryStage = (operation: string, configFile = emergencyRecoveryConfigPath) => spawnSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', operation,
+      '--config', configFile,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
       env: restoreEnvironment,
     })
+    const backupVerification = runRecoveryStage('verify-backup')
+    assert.equal(backupVerification.status, 0, backupVerification.stderr)
+
+    writeJson(backupMetadataPath, {
+      ...JSON.parse(originalBackupMetadataBytes.toString('utf8')),
+      sourceGeneration: 'tampered-generation',
+    })
+    const tamperedBackupMetadata = runRecoveryStage('verify-backup')
+    assert.notEqual(tamperedBackupMetadata.status, 0)
+    assert.match(tamperedBackupMetadata.stderr, /repair_inherited_backup_metadata_identity_mismatch/)
+    fs.writeFileSync(backupMetadataPath, originalBackupMetadataBytes)
+
+    writeJson(serviceSnapshotPath, {
+      ...JSON.parse(originalReadSnapshotBytes.toString('utf8')),
+      capturedAt: new Date(0).toISOString(),
+    })
+    const tamperedReadSnapshot = runRecoveryStage('hold-read-services')
+    assert.notEqual(tamperedReadSnapshot.status, 0)
+    assert.match(tamperedReadSnapshot.stderr, /repair_inherited_read_service_snapshot_identity_mismatch/)
+    fs.writeFileSync(serviceSnapshotPath, originalReadSnapshotBytes)
+
+    const unrelatedConfigPath = path.join(root, 'unrelated-recovery-config.json')
+    writeJson(unrelatedConfigPath, {
+      ...emergencyRecoveryConfig,
+      healthUrls: { ...emergencyRecoveryConfig.healthUrls, analog: 'http://127.0.0.1:3999/api/health' },
+    })
+    const unrelatedConfiguration = runRecoveryStage('verify-backup', unrelatedConfigPath)
+    assert.notEqual(unrelatedConfiguration.status, 0)
+    assert.match(unrelatedConfiguration.stderr, /repair_stage_configuration_file_identity_mismatch/)
+
+    const inheritedSnapshotHold = runRecoveryStage('hold-read-services')
+    assert.equal(inheritedSnapshotHold.status, 0, inheritedSnapshotHold.stderr)
+    const restoreArgs = [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'restore-backup',
+      '--config', emergencyRecoveryConfigPath,
+    ]
     assert.throws(() => execFileSync(process.execPath, restoreArgs, {
       cwd: process.cwd(),
       encoding: 'utf8',
@@ -1090,7 +1170,7 @@ async function main(): Promise<void> {
     const restoredVerifierOutput = execFileSync(process.execPath, [
       tsxExecutable,
       derivedVerifierScript,
-      '--config', configPath,
+      '--config', emergencyRecoveryConfigPath,
       '--mode', 'rollback',
       '--rollback-expected-target-rows', String(beforeRows.length),
     ], {
@@ -1123,17 +1203,6 @@ async function main(): Promise<void> {
       publishedAt: new Date().toISOString(),
       lineage: baselineLineage,
     })
-    const emergencyRecoveryConfigPath = path.join(root, 'emergency-recovery-config.json')
-    const emergencyRecoveryConfig = {
-      ...config,
-      repairScope: {
-        ...config.repairScope,
-        existingRows: beforeRows.length,
-        matchingRows: beforeRows.length - config.repairScope.conflicts,
-        missingRows: config.repairScope.officialRows - beforeRows.length,
-      },
-    }
-    writeJson(emergencyRecoveryConfigPath, emergencyRecoveryConfig)
     const originalServingOutput = execFileSync(process.execPath, [
       tsxExecutable,
       stageScript,
@@ -1149,6 +1218,22 @@ async function main(): Promise<void> {
       servingGeneration: config.servingGenerationBefore,
       health: 'PASS',
     })
+    await new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, [
+        tsxExecutable,
+        stageScript,
+        '--operation', 'resume-read-services',
+        '--config', emergencyRecoveryConfigPath,
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: restoreEnvironment,
+      }, (error) => error ? reject(error) : resolve())
+    })
+    const restoredReadRuntime = JSON.parse(fs.readFileSync(`${serviceSnapshotPath}.fixture-runtime.json`, 'utf8'))
+    for (const before of originalReadSnapshot.services) {
+      assert.deepEqual(restoredReadRuntime[before.label], { loaded: before.loaded, disabled: before.disabled })
+    }
     let recoverySafeChecks = 0
     const writerRecovery = await restoreJpOhlcvMaintenanceWriters({
       config,

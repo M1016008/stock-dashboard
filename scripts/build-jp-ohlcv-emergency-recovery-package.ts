@@ -96,6 +96,46 @@ function main(): void {
     || pendingRollback.repairApprovalSha256 !== approvalBundle.approvalSha256) {
     throw new Error('repair_emergency_builder_pending_approval_invalid')
   }
+  const originalConfigurationSha256 = stableSha256(originalConfig)
+  const backupMetadataPath = `${pendingRollback.backupRealpath}.json`
+  const backupMetadata = readJson<{
+    configSha256?: unknown
+    transactionId?: unknown
+    backupRealpath?: unknown
+    backupSha256?: unknown
+  }>(backupMetadataPath)
+  const readServiceSnapshot = readJson<{
+    configurationSha256?: unknown
+    transactionId?: unknown
+    services?: Array<{
+      label?: unknown
+      plistPath?: unknown
+      definitionSha256?: unknown
+      program?: unknown
+      role?: unknown
+    }>
+  }>(originalConfig.serviceSnapshotPath)
+  if (backupMetadata.configSha256 !== originalConfigurationSha256
+    || backupMetadata.transactionId !== pendingRollback.transactionId
+    || backupMetadata.backupRealpath !== pendingRollback.backupRealpath
+    || backupMetadata.backupSha256 !== pendingRollback.backupSha256) {
+    throw new Error('repair_emergency_builder_backup_metadata_identity_mismatch')
+  }
+  if (readServiceSnapshot.configurationSha256 !== originalConfigurationSha256
+    || readServiceSnapshot.transactionId !== pendingRollback.transactionId
+    || readServiceSnapshot.services?.length !== originalConfig.readServices.length) {
+    throw new Error('repair_emergency_builder_read_snapshot_identity_mismatch')
+  }
+  for (const service of originalConfig.readServices) {
+    const captured = readServiceSnapshot.services.find((candidate) => candidate.label === service.label)
+    if (!captured || captured.plistPath !== service.plistPath
+      || captured.definitionSha256 !== service.definitionSha256
+      || captured.program !== service.program || captured.role !== service.role) {
+      throw new Error(`repair_emergency_builder_read_snapshot_service_mismatch:${service.label}`)
+    }
+  }
+  const backupMetadataFileSha256 = sha256File(backupMetadataPath)
+  const readServiceSnapshotFileSha256 = sha256File(originalConfig.serviceSnapshotPath)
   const journalPath = path.join(originalConfig.stateDirectory, 'repair-journal.json')
   const lockPath = path.join(originalConfig.stateDirectory, 'repair.lock')
   const activeJournal = readJson<{
@@ -162,6 +202,14 @@ function main(): void {
     integrationRoot,
     integrationCommit: integrationHead,
     integrationTreeId,
+    emergencyRecoveryEvidence: {
+      version: 1,
+      sourcePackageApprovalSha256,
+      originalConfigurationSha256,
+      originalConfigurationFileSha256: sourcePackage.configurationSha256,
+      backupMetadataFileSha256,
+      readServiceSnapshotFileSha256,
+    },
     repairScope: {
       ...originalConfig.repairScope,
       existingRows: expectedRestoredTargetRows,
@@ -230,6 +278,11 @@ function main(): void {
       expectedRestoredTargetRows,
       backupRuntimeSnapshotSha256: renewedEvidence.snapshotSha256,
       backupRuntimeSnapshotFileSha256: renewedEvidence.evidenceFileSha256,
+      sourcePackageApprovalSha256,
+      originalConfigurationSha256,
+      originalConfigurationFileSha256: sourcePackage.configurationSha256,
+      backupMetadataFileSha256,
+      readServiceSnapshotFileSha256,
     },
     reason: `${pendingRollback.reason} Emergency recovery uses a separately sealed plan that removes only the redundant post-restore full quick_check and verifies the backup-time row count.`,
   }
@@ -297,6 +350,13 @@ function main(): void {
     rollbackApprovalSha256: recoveryApprovalSha256,
     repairApprovalSha256: approvalBundle.approvalSha256,
     recoveryExecutionPlanSha256: recoveryPlanSha256,
+    sourcePackagePath,
+    sourcePackageFileSha256: sha256File(sourcePackagePath),
+    sourcePackageApprovalSha256,
+    originalConfigurationSha256,
+    originalConfigurationFileSha256: sourcePackage.configurationSha256,
+    backupMetadataFileSha256,
+    readServiceSnapshotFileSha256,
     expectedRestoredTargetRows,
     backupRuntimeSnapshotPath,
     backupRuntimeSnapshotSha256: renewedEvidence.snapshotSha256,

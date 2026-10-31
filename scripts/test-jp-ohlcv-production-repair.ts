@@ -618,6 +618,11 @@ for (const [name, override, expectedStage] of [
       expectedRestoredTargetRows: 157,
       backupRuntimeSnapshotSha256: 'e'.repeat(64),
       backupRuntimeSnapshotFileSha256: 'f'.repeat(64),
+      sourcePackageApprovalSha256: '1'.repeat(64),
+      originalConfigurationSha256: '2'.repeat(64),
+      originalConfigurationFileSha256: '3'.repeat(64),
+      backupMetadataFileSha256: '4'.repeat(64),
+      readServiceSnapshotFileSha256: '5'.repeat(64),
     },
   }
   await assert.rejects(async () => {

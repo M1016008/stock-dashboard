@@ -482,6 +482,11 @@ async function main(): Promise<void> {
       expectedRestoredTargetRows: 2,
       backupRuntimeSnapshotSha256: '4'.repeat(64),
       backupRuntimeSnapshotFileSha256: '5'.repeat(64),
+      sourcePackageApprovalSha256: '6'.repeat(64),
+      originalConfigurationSha256: '7'.repeat(64),
+      originalConfigurationFileSha256: '8'.repeat(64),
+      backupMetadataFileSha256: '9'.repeat(64),
+      readServiceSnapshotFileSha256: 'a'.repeat(64),
     },
   }
   assert.doesNotThrow(() => createJpOhlcvCommandAdapters({

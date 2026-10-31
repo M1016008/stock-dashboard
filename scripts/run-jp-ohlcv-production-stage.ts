@@ -82,6 +82,9 @@ const configSha256 = executionConfigurationSha256(config, {
     && !fs.existsSync(config.databaseRealpath)
     && fs.existsSync(restoreStateForMissingDatabase),
 })
+if (process.env.STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256 !== sha256File(configFile)) {
+  throw new Error('repair_stage_configuration_file_identity_mismatch')
+}
 const stageStartedAtMs = Date.now()
 
 type BackupOperationTiming = {
@@ -380,7 +383,7 @@ async function assertRestoreExecutionBarrier(input: Omit<RestoreState, 'phase' |
     throw new Error(`repair_restore_read_service_snapshot_missing:${config.serviceSnapshotPath}`)
   }
   const snapshot = readJson<JpOhlcvServiceSnapshot>(config.serviceSnapshotPath)
-  assertSnapshot(snapshot, 'READ_SERVICE')
+  assertSnapshot(snapshot, config.serviceSnapshotPath, 'READ_SERVICE')
   assertSnapshotServices(snapshot, config.readServices)
   const services = config.mode === 'PRODUCTION'
     ? [...config.writerServices, ...config.readServices]
@@ -619,8 +622,40 @@ async function captureServices(services: JpOhlcvLaunchdServiceIdentity[]): Promi
   }
 }
 
-function assertSnapshot(snapshot: JpOhlcvServiceSnapshot, expectedRole?: JpOhlcvLaunchdServiceIdentity['role']): void {
-  if (snapshot.version !== 1 || snapshot.configurationSha256 !== configSha256
+const inheritedBackupEvidenceOperations = new Set(['verify-backup', 'restore-backup'])
+const inheritedReadSnapshotOperations = new Set(['hold-read-services', 'restore-backup', 'resume-read-services'])
+
+function assertEvidenceConfiguration(input: {
+  recordedConfigurationSha256: string
+  evidenceFile: string
+  evidenceKind: 'BACKUP_METADATA' | 'READ_SERVICE_SNAPSHOT'
+}): void {
+  if (input.recordedConfigurationSha256 === configSha256) return
+  const inherited = config.emergencyRecoveryEvidence
+  const allowed = input.evidenceKind === 'BACKUP_METADATA'
+    ? inheritedBackupEvidenceOperations.has(operation)
+    : inheritedReadSnapshotOperations.has(operation)
+  const expectedFileSha256 = input.evidenceKind === 'BACKUP_METADATA'
+    ? inherited?.backupMetadataFileSha256
+    : inherited?.readServiceSnapshotFileSha256
+  if (!allowed || !inherited
+    || input.recordedConfigurationSha256 !== inherited.originalConfigurationSha256
+    || sha256File(input.evidenceFile) !== expectedFileSha256) {
+    throw new Error(`repair_inherited_${input.evidenceKind.toLowerCase()}_identity_mismatch`)
+  }
+}
+
+function assertSnapshot(
+  snapshot: JpOhlcvServiceSnapshot,
+  snapshotFile: string,
+  expectedRole?: JpOhlcvLaunchdServiceIdentity['role'],
+): void {
+  assertEvidenceConfiguration({
+    recordedConfigurationSha256: snapshot.configurationSha256,
+    evidenceFile: snapshotFile,
+    evidenceKind: 'READ_SERVICE_SNAPSHOT',
+  })
+  if (snapshot.version !== 1
     || snapshot.transactionId !== transactionId || snapshot.services.length === 0) {
     throw new Error('repair_service_snapshot_identity_mismatch')
   }
@@ -650,7 +685,7 @@ async function holdServices(services: JpOhlcvLaunchdServiceIdentity[], snapshotF
   let snapshot: JpOhlcvServiceSnapshot
   if (fs.existsSync(snapshotFile)) {
     snapshot = readJson<JpOhlcvServiceSnapshot>(snapshotFile)
-    assertSnapshot(snapshot, services[0]?.role)
+    assertSnapshot(snapshot, snapshotFile, services[0]?.role)
     assertSnapshotServices(snapshot, services)
   } else {
     snapshot = await captureServices(services)
@@ -682,7 +717,7 @@ async function restoreServices(
   archiveAfterRestore = true,
 ): Promise<JpOhlcvServiceSnapshot> {
   const snapshot = readJson<JpOhlcvServiceSnapshot>(snapshotFile)
-  assertSnapshot(snapshot, 'READ_SERVICE')
+  assertSnapshot(snapshot, snapshotFile, 'READ_SERVICE')
   assertSnapshotServices(snapshot, config.readServices)
   const services = snapshot.services.map(({ loaded: _loaded, disabled: _disabled, pid: _pid, processGroupId: _pgid, ...service }) => service)
   if (config.mode === 'ISOLATED_FIXTURE') {
@@ -852,6 +887,11 @@ function requireBackupMetadata(options: {
     sourceGeneration: string
     servingGeneration: string
   }>(backupMetadataPath())
+  assertEvidenceConfiguration({
+    recordedConfigurationSha256: metadata.configSha256,
+    evidenceFile: backupMetadataPath(),
+    evidenceKind: 'BACKUP_METADATA',
+  })
   const actualBackupSha256 = options.sha256TimeoutMs && options.timings
     ? measure('rollback_backup_sha256', options.sha256TimeoutMs, options.timings, () => (
         sha256FileWithTimeout(
@@ -861,7 +901,7 @@ function requireBackupMetadata(options: {
         )
       ))
     : sha256File(metadata.backupRealpath)
-  if (metadata.configSha256 !== configSha256 || metadata.transactionId !== transactionId
+  if (metadata.transactionId !== transactionId
     || fs.realpathSync(metadata.backupRealpath) !== metadata.backupRealpath
     || actualBackupSha256 !== metadata.backupSha256) {
     throw new Error('repair_backup_metadata_mismatch')

@@ -91,6 +91,16 @@ async function main(): Promise<void> {
   }
   if (rollbackApproval?.version === 2) {
     const expectedRows = String(rollbackApproval.emergencyRecovery!.expectedRestoredTargetRows)
+    const emergency = rollbackApproval.emergencyRecovery!
+    const inherited = config.emergencyRecoveryEvidence
+    if (!inherited
+      || inherited.sourcePackageApprovalSha256 !== emergency.sourcePackageApprovalSha256
+      || inherited.originalConfigurationSha256 !== emergency.originalConfigurationSha256
+      || inherited.originalConfigurationFileSha256 !== emergency.originalConfigurationFileSha256
+      || inherited.backupMetadataFileSha256 !== emergency.backupMetadataFileSha256
+      || inherited.readServiceSnapshotFileSha256 !== emergency.readServiceSnapshotFileSha256) {
+      throw new Error('repair_emergency_recovery_inherited_evidence_mismatch')
+    }
     const recoveryVerifiers = config.nestedCommands.filter((command) => {
       const index = command.args.indexOf('--rollback-expected-target-rows')
       return command.id === 'verify-restored-derived-state'
