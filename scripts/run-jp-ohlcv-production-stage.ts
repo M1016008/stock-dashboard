@@ -638,11 +638,16 @@ function assertEvidenceConfiguration(input: {
   const expectedFileSha256 = input.evidenceKind === 'BACKUP_METADATA'
     ? inherited?.backupMetadataFileSha256
     : inherited?.readServiceSnapshotFileSha256
-  if (!allowed || !inherited
-    || input.recordedConfigurationSha256 !== inherited.originalConfigurationSha256
-    || sha256File(input.evidenceFile) !== expectedFileSha256) {
-    throw new Error(`repair_inherited_${input.evidenceKind.toLowerCase()}_identity_mismatch`)
+  const code = `repair_inherited_${input.evidenceKind.toLowerCase()}`
+  if (!allowed) throw new Error(`${code}_operation_forbidden:${operation}`)
+  if (!inherited) throw new Error(`${code}_contract_missing`)
+  if (input.recordedConfigurationSha256 !== inherited.originalConfigurationSha256) {
+    throw new Error(`${code}_configuration_mismatch`)
   }
+  if (!fs.existsSync(input.evidenceFile)) throw new Error(`${code}_missing`)
+  const stat = fs.lstatSync(input.evidenceFile)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${code}_file_identity_invalid`)
+  if (sha256File(input.evidenceFile) !== expectedFileSha256) throw new Error(`${code}_file_hash_mismatch`)
 }
 
 function assertSnapshot(
@@ -675,7 +680,12 @@ function assertSnapshotServices(
       || captured.plistPath !== service.plistPath
       || captured.definitionSha256 !== service.definitionSha256
       || captured.program !== service.program
-      || captured.role !== service.role) {
+      || captured.role !== service.role
+      || typeof captured.loaded !== 'boolean'
+      || typeof captured.disabled !== 'boolean'
+      || (captured.pid !== null && (!Number.isSafeInteger(captured.pid) || captured.pid <= 0))
+      || (captured.processGroupId !== null
+        && (!Number.isSafeInteger(captured.processGroupId) || captured.processGroupId <= 0))) {
       throw new Error(`repair_service_snapshot_service_mismatch:${service.label}`)
     }
   }
@@ -688,6 +698,9 @@ async function holdServices(services: JpOhlcvLaunchdServiceIdentity[], snapshotF
     assertSnapshot(snapshot, snapshotFile, services[0]?.role)
     assertSnapshotServices(snapshot, services)
   } else {
+    if (config.emergencyRecoveryEvidence && inheritedReadSnapshotOperations.has(operation)) {
+      throw new Error('repair_inherited_read_service_snapshot_missing')
+    }
     snapshot = await captureServices(services)
     assertSnapshotServices(snapshot, services)
     atomicJson(snapshotFile, snapshot)
@@ -879,6 +892,9 @@ function requireBackupMetadata(options: {
   sourceGeneration: string
   servingGeneration: string
 } {
+  if (!fs.existsSync(backupMetadataPath()) && config.emergencyRecoveryEvidence) {
+    throw new Error('repair_inherited_backup_metadata_missing')
+  }
   const metadata = readJson<{
     configSha256: string
     transactionId: string

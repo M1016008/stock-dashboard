@@ -113,6 +113,10 @@ function main(): void {
       definitionSha256?: unknown
       program?: unknown
       role?: unknown
+      loaded?: unknown
+      disabled?: unknown
+      pid?: unknown
+      processGroupId?: unknown
     }>
   }>(originalConfig.serviceSnapshotPath)
   if (backupMetadata.configSha256 !== originalConfigurationSha256
@@ -130,7 +134,11 @@ function main(): void {
     const captured = readServiceSnapshot.services.find((candidate) => candidate.label === service.label)
     if (!captured || captured.plistPath !== service.plistPath
       || captured.definitionSha256 !== service.definitionSha256
-      || captured.program !== service.program || captured.role !== service.role) {
+      || captured.program !== service.program || captured.role !== service.role
+      || typeof captured.loaded !== 'boolean' || typeof captured.disabled !== 'boolean'
+      || (captured.pid !== null && (!Number.isSafeInteger(captured.pid) || Number(captured.pid) <= 0))
+      || (captured.processGroupId !== null
+        && (!Number.isSafeInteger(captured.processGroupId) || Number(captured.processGroupId) <= 0))) {
       throw new Error(`repair_emergency_builder_read_snapshot_service_mismatch:${service.label}`)
     }
   }

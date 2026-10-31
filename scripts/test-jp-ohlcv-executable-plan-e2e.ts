@@ -1113,7 +1113,7 @@ async function main(): Promise<void> {
     })
     const tamperedBackupMetadata = runRecoveryStage('verify-backup')
     assert.notEqual(tamperedBackupMetadata.status, 0)
-    assert.match(tamperedBackupMetadata.stderr, /repair_inherited_backup_metadata_identity_mismatch/)
+    assert.match(tamperedBackupMetadata.stderr, /repair_inherited_backup_metadata_file_hash_mismatch/)
     fs.writeFileSync(backupMetadataPath, originalBackupMetadataBytes)
 
     writeJson(serviceSnapshotPath, {
@@ -1122,8 +1122,14 @@ async function main(): Promise<void> {
     })
     const tamperedReadSnapshot = runRecoveryStage('hold-read-services')
     assert.notEqual(tamperedReadSnapshot.status, 0)
-    assert.match(tamperedReadSnapshot.stderr, /repair_inherited_read_service_snapshot_identity_mismatch/)
+    assert.match(tamperedReadSnapshot.stderr, /repair_inherited_read_service_snapshot_file_hash_mismatch/)
     fs.writeFileSync(serviceSnapshotPath, originalReadSnapshotBytes)
+
+    fs.renameSync(serviceSnapshotPath, `${serviceSnapshotPath}.missing-fixture`)
+    const missingReadSnapshot = runRecoveryStage('hold-read-services')
+    assert.notEqual(missingReadSnapshot.status, 0)
+    assert.match(missingReadSnapshot.stderr, /repair_inherited_read_service_snapshot_missing/)
+    fs.renameSync(`${serviceSnapshotPath}.missing-fixture`, serviceSnapshotPath)
 
     const unrelatedConfigPath = path.join(root, 'unrelated-recovery-config.json')
     writeJson(unrelatedConfigPath, {

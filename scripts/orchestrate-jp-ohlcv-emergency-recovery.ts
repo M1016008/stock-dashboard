@@ -7,6 +7,7 @@ import {
   isHealthyJpOhlcvRepairResponseBody,
   sha256File,
   type JpOhlcvProductionExecutionConfiguration,
+  type JpOhlcvProductionExecutionPackage,
 } from '@/lib/jp-ohlcv-executable-plan'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
@@ -88,6 +89,15 @@ function assertSealedFile(file: SealedFile): void {
     || fs.realpathSync(file.path) !== file.path || sha256File(file.path) !== file.sha256) {
     throw new Error(`repair_emergency_sealed_file_mismatch:${file.path}`)
   }
+}
+
+function assertEvidenceFile(file: string, expectedSha256: string, code: string): void {
+  if (!fs.existsSync(file)) throw new Error(`${code}_missing:${file}`)
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file) {
+    throw new Error(`${code}_identity_invalid:${file}`)
+  }
+  if (sha256File(file) !== expectedSha256) throw new Error(`${code}_hash_mismatch:${file}`)
 }
 
 function readGeneration(file: string): { generation: string; sourceGeneration?: string } {
@@ -226,9 +236,19 @@ async function main(): Promise<void> {
   if (sha256File(pkg.orchestratorScriptPath) !== pkg.orchestratorScriptSha256) {
     throw new Error('repair_emergency_orchestrator_identity_mismatch')
   }
-  assertSealedFile({ path: pkg.sourcePackagePath, sha256: pkg.sourcePackageFileSha256 })
-  if (stableSha256(readJson(pkg.sourcePackagePath)) !== pkg.sourcePackageApprovalSha256) {
+  assertEvidenceFile(pkg.sourcePackagePath, pkg.sourcePackageFileSha256, 'repair_emergency_source_package')
+  const sourcePackage = readJson<JpOhlcvProductionExecutionPackage>(pkg.sourcePackagePath)
+  if (stableSha256(sourcePackage) !== pkg.sourcePackageApprovalSha256) {
     throw new Error('repair_emergency_source_package_approval_mismatch')
+  }
+  assertEvidenceFile(
+    sourcePackage.configurationPath,
+    pkg.originalConfigurationFileSha256,
+    'repair_emergency_original_configuration',
+  )
+  if (sourcePackage.configurationSha256 !== pkg.originalConfigurationFileSha256
+    || stableSha256(readJson(sourcePackage.configurationPath)) !== pkg.originalConfigurationSha256) {
+    throw new Error('repair_emergency_original_configuration_contract_mismatch')
   }
   for (const sealed of [...pkg.runner.sealedFiles, ...pkg.sourceFiles]) assertSealedFile(sealed)
   if (sha256File(pkg.runner.executable) !== pkg.runner.executableSha256) {
@@ -284,11 +304,21 @@ async function main(): Promise<void> {
     || rollbackApproval.emergencyRecovery.readServiceSnapshotFileSha256 !== pkg.readServiceSnapshotFileSha256) {
     throw new Error('repair_emergency_inherited_evidence_contract_mismatch')
   }
-  const backupMetadataPath = `${pkg.backupRealpath}.json`
-  if (sha256File(backupMetadataPath) !== pkg.backupMetadataFileSha256
-    || sha256File(config.serviceSnapshotPath) !== pkg.readServiceSnapshotFileSha256) {
-    throw new Error('repair_emergency_inherited_evidence_file_changed')
-  }
+  const archivePath = `${pkg.activeJournalPath}.rolled-back-${pkg.transactionId}`
+  const rollbackPending = fs.existsSync(pkg.activeJournalPath)
+  const readSnapshotPath = rollbackPending
+    ? config.serviceSnapshotPath
+    : `${config.serviceSnapshotPath}.restored-${pkg.transactionId}`
+  assertEvidenceFile(
+    `${pkg.backupRealpath}.json`,
+    pkg.backupMetadataFileSha256,
+    'repair_emergency_backup_metadata',
+  )
+  assertEvidenceFile(
+    readSnapshotPath,
+    pkg.readServiceSnapshotFileSha256,
+    rollbackPending ? 'repair_emergency_read_snapshot' : 'repair_emergency_restored_read_snapshot',
+  )
   if (config.repairScope.existingRows !== pkg.expectedRestoredTargetRows
     || rollbackApproval.journalSha256 !== pkg.activeJournalCanonicalSha256) {
     throw new Error('repair_emergency_pre_restore_contract_mismatch')
@@ -310,7 +340,6 @@ async function main(): Promise<void> {
     throw new Error('repair_emergency_backup_runtime_snapshot_mismatch')
   }
 
-  const archivePath = `${pkg.activeJournalPath}.rolled-back-${pkg.transactionId}`
   let archivedJournal = archivePath
   if (fs.existsSync(pkg.activeJournalPath)) {
     const activeJournal = readJson<Record<string, unknown>>(pkg.activeJournalPath)
