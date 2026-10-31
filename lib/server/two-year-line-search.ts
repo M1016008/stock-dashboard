@@ -1,4 +1,5 @@
 import { execAll, execGet, execRun } from '@/lib/db/client'
+import { JP_OHLCV_PUBLISHABLE_SOURCE_STATUS } from '@/lib/jp-ohlcv-source-generation'
 import { inferLikelySplitAdjustment } from '@/lib/physical-momentum'
 import {
   US_ADJUSTED_CLOSE_SQL,
@@ -409,7 +410,7 @@ async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenera
          )
          SELECT
            COALESCE((SELECT id FROM latest), 0) AS latestRunId,
-           COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+           COALESCE((SELECT MAX(id) FROM relevant WHERE status = '${JP_OHLCV_PUBLISHABLE_SOURCE_STATUS}'), 0) AS latestPublishableRunId,
            CASE WHEN (SELECT status FROM latest) = 'running' THEN 1 ELSE 0 END AS runningCount`,
       )
     : await execGet<Record<string, unknown>>(

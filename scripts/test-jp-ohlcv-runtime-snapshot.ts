@@ -267,8 +267,27 @@ const sealed = captureJpOhlcvRuntimeSnapshot({
   now: sealedAt,
 })
 const changedDatabase = new DatabaseSync(databasePath)
-changedDatabase.exec("INSERT INTO batch_runs VALUES(2,'ohlcv_fetch:jquants','success',3,4)")
+changedDatabase.exec("INSERT INTO batch_runs VALUES(2,'ohlcv_fetch:jquants','partial',3,4)")
 changedDatabase.close()
+const partialSource = captureJpOhlcvRuntimeSnapshot({
+  databasePath,
+  configurationSha256: 'a'.repeat(64),
+  approvalScope,
+  officialRows: official,
+  officialSourceProof: sourceProof(sealedAt),
+  officialSourceContract: sourceContract,
+  now: sealedAt,
+})
+assert.equal(partialSource.sourceWatermark.latestRunId, 2)
+assert.equal(partialSource.sourceWatermark.latestPublishableRunId, 1)
+assert.throws(
+  () => assertJpOhlcvRuntimeSnapshot({ snapshot: partialSource, now: sealedAt }),
+  /source_generation_not_publishable/,
+)
+
+const successfulDatabase = new DatabaseSync(databasePath)
+successfulDatabase.exec("UPDATE batch_runs SET status = 'success' WHERE id = 2")
+successfulDatabase.close()
 const changed = captureJpOhlcvRuntimeSnapshot({
   databasePath,
   configurationSha256: 'a'.repeat(64),

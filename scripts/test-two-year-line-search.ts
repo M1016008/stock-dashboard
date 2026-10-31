@@ -289,14 +289,31 @@ async function main(): Promise<void> {
      VALUES ('ohlcv_fetch:jquants', ?, ?, 'partial')`,
     [Date.now(), Date.now()],
   )
+  clearTwoYearLineSearchCachesForQa()
+  await assert.rejects(
+    loadTwoYearLineSearchEntries({ market: 'JP', tickers: ['JP-LINE'], asOfDate: '2027-12-30' }),
+    TwoYearLineServingUnavailableError,
+    'a terminal partial JP source generation must fail closed',
+  )
+  await execRun(
+    "UPDATE batch_runs SET status = 'success', finished_at = ? WHERE id = (SELECT MAX(id) FROM batch_runs)",
+    [Date.now()],
+  )
   await buildTwoYearLineServingCache({ market: 'JP', tickers: jpServingTickers, asOfDate: '2027-12-30' })
+
+  await execRun(
+    `INSERT INTO market_data_runs (market, job_type, status, started_at, finished_at)
+     VALUES ('US', 'tiingo_ohlcv', 'partial', ?, ?)`,
+    [Date.now(), Date.now()],
+  )
+  await buildTwoYearLineServingCache({ market: 'US', tickers: usServingTickers, asOfDate: '2027-12-30' })
   clearTwoYearLineSearchCachesForQa()
   assert.equal(
     (await loadTwoYearLineSearchEntries({
-      market: 'JP', tickers: ['JP-LINE'], asOfDate: '2027-12-30',
+      market: 'US', tickers: ['US-LINE'], asOfDate: '2027-12-30',
     })).entries.size,
     1,
-    'a terminal partial source generation may be published after the update pipeline quality gate',
+    'the existing US partial-source contract must remain unchanged',
   )
 
   await execRun(

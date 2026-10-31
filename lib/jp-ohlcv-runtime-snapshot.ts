@@ -12,6 +12,10 @@ import {
   assertJQuantsDailyByDateSourceContract,
   type JQuantsDailyByDateSourceContract,
 } from '@/lib/jquants'
+import {
+  isJpOhlcvSourceGenerationPublishable,
+  JP_OHLCV_PUBLISHABLE_SOURCE_STATUS,
+} from '@/lib/jp-ohlcv-source-generation'
 
 type ReadOnlyDatabase = {
   prepare(sql: string): {
@@ -116,7 +120,7 @@ function sourceWatermark(database: ReadOnlyDatabase): JpOhlcvSourceWatermark {
     )
     SELECT
       COALESCE((SELECT id FROM latest), 0) AS latestRunId,
-      COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+      COALESCE((SELECT MAX(id) FROM relevant WHERE status = '${JP_OHLCV_PUBLISHABLE_SOURCE_STATUS}'), 0) AS latestPublishableRunId,
       (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
       (SELECT status FROM latest) AS latestStatus,
       (SELECT started_at FROM latest) AS latestStartedAt,
@@ -313,7 +317,7 @@ export function assertJpOhlcvRuntimeSnapshot(input: {
   if (snapshot.sourceWatermark.latestRunId <= 0
     || snapshot.sourceWatermark.latestPublishableRunId !== snapshot.sourceWatermark.latestRunId
     || snapshot.sourceWatermark.runningCount !== 0
-    || !['success', 'partial'].includes(snapshot.sourceWatermark.latestStatus ?? '')) {
+    || !isJpOhlcvSourceGenerationPublishable(snapshot.sourceWatermark.latestStatus)) {
     throw new Error('repair_runtime_snapshot_source_generation_not_publishable')
   }
 }
