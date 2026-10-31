@@ -159,6 +159,7 @@
     "test:jp-ohlcv-command-adapter": "tsx scripts/test-jp-ohlcv-command-adapter.ts",
     "test:jp-ohlcv-executable-plan-e2e": "tsx scripts/test-jp-ohlcv-executable-plan-e2e.ts",
     "test:jp-ohlcv-backup-time-budget": "tsx scripts/test-jp-ohlcv-backup-time-budget.ts",
+    "test:jp-ohlcv-candidate-maintenance-budget": "tsx scripts/test-jp-ohlcv-candidate-maintenance-budget.ts",
     "test:service-readiness": "tsx scripts/test-service-readiness.ts",
     "test:hash-bound-operation-lease": "tsx scripts/test-hash-bound-operation-lease.ts",
     "test:jp-ohlcv-rollback-finalization": "tsx scripts/test-jp-ohlcv-rollback-finalization.ts",
