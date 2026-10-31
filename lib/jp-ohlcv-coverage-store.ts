@@ -1,4 +1,4 @@
-import type { Client } from '@libsql/client'
+import type { Client, Transaction } from '@libsql/client'
 import {
   assertJpOhlcvCoverageProjection,
   type JpOhlcvCoverageProjection,
@@ -96,8 +96,10 @@ export async function initializeJpOhlcvCoverageStore(client: Client): Promise<vo
   }
 }
 
-export async function loadJpOhlcvCoverageHead(client: Client): Promise<JpOhlcvCoverageHead | null> {
-  const result = await client.execute({
+export async function loadJpOhlcvCoverageHead(
+  executor: Pick<Client, 'execute'>,
+): Promise<JpOhlcvCoverageHead | null> {
+  const result = await executor.execute({
     sql: `SELECT h.scope, h.source_run_id, h.projection_sha256, h.projection_json,
                  h.receipt_sha256, h.binding_sha256, r.target_date AS receipt_target_date,
                  r.receipt_json,
@@ -111,7 +113,7 @@ export async function loadJpOhlcvCoverageHead(client: Client): Promise<JpOhlcvCo
   })
   const row = result.rows[0]
   if (!row) {
-    const receipts = await client.execute('SELECT COUNT(*) AS count FROM jp_ohlcv_ingestion_receipts')
+    const receipts = await executor.execute('SELECT COUNT(*) AS count FROM jp_ohlcv_ingestion_receipts')
     if (Number(receipts.rows[0]?.count) !== 0) throw new Error('jp_ohlcv_coverage_head_missing_with_receipts')
     return null
   }
@@ -151,12 +153,14 @@ export async function loadJpOhlcvCoverageHead(client: Client): Promise<JpOhlcvCo
   }
 }
 
-export async function persistJpOhlcvCoverageTransition(client: Client, input: {
+export type JpOhlcvCoverageTransitionInput = {
   sourceRunId: number
   expectedPreviousProjectionSha256: string | null
   projection: JpOhlcvCoverageProjection
   receipt: JpOhlcvIngestionReceipt
-}): Promise<JpOhlcvCoverageHead> {
+}
+
+function assertTransitionContract(input: JpOhlcvCoverageTransitionInput): void {
   assertJpOhlcvCoverageProjection(input.projection)
   assertJpOhlcvIngestionReceipt(input.receipt)
   if (!Number.isSafeInteger(input.sourceRunId)
@@ -176,119 +180,115 @@ export async function persistJpOhlcvCoverageTransition(client: Client, input: {
     || (input.receipt.remainingMissingKeys.length > 0 && input.projection.openMissing === 0)) {
     throw new Error('jp_ohlcv_coverage_transition_contract_invalid')
   }
+}
 
-  await client.execute('PRAGMA foreign_keys=ON')
-  const transaction = await client.transaction('write')
+export async function persistJpOhlcvCoverageTransitionInTransaction(
+  transaction: Transaction,
+  input: JpOhlcvCoverageTransitionInput,
+): Promise<JpOhlcvCoverageHead> {
+  assertTransitionContract(input)
+  const foreignKeys = await transaction.execute('PRAGMA foreign_keys')
+  if (Number(foreignKeys.rows[0]?.foreign_keys) !== 1) {
+    throw new Error('jp_ohlcv_coverage_foreign_keys_disabled')
+  }
   const bindingSha256 = transitionBinding({
     sourceRunId: input.sourceRunId,
     projectionSha256: input.projection.projectionSha256,
     receiptSha256: input.receipt.receiptSha256,
   })
-  try {
-    const foreignKeys = await transaction.execute('PRAGMA foreign_keys')
-    if (Number(foreignKeys.rows[0]?.foreign_keys) !== 1) {
-      throw new Error('jp_ohlcv_coverage_foreign_keys_disabled')
-    }
-    const current = await transaction.execute({
-      sql: 'SELECT projection_sha256, source_run_id FROM jp_ohlcv_coverage_heads WHERE scope = ?',
-      args: [JP_OHLCV_COVERAGE_SCOPE],
+  const current = await transaction.execute({
+    sql: 'SELECT projection_sha256, source_run_id FROM jp_ohlcv_coverage_heads WHERE scope = ?',
+    args: [JP_OHLCV_COVERAGE_SCOPE],
+  })
+  const currentRow = current.rows[0]
+  const actualPrevious = currentRow ? String(currentRow.projection_sha256) : null
+  if (currentRow
+    && Number(currentRow.source_run_id) === input.sourceRunId
+    && actualPrevious === input.projection.projectionSha256) {
+    const replay = await transaction.execute({
+      sql: `SELECT receipt_sha256, binding_sha256 FROM jp_ohlcv_ingestion_receipts
+            WHERE source_run_id = ? AND projection_sha256 = ?`,
+      args: [input.sourceRunId, input.projection.projectionSha256],
     })
-    const currentRow = current.rows[0]
-    const actualPrevious = currentRow ? String(currentRow.projection_sha256) : null
-    if (currentRow
-      && Number(currentRow.source_run_id) === input.sourceRunId
-      && actualPrevious === input.projection.projectionSha256) {
-      const replay = await transaction.execute({
-        sql: `SELECT receipt_sha256, binding_sha256 FROM jp_ohlcv_ingestion_receipts
-              WHERE source_run_id = ? AND projection_sha256 = ?`,
-        args: [input.sourceRunId, input.projection.projectionSha256],
-      })
-      if (replay.rows[0]?.receipt_sha256 === input.receipt.receiptSha256
-        && replay.rows[0]?.binding_sha256 === bindingSha256) {
-        await transaction.commit()
-        return {
-          scope: JP_OHLCV_COVERAGE_SCOPE,
-          sourceRunId: input.sourceRunId,
-          projectionSha256: input.projection.projectionSha256,
-          projection: input.projection,
-          receiptSha256: input.receipt.receiptSha256,
-          receipt: input.receipt,
-          bindingSha256,
-        }
-      }
-      throw new Error('jp_ohlcv_coverage_replay_identity_mismatch')
-    }
-    if (actualPrevious !== input.expectedPreviousProjectionSha256) {
-      throw new Error('jp_ohlcv_coverage_head_compare_and_swap_failed')
-    }
-    if (currentRow && Number(currentRow.source_run_id) >= input.sourceRunId) {
-      throw new Error('jp_ohlcv_coverage_source_run_not_monotonic')
-    }
-
-    await transaction.execute({
-      sql: `INSERT INTO jp_ohlcv_ingestion_receipts
-            (source_run_id, target_date, projection_sha256, receipt_sha256, binding_sha256, receipt_json)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [
-        input.sourceRunId,
-        input.receipt.targetDate,
-        input.projection.projectionSha256,
-        input.receipt.receiptSha256,
+    if (replay.rows[0]?.receipt_sha256 === input.receipt.receiptSha256
+      && replay.rows[0]?.binding_sha256 === bindingSha256) {
+      return {
+        scope: JP_OHLCV_COVERAGE_SCOPE,
+        sourceRunId: input.sourceRunId,
+        projectionSha256: input.projection.projectionSha256,
+        projection: input.projection,
+        receiptSha256: input.receipt.receiptSha256,
+        receipt: input.receipt,
         bindingSha256,
-        JSON.stringify(input.receipt),
-      ],
-    })
-    if (currentRow) {
-      const updated = await transaction.execute({
-        sql: `UPDATE jp_ohlcv_coverage_heads
-              SET source_run_id = ?, projection_sha256 = ?, projection_json = ?,
-                  receipt_sha256 = ?, binding_sha256 = ?, updated_at = unixepoch()
-              WHERE scope = ? AND projection_sha256 = ?`,
-        args: [
-          input.sourceRunId,
-          input.projection.projectionSha256,
-          JSON.stringify(input.projection),
-          input.receipt.receiptSha256,
-          bindingSha256,
-          JP_OHLCV_COVERAGE_SCOPE,
-          input.expectedPreviousProjectionSha256!,
-        ],
-      })
-      if (updated.rowsAffected !== 1) throw new Error('jp_ohlcv_coverage_head_compare_and_swap_failed')
-    } else {
-      await transaction.execute({
-        sql: `INSERT INTO jp_ohlcv_coverage_heads
-              (scope, source_run_id, projection_sha256, projection_json, receipt_sha256, binding_sha256)
-              VALUES (?, ?, ?, ?, ?, ?)`,
-        args: [
-          JP_OHLCV_COVERAGE_SCOPE,
-          input.sourceRunId,
-          input.projection.projectionSha256,
-          JSON.stringify(input.projection),
-          input.receipt.receiptSha256,
-          bindingSha256,
-        ],
-      })
+      }
     }
-    const committed = await transaction.execute({
-      sql: `SELECT h.projection_sha256, h.receipt_sha256, h.binding_sha256,
-                   r.receipt_json FROM jp_ohlcv_coverage_heads h
-            JOIN jp_ohlcv_ingestion_receipts r
-              ON r.source_run_id = h.source_run_id AND r.receipt_sha256 = h.receipt_sha256
-            WHERE h.scope = ?`,
-      args: [JP_OHLCV_COVERAGE_SCOPE],
-    })
-    if (committed.rows[0]?.projection_sha256 !== input.projection.projectionSha256
-      || committed.rows[0]?.receipt_sha256 !== input.receipt.receiptSha256
-      || committed.rows[0]?.binding_sha256 !== bindingSha256) {
-      throw new Error('jp_ohlcv_coverage_transition_commit_not_observed')
-    }
-    await transaction.commit()
-  } catch (error) {
-    try { await transaction.rollback() } catch { /* preserve the original failure */ }
-    throw error
+    throw new Error('jp_ohlcv_coverage_replay_identity_mismatch')
+  }
+  if (actualPrevious !== input.expectedPreviousProjectionSha256) {
+    throw new Error('jp_ohlcv_coverage_head_compare_and_swap_failed')
+  }
+  if (currentRow && Number(currentRow.source_run_id) >= input.sourceRunId) {
+    throw new Error('jp_ohlcv_coverage_source_run_not_monotonic')
   }
 
+  await transaction.execute({
+    sql: `INSERT INTO jp_ohlcv_ingestion_receipts
+          (source_run_id, target_date, projection_sha256, receipt_sha256, binding_sha256, receipt_json)
+          VALUES (?, ?, ?, ?, ?, ?)`,
+    args: [
+      input.sourceRunId,
+      input.receipt.targetDate,
+      input.projection.projectionSha256,
+      input.receipt.receiptSha256,
+      bindingSha256,
+      JSON.stringify(input.receipt),
+    ],
+  })
+  if (currentRow) {
+    const updated = await transaction.execute({
+      sql: `UPDATE jp_ohlcv_coverage_heads
+            SET source_run_id = ?, projection_sha256 = ?, projection_json = ?,
+                receipt_sha256 = ?, binding_sha256 = ?, updated_at = unixepoch()
+            WHERE scope = ? AND projection_sha256 = ?`,
+      args: [
+        input.sourceRunId,
+        input.projection.projectionSha256,
+        JSON.stringify(input.projection),
+        input.receipt.receiptSha256,
+        bindingSha256,
+        JP_OHLCV_COVERAGE_SCOPE,
+        input.expectedPreviousProjectionSha256!,
+      ],
+    })
+    if (updated.rowsAffected !== 1) throw new Error('jp_ohlcv_coverage_head_compare_and_swap_failed')
+  } else {
+    await transaction.execute({
+      sql: `INSERT INTO jp_ohlcv_coverage_heads
+            (scope, source_run_id, projection_sha256, projection_json, receipt_sha256, binding_sha256)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [
+        JP_OHLCV_COVERAGE_SCOPE,
+        input.sourceRunId,
+        input.projection.projectionSha256,
+        JSON.stringify(input.projection),
+        input.receipt.receiptSha256,
+        bindingSha256,
+      ],
+    })
+  }
+  const committed = await transaction.execute({
+    sql: `SELECT h.projection_sha256, h.receipt_sha256, h.binding_sha256,
+                 r.receipt_json FROM jp_ohlcv_coverage_heads h
+          JOIN jp_ohlcv_ingestion_receipts r
+            ON r.source_run_id = h.source_run_id AND r.receipt_sha256 = h.receipt_sha256
+          WHERE h.scope = ?`,
+    args: [JP_OHLCV_COVERAGE_SCOPE],
+  })
+  if (committed.rows[0]?.projection_sha256 !== input.projection.projectionSha256
+    || committed.rows[0]?.receipt_sha256 !== input.receipt.receiptSha256
+    || committed.rows[0]?.binding_sha256 !== bindingSha256) {
+    throw new Error('jp_ohlcv_coverage_transition_commit_not_observed')
+  }
   return {
     scope: JP_OHLCV_COVERAGE_SCOPE,
     sourceRunId: input.sourceRunId,
@@ -297,5 +297,23 @@ export async function persistJpOhlcvCoverageTransition(client: Client, input: {
     receiptSha256: input.receipt.receiptSha256,
     receipt: input.receipt,
     bindingSha256,
+  }
+}
+
+export async function persistJpOhlcvCoverageTransition(
+  client: Client,
+  input: JpOhlcvCoverageTransitionInput,
+): Promise<JpOhlcvCoverageHead> {
+  assertTransitionContract(input)
+
+  await client.execute('PRAGMA foreign_keys=ON')
+  const transaction = await client.transaction('write')
+  try {
+    const head = await persistJpOhlcvCoverageTransitionInTransaction(transaction, input)
+    await transaction.commit()
+    return head
+  } catch (error) {
+    try { await transaction.rollback() } catch { /* preserve the original failure */ }
+    throw error
   }
 }
