@@ -7,9 +7,29 @@ import {
   assertJpOhlcvIngestionReceipt,
   type JpOhlcvIngestionReceipt,
 } from '@/lib/jp-ohlcv-ingestion-receipt'
-import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
+import {
+  assertJpOhlcvDailyIngestionReceipt,
+  type JpOhlcvDailyIngestionReceipt,
+} from '@/lib/jp-ohlcv-daily-ingestion-receipt'
+import {
+  normalizeJpOhlcvTicker,
+  sortJpOhlcvRows,
+  stableSha256,
+  type JpOhlcvValue,
+} from '@/lib/jp-ohlcv-data-quality'
 
 export const JP_OHLCV_COVERAGE_SCOPE = 'JP_OHLCV_ADJUSTED_V1'
+
+export type JpOhlcvCoverageReceipt = JpOhlcvIngestionReceipt | JpOhlcvDailyIngestionReceipt
+
+function isDailyReceipt(receipt: JpOhlcvCoverageReceipt): receipt is JpOhlcvDailyIngestionReceipt {
+  return 'receiptKind' in receipt && receipt.receiptKind === 'DAILY_INGESTION'
+}
+
+function assertCoverageReceipt(receipt: JpOhlcvCoverageReceipt): void {
+  if (isDailyReceipt(receipt)) assertJpOhlcvDailyIngestionReceipt(receipt)
+  else assertJpOhlcvIngestionReceipt(receipt)
+}
 
 export type JpOhlcvCoverageHead = {
   scope: typeof JP_OHLCV_COVERAGE_SCOPE
@@ -17,7 +37,7 @@ export type JpOhlcvCoverageHead = {
   projectionSha256: string
   projection: JpOhlcvCoverageProjection
   receiptSha256: string
-  receipt: JpOhlcvIngestionReceipt
+  receipt: JpOhlcvCoverageReceipt
   bindingSha256: string
 }
 
@@ -121,9 +141,9 @@ export async function loadJpOhlcvCoverageHead(
     throw new Error('jp_ohlcv_coverage_head_receipt_missing')
   }
   const projection = JSON.parse(String(row.projection_json)) as JpOhlcvCoverageProjection
-  const receipt = JSON.parse(String(row.receipt_json)) as JpOhlcvIngestionReceipt
+  const receipt = JSON.parse(String(row.receipt_json)) as JpOhlcvCoverageReceipt
   assertJpOhlcvCoverageProjection(projection)
-  assertJpOhlcvIngestionReceipt(receipt)
+  assertCoverageReceipt(receipt)
   const sourceRunId = Number(row.source_run_id)
   const projectionSha256 = String(row.projection_sha256)
   const receiptSha256 = String(row.receipt_sha256)
@@ -157,26 +177,39 @@ export type JpOhlcvCoverageTransitionInput = {
   sourceRunId: number
   expectedPreviousProjectionSha256: string | null
   projection: JpOhlcvCoverageProjection
-  receipt: JpOhlcvIngestionReceipt
+  receipt: JpOhlcvCoverageReceipt
 }
 
 function assertTransitionContract(input: JpOhlcvCoverageTransitionInput): void {
   assertJpOhlcvCoverageProjection(input.projection)
-  assertJpOhlcvIngestionReceipt(input.receipt)
+  assertCoverageReceipt(input.receipt)
+  const receiptAcceptsPublication = isDailyReceipt(input.receipt)
+    ? input.receipt.sourcePublication === 'PUBLISHABLE'
+      && input.receipt.missingCoverage === 'COMPLETE'
+      && input.receipt.dataQualityConflict === 'CLEAN'
+      && input.receipt.remainingMissingKeys.length === 0
+    : input.receipt.status === 'APPROVED_KEYS_SATISFIED'
+      && input.receipt.dataQualityStatus === 'NO_CONFLICTS'
+      && input.receipt.remainingMissingKeys.length === 0
+  const receiptIsHold = isDailyReceipt(input.receipt)
+    ? input.receipt.sourcePublication === 'HOLD'
+    : input.receipt.status === 'HOLD'
+  const receiptHasConflictHold = isDailyReceipt(input.receipt)
+    ? input.receipt.dataQualityConflict === 'KNOWN_CONFLICTS'
+    : input.receipt.dataQualityStatus === 'UNRESOLVED_CONFLICTS_HOLD'
   if (!Number.isSafeInteger(input.sourceRunId)
     || input.sourceRunId <= 0
     || input.projection.sourceRunId !== input.sourceRunId
+    || (isDailyReceipt(input.receipt) && input.receipt.sourceRunId !== input.sourceRunId)
     || input.projection.previousProjectionSha256 !== input.expectedPreviousProjectionSha256
     || input.projection.targetDate !== input.receipt.targetDate
     || input.projection.officialSha256 !== input.receipt.officialSha256
     || input.projection.publicationStatus === 'EVIDENCE_HOLD'
-    || input.receipt.status === 'HOLD'
-    || (input.projection.publicationStatus === 'PUBLISHABLE'
-      && (input.receipt.status !== 'APPROVED_KEYS_SATISFIED'
-        || input.receipt.dataQualityStatus !== 'NO_CONFLICTS'
-        || input.receipt.remainingMissingKeys.length > 0))
-    || (input.receipt.dataQualityStatus === 'UNRESOLVED_CONFLICTS_HOLD'
-      && input.projection.openConflicts === 0)
+    || receiptIsHold
+    || (isDailyReceipt(input.receipt)
+      && input.receipt.sourcePublication !== input.projection.publicationStatus)
+    || (input.projection.publicationStatus === 'PUBLISHABLE' && !receiptAcceptsPublication)
+    || (receiptHasConflictHold && input.projection.openConflicts === 0)
     || (input.receipt.remainingMissingKeys.length > 0 && input.projection.openMissing === 0)) {
     throw new Error('jp_ohlcv_coverage_transition_contract_invalid')
   }
@@ -312,6 +345,108 @@ export async function persistJpOhlcvCoverageTransition(
     const head = await persistJpOhlcvCoverageTransitionInTransaction(transaction, input)
     await transaction.commit()
     return head
+  } catch (error) {
+    try { await transaction.rollback() } catch { /* preserve the original failure */ }
+    throw error
+  }
+}
+
+export async function assertJpOhlcvSourceRunPublishable(
+  executor: Pick<Client, 'execute'>,
+  input: { sourceRunId: number; targetDate: string },
+): Promise<JpOhlcvCoverageHead> {
+  const head = await loadJpOhlcvCoverageHead(executor)
+  if (!head
+    || head.sourceRunId !== input.sourceRunId
+    || head.projection.targetDate !== input.targetDate
+    || head.projection.publicationStatus !== 'PUBLISHABLE'
+    || !('receiptKind' in head.receipt)
+    || head.receipt.receiptKind !== 'DAILY_INGESTION'
+    || head.receipt.sourcePublication !== 'PUBLISHABLE'
+    || head.receipt.missingCoverage !== 'COMPLETE'
+    || head.receipt.dataQualityConflict !== 'CLEAN') {
+    throw new Error('jp_ohlcv_source_run_not_publishable')
+  }
+  const current = await executor.execute({
+    sql: `SELECT ticker, date, open, high, low, close, volume
+          FROM ohlcv_daily WHERE date = ? ORDER BY ticker`,
+    args: [input.targetDate],
+  })
+  const rows = sortJpOhlcvRows(current.rows.map((row): JpOhlcvValue => ({
+    ticker: normalizeJpOhlcvTicker(String(row.ticker)),
+    date: String(row.date),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume),
+  })))
+  if (stableSha256(rows) !== head.receipt.afterSha256) {
+    throw new Error('jp_ohlcv_source_run_after_state_changed')
+  }
+  return head
+}
+
+export async function publishJpOhlcvSourceRun(
+  client: Client,
+  input: {
+    sourceRunId: number
+    targetDate: string
+    totalTickers: number
+    succeeded: number
+    failed: number
+    rowsInserted: number
+    errorSummary: string
+    syncRun: {
+      id: number
+      expectedRows: number
+      importedRows: number
+      missingTickersJson: string
+    }
+  },
+): Promise<void> {
+  const transaction = await client.transaction('write')
+  try {
+    await assertJpOhlcvSourceRunPublishable(transaction, input)
+    await transaction.execute({
+      sql: `INSERT INTO jquants_daily_coverage(date, expected_rows, imported_at)
+            VALUES (?, ?, unixepoch())
+            ON CONFLICT(date) DO UPDATE SET
+              expected_rows = excluded.expected_rows,
+              imported_at = unixepoch()`,
+      args: [input.targetDate, input.syncRun.expectedRows],
+    })
+    const syncUpdated = await transaction.execute({
+      sql: `UPDATE jquants_sync_runs
+            SET expected_rows = ?, imported_rows = ?, missing_tickers = ?,
+                status = 'success', finished_at = unixepoch(), error_summary = NULL
+            WHERE id = ? AND target_date = ?
+              AND api_type = 'equities/bars/daily:date' AND status = 'running'`,
+      args: [
+        input.syncRun.expectedRows,
+        input.syncRun.importedRows,
+        input.syncRun.missingTickersJson,
+        input.syncRun.id,
+        input.targetDate,
+      ],
+    })
+    if (syncUpdated.rowsAffected !== 1) throw new Error('jp_ohlcv_sync_run_finalize_compare_and_swap_failed')
+    const updated = await transaction.execute({
+      sql: `UPDATE batch_runs
+            SET finished_at = unixepoch(), status = 'success', total_tickers = ?, succeeded = ?,
+                failed = ?, rows_inserted = ?, error_summary = ?
+            WHERE id = ? AND job_type = 'ohlcv_fetch:jquants' AND status = 'running'`,
+      args: [
+        input.totalTickers,
+        input.succeeded,
+        input.failed,
+        input.rowsInserted,
+        input.errorSummary,
+        input.sourceRunId,
+      ],
+    })
+    if (updated.rowsAffected !== 1) throw new Error('jp_ohlcv_source_run_finalize_compare_and_swap_failed')
+    await transaction.commit()
   } catch (error) {
     try { await transaction.rollback() } catch { /* preserve the original failure */ }
     throw error

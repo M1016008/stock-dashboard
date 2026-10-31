@@ -1,8 +1,6 @@
 import type { Client, Transaction } from '@libsql/client'
 import {
   buildJpOhlcvBackfillPlan,
-  buildJpOhlcvMissingOnlyRepairScope,
-  buildJpOhlcvRuntimeRepairScope,
   normalizeJpOhlcvTicker,
   type JpOfficialOhlcvValue,
   type JpOhlcvValue,
@@ -12,7 +10,10 @@ import {
   reconcileJpOhlcvCoverageLedger,
   type JpOhlcvPriorIssueObservation,
 } from '@/lib/jp-ohlcv-coverage-ledger'
-import { buildJpOhlcvIngestionReceipt } from '@/lib/jp-ohlcv-ingestion-receipt'
+import {
+  buildJpOhlcvDailyIngestionReceipt,
+  type JpOhlcvDailyIngestionReceipt,
+} from '@/lib/jp-ohlcv-daily-ingestion-receipt'
 import {
   loadJpOhlcvCoverageHead,
   persistJpOhlcvCoverageTransitionInTransaction,
@@ -81,11 +82,15 @@ export async function applyJpOhlcvIngestionBoundary(client: Client, input: {
   targetDate: string
   officialRows: readonly JpOfficialOhlcvValue[]
   bootstrapPreservedConflictTickers?: readonly string[]
+  requireRunningBatchRun?: boolean
 }): Promise<{
   inserted: number
   alreadySatisfied: number
   openMissing: number
   openConflicts: number
+  missingCoverage: JpOhlcvDailyIngestionReceipt['missingCoverage']
+  dataQualityConflict: JpOhlcvDailyIngestionReceipt['dataQualityConflict']
+  sourcePublication: JpOhlcvDailyIngestionReceipt['sourcePublication']
   publicationStatus: 'PUBLISHABLE' | 'PARTIAL_HOLD'
   projectionSha256: string
   receiptSha256: string
@@ -95,16 +100,48 @@ export async function applyJpOhlcvIngestionBoundary(client: Client, input: {
   try {
     const head = await loadJpOhlcvCoverageHead(transaction)
     const before = await rowsForDate(transaction, input.targetDate)
+    const currentPlan = buildJpOhlcvBackfillPlan({
+      date: input.targetDate,
+      officialRows: input.officialRows,
+      existingRows: before,
+    })
+    if (head?.sourceRunId === input.sourceRunId) {
+      if (!('receiptKind' in head.receipt)
+        || head.receipt.receiptKind !== 'DAILY_INGESTION'
+        || head.receipt.targetDate !== input.targetDate
+        || head.receipt.officialSha256 !== currentPlan.officialSha256
+        || head.receipt.afterSha256 !== currentPlan.existingSha256) {
+        throw new Error('jp_ohlcv_ingestion_replay_identity_mismatch')
+      }
+      await transaction.rollback()
+      return {
+        inserted: head.receipt.insertedKeys.length,
+        alreadySatisfied: head.receipt.alreadySatisfiedKeys.length,
+        openMissing: head.projection.openMissing,
+        openConflicts: head.projection.openConflicts,
+        missingCoverage: head.receipt.missingCoverage,
+        dataQualityConflict: head.receipt.dataQualityConflict,
+        sourcePublication: head.receipt.sourcePublication,
+        publicationStatus: head.projection.publicationStatus as 'PUBLISHABLE' | 'PARTIAL_HOLD',
+        projectionSha256: head.projectionSha256,
+        receiptSha256: head.receiptSha256,
+      }
+    }
+    if (input.requireRunningBatchRun) {
+      const run = await transaction.execute({
+        sql: 'SELECT job_type, status FROM batch_runs WHERE id = ?',
+        args: [input.sourceRunId],
+      })
+      if (run.rows[0]?.job_type !== 'ohlcv_fetch:jquants' || run.rows[0]?.status !== 'running') {
+        throw new Error('jp_ohlcv_ingestion_source_run_not_running')
+      }
+    }
     const observations = await observePriorIssues(
       transaction,
       input.targetDate,
       head?.projection.issues ?? [],
     )
-    const plan = buildJpOhlcvBackfillPlan({
-      date: input.targetDate,
-      officialRows: input.officialRows,
-      existingRows: before,
-    })
+    const plan = currentPlan
     const previousConflictKeys = new Set(
       (head?.projection.issues ?? [])
         .filter((issue) => issue.kind === 'VALUE_CONFLICT' && issue.status === 'OPEN')
@@ -153,27 +190,12 @@ export async function applyJpOhlcvIngestionBoundary(client: Client, input: {
 
     await insertMissingRows(transaction, plan.missingRows)
     const after = await rowsForDate(transaction, input.targetDate)
-    const approvalScope = buildJpOhlcvMissingOnlyRepairScope({
-      plan,
-      approvedConflictTickers: conflictTickers,
-    })
-    if (approvalScope.status !== 'READY') throw new Error('jp_ohlcv_ingestion_scope_hold')
-    const runtimeScope = buildJpOhlcvRuntimeRepairScope({
-      approvalScope,
-      officialRows: input.officialRows,
-      existingRows: before,
-    })
-    if (runtimeScope.status !== 'READY') throw new Error('jp_ohlcv_ingestion_runtime_scope_hold')
-    const receipt = buildJpOhlcvIngestionReceipt({
-      expectedApproval: {
-        approvalPlanSha256: runtimeScope.approvalPlanSha256,
-        approvedRepairKeysSha256: runtimeScope.approvedRepairKeysSha256,
-      },
-      approvedScope: runtimeScope,
-      officialRows: input.officialRows,
-      beforeRows: before,
-      afterRows: after,
-    })
+    const approvedKnownConflictKeys = new Set(
+      (head?.projection.issues ?? [])
+        .filter((issue) => issue.kind === 'VALUE_CONFLICT' && issue.status === 'OPEN')
+        .map((issue) => `${issue.ticker}:${issue.date}`),
+    )
+    for (const ticker of conflictTickers) approvedKnownConflictKeys.add(`${ticker}:${input.targetDate}`)
     const projection = reconcileJpOhlcvCoverageLedger({
       sourceRunId: input.sourceRunId,
       targetDate: input.targetDate,
@@ -183,7 +205,25 @@ export async function applyJpOhlcvIngestionBoundary(client: Client, input: {
       expectedPreviousProjectionSha256: head?.projectionSha256 ?? null,
       priorIssueObservations: observations,
     })
-    if (projection.publicationStatus === 'EVIDENCE_HOLD' || receipt.status === 'HOLD') {
+    const receipt = buildJpOhlcvDailyIngestionReceipt({
+      sourceRunId: input.sourceRunId,
+      targetDate: input.targetDate,
+      officialRows: input.officialRows,
+      beforeRows: before,
+      afterRows: after,
+      approvedKnownConflictKeys,
+      observedOpenConflictKeys: new Set(
+        projection.issues
+          .filter((issue) => issue.kind === 'VALUE_CONFLICT' && issue.status === 'OPEN')
+          .map((issue) => `${issue.ticker}:${issue.date}`),
+      ),
+      observedOpenMissingKeys: new Set(
+        projection.issues
+          .filter((issue) => issue.kind === 'MISSING' && issue.status === 'OPEN')
+          .map((issue) => `${issue.ticker}:${issue.date}`),
+      ),
+    })
+    if (projection.publicationStatus === 'EVIDENCE_HOLD' || receipt.sourcePublication === 'HOLD') {
       throw new Error(`jp_ohlcv_ingestion_postwrite_hold:${projection.reasons.join(',')}:${receipt.reasons.join(',')}`)
     }
     const persisted = await persistJpOhlcvCoverageTransitionInTransaction(transaction, {
@@ -198,6 +238,9 @@ export async function applyJpOhlcvIngestionBoundary(client: Client, input: {
       alreadySatisfied: receipt.alreadySatisfiedKeys.length,
       openMissing: projection.openMissing,
       openConflicts: projection.openConflicts,
+      missingCoverage: receipt.missingCoverage,
+      dataQualityConflict: receipt.dataQualityConflict,
+      sourcePublication: receipt.sourcePublication,
       publicationStatus: projection.publicationStatus as 'PUBLISHABLE' | 'PARTIAL_HOLD',
       projectionSha256: persisted.projectionSha256,
       receiptSha256: persisted.receiptSha256,

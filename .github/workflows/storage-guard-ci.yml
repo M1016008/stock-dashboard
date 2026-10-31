@@ -83,7 +83,7 @@ jobs:
         run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner
 
       - name: JP OHLCV repair transaction and runtime drift
-        run: npm run test:jquants-source-contract && npm run test:jp-ohlcv-gap-repair && npm run test:jp-ohlcv-production-repair && npm run test:jp-ohlcv-runtime-snapshot && npm run test:jp-ohlcv-command-adapter && npm run test:jp-ohlcv-backup-time-budget && npm run test:jp-ohlcv-executable-plan-e2e && npm run test:jp-ohlcv-rollback-finalization && npm run test:service-readiness && npm run test:friend-access-runtime && npm run test:friend-access-gateway
+        run: npm run test:jquants-source-contract && npm run test:jp-ohlcv-gap-repair && npm run test:jp-ohlcv-production-repair && npm run test:jp-ohlcv-runtime-snapshot && npm run test:jp-ohlcv-ingestion-receipt && npm run test:jp-ohlcv-daily-ingestion-receipt && npm run test:jp-ohlcv-coverage-ledger && npm run test:jp-ohlcv-coverage-store && npm run test:jp-ohlcv-ingestion-boundary && npm run test:jp-ohlcv-command-adapter && npm run test:jp-ohlcv-backup-time-budget && npm run test:jp-ohlcv-executable-plan-e2e && npm run test:jp-ohlcv-rollback-finalization && npm run test:service-readiness && npm run test:friend-access-runtime && npm run test:friend-access-gateway
 
       - name: Large Holder release preflight
         run: npm run test:large-holder-release-preflight

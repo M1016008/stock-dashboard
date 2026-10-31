@@ -158,6 +158,7 @@
     "test:jp-ohlcv-runtime-snapshot": "tsx scripts/test-jp-ohlcv-runtime-snapshot.ts",
     "test:jp-ohlcv-source-publishability": "tsx scripts/test-jp-ohlcv-runtime-snapshot.ts && tsx scripts/test-two-year-line-search.ts",
     "test:jp-ohlcv-ingestion-receipt": "tsx scripts/test-jp-ohlcv-ingestion-receipt.ts",
+    "test:jp-ohlcv-daily-ingestion-receipt": "tsx scripts/test-jp-ohlcv-daily-ingestion-receipt.ts",
     "test:jp-ohlcv-coverage-ledger": "tsx scripts/test-jp-ohlcv-coverage-ledger.ts",
     "test:jp-ohlcv-coverage-store": "tsx scripts/test-jp-ohlcv-coverage-store.ts",
     "test:jp-ohlcv-ingestion-boundary": "tsx scripts/test-jp-ohlcv-ingestion-boundary.ts",
