@@ -29,9 +29,11 @@ export function isProcessGroupAlive(processGroupId: number): boolean {
 
 export function readProcessIdentity(pid: number): RecordedProcessIdentity | null {
   if (!Number.isSafeInteger(pid) || pid <= 1) return null
-  const result = spawnSync('/bin/ps', ['-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'comm=', '-p', String(pid)], {
+  const result = spawnSync('/bin/ps', ['-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'comm=', '-p', String(pid)], {
     encoding: 'utf8',
     timeout: 2_000,
+    maxBuffer: 64_000,
+    env: { ...process.env, COLUMNS: '4096' },
   })
   if (result.error || result.status !== 0 || !result.stdout.trim()) return null
   const normalized = result.stdout.trim().replace(/\s+/g, ' ')

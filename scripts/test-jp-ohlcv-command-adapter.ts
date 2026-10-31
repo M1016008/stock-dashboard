@@ -12,8 +12,13 @@ import {
   type JpOhlcvValue,
 } from '@/lib/jp-ohlcv-data-quality'
 import type { JpOhlcvRepairExecutionPlan, JpOhlcvRepairStageCommand } from '@/lib/jp-ohlcv-command-adapter'
+import { resealEmergencyRecoveryCommand } from '@/scripts/build-jp-ohlcv-emergency-recovery-package'
 import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
-import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
+import {
+  repairApprovalSha256,
+  type JpOhlcvRepairApproval,
+  type JpOhlcvRepairRollbackApproval,
+} from '@/lib/jp-ohlcv-production-repair'
 import { captureJpOhlcvRuntimeSnapshot } from '@/lib/jp-ohlcv-runtime-snapshot'
 
 function fileSha256(file: string): string {
@@ -392,6 +397,85 @@ async function main(): Promise<void> {
   await expectCreateBackupFailure((candidate) => {
     candidate.commands.createBackup.sealedFiles[0].sha256 = '0'.repeat(64)
   }, /sealed_file_identity_mismatch/)
+  const originalConfigurationPath = path.join(root, 'original-configuration.json')
+  const recoveryConfigurationPath = path.join(root, 'recovery-configuration.json')
+  const originalTree = path.join(root, 'original-tree')
+  const recoveryTree = path.join(root, 'recovery-tree')
+  const originalStageScript = path.join(originalTree, 'scripts', 'stage-fixture.js')
+  const recoveryStageScript = path.join(recoveryTree, 'scripts', 'stage-fixture.js')
+  fs.mkdirSync(path.dirname(originalStageScript), { recursive: true })
+  fs.mkdirSync(path.dirname(recoveryStageScript), { recursive: true })
+  fs.writeFileSync(originalStageScript, 'console.log("old")\n')
+  fs.writeFileSync(recoveryStageScript, 'console.log("new")\n')
+  fs.writeFileSync(originalConfigurationPath, '{}\n')
+  fs.writeFileSync(recoveryConfigurationPath, '{"recovery":true}\n')
+  const staleRecoveryCommand = {
+    ...command({ status: 'PASS' }),
+    workingDirectory: originalTree,
+    args: [originalStageScript, '--config', originalConfigurationPath],
+    sealedFiles: [
+      { path: originalStageScript, sha256: fileSha256(originalStageScript) },
+      { path: originalConfigurationPath, sha256: fileSha256(originalConfigurationPath) },
+    ],
+  }
+  const resealedRecoveryCommand = resealEmergencyRecoveryCommand(
+    staleRecoveryCommand,
+    originalTree,
+    recoveryTree,
+    originalConfigurationPath,
+    recoveryConfigurationPath,
+    new Set(['scripts/stage-fixture.js']),
+  )
+  assert.deepEqual(resealedRecoveryCommand.args, [recoveryStageScript, '--config', recoveryConfigurationPath])
+  assert.equal(resealedRecoveryCommand.workingDirectory, recoveryTree)
+  assert.equal(resealedRecoveryCommand.executableSha256, fileSha256(process.execPath))
+  assert.equal(resealedRecoveryCommand.sealedFiles[0].path, recoveryStageScript)
+  assert.equal(resealedRecoveryCommand.sealedFiles[0].sha256, fileSha256(recoveryStageScript))
+  assert.equal(resealedRecoveryCommand.sealedFiles[1].path, recoveryConfigurationPath)
+  assert.equal(resealedRecoveryCommand.sealedFiles[1].sha256, fileSha256(recoveryConfigurationPath))
+  const resealedPlan = structuredClone(plan)
+  resealedPlan.commands.createBackup = resealedRecoveryCommand
+  const resealedApproval = { ...approval, derivedPlanSha256: stableSha256(resealedPlan) }
+  assert.doesNotThrow(() => createJpOhlcvCommandAdapters({ approval: resealedApproval, plan: resealedPlan }))
+  const untrackedSourcePath = path.join(originalTree, 'state', 'untracked.json')
+  fs.mkdirSync(path.dirname(untrackedSourcePath), { recursive: true })
+  fs.writeFileSync(untrackedSourcePath, '{}\n')
+  assert.throws(() => resealEmergencyRecoveryCommand(
+    { ...staleRecoveryCommand, args: [...staleRecoveryCommand.args, untrackedSourcePath] },
+    originalTree,
+    recoveryTree,
+    originalConfigurationPath,
+    recoveryConfigurationPath,
+    new Set(['scripts/stage-fixture.js']),
+  ), /untracked_source_reference/)
+  const externalScript = path.join(root, 'external-runtime.js')
+  fs.writeFileSync(externalScript, 'console.log("external")\n')
+  assert.throws(() => resealEmergencyRecoveryCommand(
+    {
+      ...staleRecoveryCommand,
+      executable: externalScript,
+      executableSha256: '0'.repeat(64),
+    },
+    originalTree,
+    recoveryTree,
+    originalConfigurationPath,
+    recoveryConfigurationPath,
+    new Set(['scripts/stage-fixture.js']),
+  ), /external_executable_drift/)
+  assert.throws(() => resealEmergencyRecoveryCommand(
+    {
+      ...staleRecoveryCommand,
+      sealedFiles: [
+        ...staleRecoveryCommand.sealedFiles,
+        { path: externalScript, sha256: '0'.repeat(64) },
+      ],
+    },
+    originalTree,
+    recoveryTree,
+    originalConfigurationPath,
+    recoveryConfigurationPath,
+    new Set(['scripts/stage-fixture.js']),
+  ), /external_sealed_file_drift/)
   await expectCreateBackupFailure((candidate) => {
     candidate.commands.createBackup.environment = { STOCKBOARD_DB_PATH: database }
   }, /reserved_environment_forbidden/)
@@ -445,6 +529,56 @@ async function main(): Promise<void> {
     rollbackEvidence.parentRestoredDatabaseSha256TimeoutMs,
     limits.parentBackupSha256MaxTimeoutMs,
   )
+  const recoveryPlan = structuredClone(plan)
+  recoveryPlan.commands.rebuildOriginalDerivedServing[0].args.push(
+    '--rollback-expected-target-rows',
+    '2',
+  )
+  const emergencyRollbackApproval: JpOhlcvRepairRollbackApproval = {
+    version: 2,
+    action: 'ROLLBACK',
+    repairApprovalSha256: repairApprovalSha256(approval),
+    journalSha256: '1'.repeat(64),
+    transactionId: 'fixture-emergency-recovery',
+    databaseRealpath: approval.databaseRealpath,
+    backupDirectory: approval.backupDirectory,
+    backupRealpath: fs.realpathSync(backup),
+    backupSha256: fileSha256(backup),
+    sourceGenerationTarget: approval.sourceGenerationBefore,
+    servingGenerationTarget: approval.servingGenerationBefore,
+    reason: 'fixture emergency recovery approval',
+    originalRunnerRecovery: {
+      pid: 1,
+      processGroupId: 1,
+      processIdentitySha256: '2'.repeat(64),
+      observedState: 'PID_ABSENT',
+      confirmedStoppedAt: new Date().toISOString(),
+      reason: 'fixture',
+    },
+    emergencyRecovery: {
+      originalExecutionPlanSha256: approval.derivedPlanSha256,
+      recoveryExecutionPlanSha256: stableSha256(recoveryPlan),
+      recoveryConfigurationFileSha256: '3'.repeat(64),
+      expectedRestoredTargetRows: 2,
+      backupRuntimeSnapshotSha256: '4'.repeat(64),
+      backupRuntimeSnapshotFileSha256: '5'.repeat(64),
+      sourcePackageApprovalSha256: '6'.repeat(64),
+      originalConfigurationSha256: '7'.repeat(64),
+      originalConfigurationFileSha256: '8'.repeat(64),
+      backupMetadataFileSha256: '9'.repeat(64),
+      readServiceSnapshotFileSha256: 'a'.repeat(64),
+    },
+  }
+  assert.doesNotThrow(() => createJpOhlcvCommandAdapters({
+    approval,
+    plan: recoveryPlan,
+    rollbackApproval: emergencyRollbackApproval,
+  }))
+  assert.throws(() => createJpOhlcvCommandAdapters({
+    approval,
+    plan,
+    rollbackApproval: emergencyRollbackApproval,
+  }), /repair_execution_plan_hash_mismatch/)
   const largeFile = path.join(root, 'large-file.bin')
   fs.writeFileSync(largeFile, Buffer.alloc(2 * 1024 * 1024))
   const { sha256LargeFileWithTimeout } = await import('@/lib/jp-ohlcv-command-adapter')

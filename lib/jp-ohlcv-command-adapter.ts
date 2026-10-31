@@ -65,6 +65,7 @@ const RESERVED_STAGE_ENVIRONMENT = new Set([
   'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_PATH',
   'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_SHA256',
   'STOCKBOARD_JP_OHLCV_RUNTIME_SNAPSHOT_FILE_SHA256',
+  'STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256',
 ])
 
 export type JpOhlcvRepairStageCommand = {
@@ -556,10 +557,21 @@ function revalidatedScope(input: {
 function assertPlan(input: {
   approval: JpOhlcvRepairApproval
   plan: JpOhlcvRepairExecutionPlan
+  rollbackApproval?: JpOhlcvRepairRollbackApproval
 }): void {
   assertJpOhlcvRepairExecutionPlan({ plan: input.plan, targetDate: input.approval.targetDate })
-  if (input.plan.version !== 1 || stableSha256(input.plan) !== input.approval.derivedPlanSha256) {
+  const emergency = input.rollbackApproval?.version === 2
+    ? input.rollbackApproval.emergencyRecovery
+    : null
+  const expectedPlanSha256 = emergency?.recoveryExecutionPlanSha256
+    ?? input.approval.derivedPlanSha256
+  if (input.plan.version !== 1 || stableSha256(input.plan) !== expectedPlanSha256) {
     throw new Error('repair_execution_plan_hash_mismatch')
+  }
+  if (emergency) {
+    if (emergency.originalExecutionPlanSha256 !== input.approval.derivedPlanSha256) {
+      throw new Error('repair_emergency_recovery_original_plan_mismatch')
+    }
   }
   const officialIdentity = buildJpOhlcvBackfillPlan({
     date: input.approval.targetDate,

@@ -27,6 +27,7 @@ import {
   createLaunchdWriterHoldDriver,
   type LaunchdRuntimeIdentity,
 } from '@/lib/storage/launchd-writer-hold-driver'
+import { waitForStableServiceReadiness } from '@/lib/service-readiness'
 
 type GenerationPointer = {
   version: 1
@@ -82,6 +83,9 @@ const configSha256 = executionConfigurationSha256(config, {
     && !fs.existsSync(config.databaseRealpath)
     && fs.existsSync(restoreStateForMissingDatabase),
 })
+if (process.env.STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256 !== sha256File(configFile)) {
+  throw new Error('repair_stage_configuration_file_identity_mismatch')
+}
 const stageStartedAtMs = Date.now()
 
 type BackupOperationTiming = {
@@ -380,7 +384,7 @@ async function assertRestoreExecutionBarrier(input: Omit<RestoreState, 'phase' |
     throw new Error(`repair_restore_read_service_snapshot_missing:${config.serviceSnapshotPath}`)
   }
   const snapshot = readJson<JpOhlcvServiceSnapshot>(config.serviceSnapshotPath)
-  assertSnapshot(snapshot, 'READ_SERVICE')
+  assertSnapshot(snapshot, config.serviceSnapshotPath, 'READ_SERVICE')
   assertSnapshotServices(snapshot, config.readServices)
   const services = config.mode === 'PRODUCTION'
     ? [...config.writerServices, ...config.readServices]
@@ -619,8 +623,45 @@ async function captureServices(services: JpOhlcvLaunchdServiceIdentity[]): Promi
   }
 }
 
-function assertSnapshot(snapshot: JpOhlcvServiceSnapshot, expectedRole?: JpOhlcvLaunchdServiceIdentity['role']): void {
-  if (snapshot.version !== 1 || snapshot.configurationSha256 !== configSha256
+const inheritedBackupEvidenceOperations = new Set(['verify-backup', 'restore-backup'])
+const inheritedReadSnapshotOperations = new Set(['hold-read-services', 'restore-backup', 'resume-read-services'])
+
+function assertEvidenceConfiguration(input: {
+  recordedConfigurationSha256: string
+  evidenceFile: string
+  evidenceKind: 'BACKUP_METADATA' | 'READ_SERVICE_SNAPSHOT'
+}): void {
+  if (input.recordedConfigurationSha256 === configSha256) return
+  const inherited = config.emergencyRecoveryEvidence
+  const allowed = input.evidenceKind === 'BACKUP_METADATA'
+    ? inheritedBackupEvidenceOperations.has(operation)
+    : inheritedReadSnapshotOperations.has(operation)
+  const expectedFileSha256 = input.evidenceKind === 'BACKUP_METADATA'
+    ? inherited?.backupMetadataFileSha256
+    : inherited?.readServiceSnapshotFileSha256
+  const code = `repair_inherited_${input.evidenceKind.toLowerCase()}`
+  if (!allowed) throw new Error(`${code}_operation_forbidden:${operation}`)
+  if (!inherited) throw new Error(`${code}_contract_missing`)
+  if (input.recordedConfigurationSha256 !== inherited.originalConfigurationSha256) {
+    throw new Error(`${code}_configuration_mismatch`)
+  }
+  if (!fs.existsSync(input.evidenceFile)) throw new Error(`${code}_missing`)
+  const stat = fs.lstatSync(input.evidenceFile)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${code}_file_identity_invalid`)
+  if (sha256File(input.evidenceFile) !== expectedFileSha256) throw new Error(`${code}_file_hash_mismatch`)
+}
+
+function assertSnapshot(
+  snapshot: JpOhlcvServiceSnapshot,
+  snapshotFile: string,
+  expectedRole?: JpOhlcvLaunchdServiceIdentity['role'],
+): void {
+  assertEvidenceConfiguration({
+    recordedConfigurationSha256: snapshot.configurationSha256,
+    evidenceFile: snapshotFile,
+    evidenceKind: 'READ_SERVICE_SNAPSHOT',
+  })
+  if (snapshot.version !== 1
     || snapshot.transactionId !== transactionId || snapshot.services.length === 0) {
     throw new Error('repair_service_snapshot_identity_mismatch')
   }
@@ -640,7 +681,12 @@ function assertSnapshotServices(
       || captured.plistPath !== service.plistPath
       || captured.definitionSha256 !== service.definitionSha256
       || captured.program !== service.program
-      || captured.role !== service.role) {
+      || captured.role !== service.role
+      || typeof captured.loaded !== 'boolean'
+      || typeof captured.disabled !== 'boolean'
+      || (captured.pid !== null && (!Number.isSafeInteger(captured.pid) || captured.pid <= 0))
+      || (captured.processGroupId !== null
+        && (!Number.isSafeInteger(captured.processGroupId) || captured.processGroupId <= 0))) {
       throw new Error(`repair_service_snapshot_service_mismatch:${service.label}`)
     }
   }
@@ -650,9 +696,12 @@ async function holdServices(services: JpOhlcvLaunchdServiceIdentity[], snapshotF
   let snapshot: JpOhlcvServiceSnapshot
   if (fs.existsSync(snapshotFile)) {
     snapshot = readJson<JpOhlcvServiceSnapshot>(snapshotFile)
-    assertSnapshot(snapshot, services[0]?.role)
+    assertSnapshot(snapshot, snapshotFile, services[0]?.role)
     assertSnapshotServices(snapshot, services)
   } else {
+    if (config.emergencyRecoveryEvidence && inheritedReadSnapshotOperations.has(operation)) {
+      throw new Error('repair_inherited_read_service_snapshot_missing')
+    }
     snapshot = await captureServices(services)
     assertSnapshotServices(snapshot, services)
     atomicJson(snapshotFile, snapshot)
@@ -682,7 +731,7 @@ async function restoreServices(
   archiveAfterRestore = true,
 ): Promise<JpOhlcvServiceSnapshot> {
   const snapshot = readJson<JpOhlcvServiceSnapshot>(snapshotFile)
-  assertSnapshot(snapshot, 'READ_SERVICE')
+  assertSnapshot(snapshot, snapshotFile, 'READ_SERVICE')
   assertSnapshotServices(snapshot, config.readServices)
   const services = snapshot.services.map(({ loaded: _loaded, disabled: _disabled, pid: _pid, processGroupId: _pgid, ...service }) => service)
   if (config.mode === 'ISOLATED_FIXTURE') {
@@ -720,6 +769,26 @@ async function health(url: string): Promise<void> {
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function waitForReadServiceReady(label: string, url: string): Promise<Record<string, unknown>> {
+  if (config.mode === 'ISOLATED_FIXTURE') {
+    await health(url)
+    return { label, fixture: true, health: 'PASS' }
+  }
+  const service = config.readServices.find((entry) => entry.label === label)
+  if (!service) throw new Error(`repair_read_service_identity_missing:${label}`)
+  const driver = createLaunchdWriterHoldDriver([launchdIdentity(service)])
+  return waitForStableServiceReadiness({
+    label,
+    observe: () => driver.observe(label),
+    probe: () => health(url),
+    timeoutMs: 120_000,
+    intervalMs: 2_000,
+    consecutivePasses: 5,
+    minimumStableMs: 30_000,
+    maximumPidChanges: 2,
+  })
 }
 
 async function runNested(command: JpOhlcvNestedCommand): Promise<void> {
@@ -844,6 +913,9 @@ function requireBackupMetadata(options: {
   sourceGeneration: string
   servingGeneration: string
 } {
+  if (!fs.existsSync(backupMetadataPath()) && config.emergencyRecoveryEvidence) {
+    throw new Error('repair_inherited_backup_metadata_missing')
+  }
   const metadata = readJson<{
     configSha256: string
     transactionId: string
@@ -852,6 +924,11 @@ function requireBackupMetadata(options: {
     sourceGeneration: string
     servingGeneration: string
   }>(backupMetadataPath())
+  assertEvidenceConfiguration({
+    recordedConfigurationSha256: metadata.configSha256,
+    evidenceFile: backupMetadataPath(),
+    evidenceKind: 'BACKUP_METADATA',
+  })
   const actualBackupSha256 = options.sha256TimeoutMs && options.timings
     ? measure('rollback_backup_sha256', options.sha256TimeoutMs, options.timings, () => (
         sha256FileWithTimeout(
@@ -861,7 +938,7 @@ function requireBackupMetadata(options: {
         )
       ))
     : sha256File(metadata.backupRealpath)
-  if (metadata.configSha256 !== configSha256 || metadata.transactionId !== transactionId
+  if (metadata.transactionId !== transactionId
     || fs.realpathSync(metadata.backupRealpath) !== metadata.backupRealpath
     || actualBackupSha256 !== metadata.backupSha256) {
     throw new Error('repair_backup_metadata_mismatch')
@@ -1021,9 +1098,11 @@ async function main(): Promise<Record<string, unknown>> {
   }
   if (operation === 'resume-read-services') {
     const snapshot = await restoreServices(config.serviceSnapshotPath, false)
+    let webReady: Record<string, unknown>
+    let analogReady: Record<string, unknown>
     try {
-      await health(config.healthUrls.web)
-      await health(config.healthUrls.analog)
+      webReady = await waitForReadServiceReady('com.stockboard.web', config.healthUrls.web)
+      analogReady = await waitForReadServiceReady('com.stockboard.analog-search', config.healthUrls.analog)
     } catch (error) {
       throw new Error(`repair_read_services_restored_but_health_failed:${error instanceof Error ? error.message : String(error)}`)
     }
@@ -1034,6 +1113,8 @@ async function main(): Promise<Record<string, unknown>> {
       web: 'PASS',
       analog: 'PASS',
       health: 'PASS',
+      webReady,
+      analogReady,
     }
   }
   if (operation === 'verify-backup') {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import { createRequire } from 'node:module'
@@ -30,7 +30,13 @@ import {
 } from '@/lib/jp-ohlcv-executable-plan'
 import type { JpOhlcvRepairExecutionPlan } from '@/lib/jp-ohlcv-command-adapter'
 import { JP_OHLCV_BACKUP_TIME_LIMITS as limits } from '@/lib/jp-ohlcv-backup-time-budget'
-import { runJpOhlcvMaintenanceOrchestrator } from '@/lib/jp-ohlcv-maintenance-orchestrator'
+import {
+  JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS,
+  restoreJpOhlcvMaintenanceWriters,
+  runJpOhlcvMaintenanceOrchestrator,
+} from '@/lib/jp-ohlcv-maintenance-orchestrator'
 import { repairApprovalSha256, type JpOhlcvRepairApproval } from '@/lib/jp-ohlcv-production-repair'
 import { assertIncompleteJpOhlcvRestoreState } from '@/lib/jp-ohlcv-restore-state'
 import { runJpOhlcvProductionRepair } from '@/lib/jp-ohlcv-repair-runner'
@@ -39,6 +45,7 @@ import type { JQuantsRejectedDailyRowEvidence } from '@/lib/jquants'
 import { computeSmaLab } from '@/lib/sma-dynamics-lab'
 import { sessionsBetween, smaLabCalendar } from '@/lib/sma-dynamics-timeframes'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
+import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
 
 type SqliteRow = Record<string, string | number | bigint | null>
 type SqliteStatement = {
@@ -295,7 +302,9 @@ function writeDerivedFixtureScript(): string {
 function fakeWriterDriver(
   writers: ReturnType<typeof service>[],
   initiallyLoaded: ReadonlySet<string>,
-): WriterHoldDriver {
+  disabled: ReadonlySet<string> = new Set(),
+  failBootstrapLabel?: string,
+): WriterHoldDriver & { loadedLabels: () => Set<string> } {
   const loaded = new Map(writers.map((writer) => [writer.label, initiallyLoaded.has(writer.label)]))
   let now = Date.now()
   const writerFor = (label: string) => {
@@ -311,7 +320,7 @@ function fakeWriterDriver(
     definitionSha256: writer.definitionSha256,
     program: writer.program,
     loaded: active,
-    disabled: false,
+    disabled: disabled.has(label),
     instances: active ? 1 : 0,
     pid: null,
     processGroupId: null,
@@ -320,10 +329,14 @@ function fakeWriterDriver(
   return {
     observe: async (label) => observed(label),
     bootout: async (label) => { loaded.set(label, false) },
-    bootstrap: async (label) => { loaded.set(label, true) },
+    bootstrap: async (label) => {
+      if (label === failBootstrapLabel) throw new Error(`fixture_writer_bootstrap_failure:${label}`)
+      loaded.set(label, true)
+    },
     processGroupAlive: async () => false,
     sleep: async (milliseconds) => { now += milliseconds },
     now: () => now,
+    loadedLabels: () => new Set([...loaded].filter(([, active]) => active).map(([label]) => label)),
   }
 }
 
@@ -391,11 +404,9 @@ async function main(): Promise<void> {
   const baselineLineage = { ...lineage, repairStatus: 'BASELINE' as const }
   writeJson(sourcePointer, { version: 1, generation: 'jp-source-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
   writeJson(servingPointer, { version: 1, generation: 'jp-serving-before', sourceGeneration: 'jp-source-before', transactionId: 'baseline', publishedAt: new Date().toISOString(), lineage: baselineLineage })
-  const writers = Array.from({ length: 16 }, (_, index) => service(
-    `com.stockboard.fixture-writer-${String(index + 1).padStart(2, '0')}`,
-    'WRITER',
-  ))
-  const loadedWriterLabels = new Set(writers.slice(0, 13).map((writer) => writer.label))
+  const writers = WEEKLY_BACKUP_WRITER_LABELS.map((label) => service(label, 'WRITER'))
+  const loadedWriterLabels = new Set<string>(JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS)
+  const disabledWriterLabels = new Set<string>(JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS)
   const web = service('com.stockboard.fixture-web', 'READ_SERVICE')
   const analog = service('com.stockboard.fixture-analog', 'READ_SERVICE')
   writeJson(`${serviceSnapshotPath}.fixture-runtime.json`, {
@@ -669,6 +680,7 @@ async function main(): Promise<void> {
     const stageEnvironment = (
       repairTransactionId: string,
       fixtureConfig: JpOhlcvProductionExecutionConfiguration,
+      fixtureConfigPath: string,
     ): NodeJS.ProcessEnv => ({
       ...process.env,
       NODE_ENV: 'test',
@@ -677,6 +689,7 @@ async function main(): Promise<void> {
       STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
       STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: repairTransactionId,
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(fixtureConfigPath),
       ...jpOhlcvStorageIdentityEnvironment(fixtureConfig),
     })
     const insufficientCapacityConfig = {
@@ -693,7 +706,7 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      env: stageEnvironment('fixture-capacity', insufficientCapacityConfig),
+      env: stageEnvironment('fixture-capacity', insufficientCapacityConfig, insufficientCapacityConfigPath),
     })
     assert.notEqual(insufficientCapacity.status, 0)
     assert.match(insufficientCapacity.stderr, /repair_backup_capacity_insufficient/)
@@ -723,7 +736,7 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
-      env: stageEnvironment('fixture-invalid-backup', invalidBackupConfig),
+      env: stageEnvironment('fixture-invalid-backup', invalidBackupConfig, invalidBackupConfigPath),
     })
     assert.notEqual(invalidBackupVerification.status, 0)
     assert.match(invalidBackupVerification.stderr, /repair_rollback_backup_quick_check_timeout_or_failure/)
@@ -771,6 +784,7 @@ async function main(): Promise<void> {
         STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
         STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
         STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+        STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
         ...storageEnvironment,
       },
     })
@@ -862,6 +876,7 @@ async function main(): Promise<void> {
       EXTERNAL_STORAGE_REQUIRED: 'false',
       STOCKBOARD_DB_PATH: databasePath,
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
       SKIP_SCHEMA_ENSURE: '1',
       ...storageEnvironment,
     })
@@ -913,7 +928,7 @@ async function main(): Promise<void> {
     let committedJournalPath = ''
     const orchestration = await runJpOhlcvMaintenanceOrchestrator({
       config,
-      driver: fakeWriterDriver(writers, loadedWriterLabels),
+      driver: fakeWriterDriver(writers, loadedWriterLabels, disabledWriterLabels),
       assertOnlyApprovedReaderHandles: async () => undefined,
       runTransaction: async (assertWriterHoldValid) => {
         await assertWriterHoldValid()
@@ -988,8 +1003,9 @@ async function main(): Promise<void> {
       noTradeRows: 224,
       unexpectedRejectedRows: 0,
     })
-    assert.deepEqual(orchestration.writerHold.restoredLabels, writers.slice(0, 13).map((writer) => writer.label).reverse())
-    assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, writers.slice(13).map((writer) => writer.label))
+    assert.deepEqual(orchestration.writerHold.restoredLabels, [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse())
+    assert.deepEqual(orchestration.writerHold.alreadyUnloadedLabels, ['com.stockboard.large-holder-update'])
+    assert.deepEqual(orchestration.writerHold.intentionallyDisabledLabels, [...JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS])
     assert.ok(orchestration.writerHold.restoreStartedAtMs <= orchestration.writerHold.restoreCompletedAtMs)
     assert.equal(
       orchestration.writerHold.restoreDurationMs,
@@ -1030,13 +1046,7 @@ async function main(): Promise<void> {
       transactionId: 'fixture-e2e-success',
     }), /repair_.*(?:terminal|committed|exists|state)/i)
 
-    const restoreArgs = [
-      tsxExecutable,
-      stageScript,
-      '--operation', 'restore-backup',
-      '--config', configPath,
-    ]
-    const restoreEnvironment: NodeJS.ProcessEnv = {
+    const originalRestoreEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       NODE_ENV: 'test',
       USE_LOCAL_DB: '1',
@@ -1044,6 +1054,7 @@ async function main(): Promise<void> {
       STOCKBOARD_JP_OHLCV_REPAIR_OWNER: '1',
       STOCKBOARD_JP_OHLCV_REPAIR_TRANSACTION_ID: 'fixture-e2e-success',
       STOCKBOARD_JP_OHLCV_REPAIR_LOCK_PATH: path.join(stateDirectory, 'repair.lock'),
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(configPath),
     }
     execFileSync(process.execPath, [
       tsxExecutable,
@@ -1053,8 +1064,95 @@ async function main(): Promise<void> {
     ], {
       cwd: process.cwd(),
       encoding: 'utf8',
+      env: originalRestoreEnvironment,
+    })
+    const backupMetadataPath = path.join(backupDirectory, 'fixture-e2e-success.sqlite.json')
+    const originalConfigurationSha256 = executionConfigurationSha256(config)
+    const originalBackupMetadataBytes = fs.readFileSync(backupMetadataPath)
+    const originalReadSnapshotBytes = fs.readFileSync(serviceSnapshotPath)
+    const originalReadSnapshot = JSON.parse(originalReadSnapshotBytes.toString('utf8')) as {
+      services: Array<{ label: string; loaded: boolean; disabled: boolean }>
+    }
+    assert.equal(JSON.parse(originalBackupMetadataBytes.toString('utf8')).configSha256, originalConfigurationSha256)
+    assert.equal(JSON.parse(originalReadSnapshotBytes.toString('utf8')).configurationSha256, originalConfigurationSha256)
+    const emergencyRecoveryConfigPath = path.join(root, 'emergency-recovery-config.json')
+    const emergencyRecoveryConfig: JpOhlcvProductionExecutionConfiguration = {
+      ...config,
+      repairScope: {
+        ...config.repairScope,
+        existingRows: beforeRows.length,
+        matchingRows: beforeRows.length - config.repairScope.conflicts,
+        missingRows: config.repairScope.officialRows - beforeRows.length,
+      },
+      emergencyRecoveryEvidence: {
+        version: 1,
+        sourcePackageApprovalSha256: 'a'.repeat(64),
+        originalConfigurationSha256,
+        originalConfigurationFileSha256: sha256File(configPath),
+        backupMetadataFileSha256: sha256File(backupMetadataPath),
+        readServiceSnapshotFileSha256: sha256File(serviceSnapshotPath),
+      },
+    }
+    writeJson(emergencyRecoveryConfigPath, emergencyRecoveryConfig)
+    assert.notEqual(executionConfigurationSha256(emergencyRecoveryConfig), originalConfigurationSha256)
+    const restoreEnvironment: NodeJS.ProcessEnv = {
+      ...originalRestoreEnvironment,
+      STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256: sha256File(emergencyRecoveryConfigPath),
+    }
+    const runRecoveryStage = (operation: string, configFile = emergencyRecoveryConfigPath) => spawnSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', operation,
+      '--config', configFile,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
       env: restoreEnvironment,
     })
+    const backupVerification = runRecoveryStage('verify-backup')
+    assert.equal(backupVerification.status, 0, backupVerification.stderr)
+
+    writeJson(backupMetadataPath, {
+      ...JSON.parse(originalBackupMetadataBytes.toString('utf8')),
+      sourceGeneration: 'tampered-generation',
+    })
+    const tamperedBackupMetadata = runRecoveryStage('verify-backup')
+    assert.notEqual(tamperedBackupMetadata.status, 0)
+    assert.match(tamperedBackupMetadata.stderr, /repair_inherited_backup_metadata_file_hash_mismatch/)
+    fs.writeFileSync(backupMetadataPath, originalBackupMetadataBytes)
+
+    writeJson(serviceSnapshotPath, {
+      ...JSON.parse(originalReadSnapshotBytes.toString('utf8')),
+      capturedAt: new Date(0).toISOString(),
+    })
+    const tamperedReadSnapshot = runRecoveryStage('hold-read-services')
+    assert.notEqual(tamperedReadSnapshot.status, 0)
+    assert.match(tamperedReadSnapshot.stderr, /repair_inherited_read_service_snapshot_file_hash_mismatch/)
+    fs.writeFileSync(serviceSnapshotPath, originalReadSnapshotBytes)
+
+    fs.renameSync(serviceSnapshotPath, `${serviceSnapshotPath}.missing-fixture`)
+    const missingReadSnapshot = runRecoveryStage('hold-read-services')
+    assert.notEqual(missingReadSnapshot.status, 0)
+    assert.match(missingReadSnapshot.stderr, /repair_inherited_read_service_snapshot_missing/)
+    fs.renameSync(`${serviceSnapshotPath}.missing-fixture`, serviceSnapshotPath)
+
+    const unrelatedConfigPath = path.join(root, 'unrelated-recovery-config.json')
+    writeJson(unrelatedConfigPath, {
+      ...emergencyRecoveryConfig,
+      healthUrls: { ...emergencyRecoveryConfig.healthUrls, analog: 'http://127.0.0.1:3999/api/health' },
+    })
+    const unrelatedConfiguration = runRecoveryStage('verify-backup', unrelatedConfigPath)
+    assert.notEqual(unrelatedConfiguration.status, 0)
+    assert.match(unrelatedConfiguration.stderr, /repair_stage_configuration_file_identity_mismatch/)
+
+    const inheritedSnapshotHold = runRecoveryStage('hold-read-services')
+    assert.equal(inheritedSnapshotHold.status, 0, inheritedSnapshotHold.stderr)
+    const restoreArgs = [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'restore-backup',
+      '--config', emergencyRecoveryConfigPath,
+    ]
     assert.throws(() => execFileSync(process.execPath, restoreArgs, {
       cwd: process.cwd(),
       encoding: 'utf8',
@@ -1080,6 +1178,94 @@ async function main(): Promise<void> {
     const restoredRows = exactDateRows(restoredDb)
     restoredDb.close()
     assert.deepEqual(restoredRows, beforeRows)
+    const restoredVerifierOutput = execFileSync(process.execPath, [
+      tsxExecutable,
+      derivedVerifierScript,
+      '--config', emergencyRecoveryConfigPath,
+      '--mode', 'rollback',
+      '--rollback-expected-target-rows', String(beforeRows.length),
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    }).trim().split('\n').at(-1)
+    const restoredVerifier = JSON.parse(restoredVerifierOutput ?? '{}') as {
+      status?: unknown
+      mode?: unknown
+      quickCheck?: unknown
+    }
+    assert.deepEqual(restoredVerifier, {
+      status: 'PASS',
+      mode: 'rollback',
+      dataQualityStatus: 'BASELINE_RESTORED_EXISTING_CONFLICTS_HOLD',
+      dayFullyRepaired: false,
+      targetDate: TARGET_DATE,
+      targetRows: beforeRows.length,
+      preservedConflicts: ['1447', '2164'],
+      unresolvedConflictCount: 2,
+      derived: null,
+      quickCheck: 'RESTORED_SHA256_VERIFIED_BEFORE_DERIVED_REBUILD',
+    })
+    writeJson(servingPointer, {
+      version: 1,
+      generation: config.servingGenerationBefore,
+      sourceGeneration: config.sourceGenerationBefore,
+      transactionId: 'fixture-e2e-success',
+      publishedAt: new Date().toISOString(),
+      lineage: baselineLineage,
+    })
+    const originalServingOutput = execFileSync(process.execPath, [
+      tsxExecutable,
+      stageScript,
+      '--operation', 'verify-original-serving',
+      '--config', emergencyRecoveryConfigPath,
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: restoreEnvironment,
+    }).trim().split('\n').at(-1)
+    assert.deepEqual(JSON.parse(originalServingOutput ?? '{}'), {
+      sourceGeneration: config.sourceGenerationBefore,
+      servingGeneration: config.servingGenerationBefore,
+      health: 'PASS',
+    })
+    await new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, [
+        tsxExecutable,
+        stageScript,
+        '--operation', 'resume-read-services',
+        '--config', emergencyRecoveryConfigPath,
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: restoreEnvironment,
+      }, (error) => error ? reject(error) : resolve())
+    })
+    const restoredReadRuntime = JSON.parse(fs.readFileSync(`${serviceSnapshotPath}.fixture-runtime.json`, 'utf8'))
+    for (const before of originalReadSnapshot.services) {
+      assert.deepEqual(restoredReadRuntime[before.label], { loaded: before.loaded, disabled: before.disabled })
+    }
+    let recoverySafeChecks = 0
+    const partialProgress: string[][] = []
+    const reverseLoaded = [...JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS].reverse()
+    const partialDriver = fakeWriterDriver(writers, new Set(), disabledWriterLabels, reverseLoaded[2])
+    await assert.rejects(() => restoreJpOhlcvMaintenanceWriters({
+      config,
+      driver: partialDriver,
+      assertRecoverySafe: async () => { recoverySafeChecks += 1 },
+      onProgress: (progress) => { partialProgress.push([...progress.restoredLabels]) },
+    }), /fixture_writer_bootstrap_failure/)
+    assert.deepEqual([...partialDriver.loadedLabels()].sort(), reverseLoaded.slice(0, 2).sort())
+    assert.deepEqual(partialProgress.at(-1), reverseLoaded.slice(0, 2))
+    const writerRecovery = await restoreJpOhlcvMaintenanceWriters({
+      config,
+      driver: fakeWriterDriver(writers, partialDriver.loadedLabels(), disabledWriterLabels),
+      assertRecoverySafe: async () => { recoverySafeChecks += 1 },
+    })
+    assert.deepEqual(writerRecovery.restoredLabels, reverseLoaded.slice(2))
+    assert.deepEqual(writerRecovery.alreadyLoadedLabels, reverseLoaded.slice(0, 2))
+    assert.deepEqual(writerRecovery.preservedUnloadedLabels, [...JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS])
+    assert.ok(recoverySafeChecks >= JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS.length + 2)
     const restoredSource = JSON.parse(fs.readFileSync(sourcePointer, 'utf8'))
     assert.equal(restoredSource.generation, config.sourceGenerationBefore)
     assert.equal(restoredSource.transactionId, 'fixture-e2e-success')

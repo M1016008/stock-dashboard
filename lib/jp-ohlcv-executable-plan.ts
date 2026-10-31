@@ -124,6 +124,14 @@ export type JpOhlcvProductionExecutionConfiguration = {
     approvedRepairKeysSha256: string
     preservedConflictsSha256: string
   }
+  emergencyRecoveryEvidence?: {
+    version: 1
+    sourcePackageApprovalSha256: string
+    originalConfigurationSha256: string
+    originalConfigurationFileSha256: string
+    backupMetadataFileSha256: string
+    readServiceSnapshotFileSha256: string
+  }
 }
 
 export type JpOhlcvProductionExecutionPackage = {
@@ -490,6 +498,17 @@ export function assertJpOhlcvProductionExecutionConfiguration(
     || !SHA256.test(config.existingEvidence.rowsSha256)
     || !SHA256.test(config.existingEvidence.provenanceSha256)) {
     throw new Error('repair_execution_configuration_existing_evidence_invalid')
+  }
+  if (config.emergencyRecoveryEvidence !== undefined) {
+    const evidence = config.emergencyRecoveryEvidence
+    if (evidence.version !== 1
+      || !SHA256.test(evidence.sourcePackageApprovalSha256)
+      || !SHA256.test(evidence.originalConfigurationSha256)
+      || !SHA256.test(evidence.originalConfigurationFileSha256)
+      || !SHA256.test(evidence.backupMetadataFileSha256)
+      || !SHA256.test(evidence.readServiceSnapshotFileSha256)) {
+      throw new Error('repair_execution_configuration_emergency_evidence_invalid')
+    }
   }
   if (!Number.isSafeInteger(config.maximumMaintenanceMs)
     || config.maximumMaintenanceMs < 60_000

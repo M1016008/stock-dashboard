@@ -14,6 +14,8 @@ import {
   type JpOhlcvRepairPrewriteCleanupApproval,
   type JpOhlcvRepairResumeServicesApproval,
   type JpOhlcvRepairRollbackApproval,
+  type JpOhlcvRollbackFinalizationApproval,
+  type JpOhlcvRollbackFinalizationContinuationApproval,
 } from '@/lib/jp-ohlcv-production-repair'
 import {
   jpOhlcvRepairOwnerEnvironment,
@@ -580,6 +582,70 @@ export async function runJpOhlcvProductionRepairRollback(input: {
       // The pre-existing repair state is already uncertain. Retain any acquired
       // writer lock so no subsequent job can observe or extend a partial restore.
       return transaction.hold(error)
+    }
+  })
+}
+
+export async function runJpOhlcvProductionRepairRollbackFinalization(input: {
+  approval: JpOhlcvRepairApproval
+  approvalSha256: string
+  finalizationApproval: JpOhlcvRollbackFinalizationApproval
+  finalizationApprovalSha256: string
+  continuationApproval?: JpOhlcvRollbackFinalizationContinuationApproval
+  continuationApprovalSha256?: string
+  continuationWriterRecoveryStateSha256?: string
+  paths: JpOhlcvRepairPaths
+  readServicesEvidence: Record<string, unknown>
+}): Promise<{ status: 'ROLLED_BACK'; archivedJournal: string }> {
+  const transaction = JpOhlcvProductionRepairTransaction.resumeForRollbackFinalization({
+    approval: input.approval,
+    approvalSha256: input.approvalSha256,
+    finalizationApproval: input.finalizationApproval,
+    finalizationApprovalSha256: input.finalizationApprovalSha256,
+    continuationApproval: input.continuationApproval,
+    continuationApprovalSha256: input.continuationApprovalSha256,
+    continuationWriterRecoveryStateSha256: input.continuationWriterRecoveryStateSha256,
+    paths: input.paths,
+  })
+  const context: JpOhlcvRepairExecutionContext = {
+    transactionId: transaction.transactionId,
+    lockPath: input.paths.lock,
+    childEnvironment: jpOhlcvRepairOwnerEnvironment({
+      transactionId: transaction.transactionId,
+      lockPath: input.paths.lock,
+    }),
+    recordStageProcessStarted: (stageProcess) => transaction.recordStageProcessStarted(stageProcess),
+    recordStageProcessStopped: (stageProcess) => transaction.recordStageProcessStopped(stageProcess),
+    assertExecutionActive: assertJpOhlcvRepairExecutionActive,
+  }
+  return withJpOhlcvRepairBarrierOwner(context, async () => {
+    try {
+      context.assertExecutionActive()
+      transaction.beginRollbackFinalization({
+        finalizationApprovalSha256: input.finalizationApprovalSha256,
+        restoredDatabaseSha256: input.finalizationApproval.backupSha256,
+        sourceGeneration: input.finalizationApproval.sourceGeneration,
+        servingGeneration: input.finalizationApproval.servingGeneration,
+      })
+      if (transaction.currentStage() === 'ROLLBACK_READ_SERVICES_RESUMING') {
+        transaction.advance(
+          'ROLLBACK_READ_SERVICES_RESUMING',
+          'ROLLBACK_READ_SERVICES_RESUMED',
+          input.readServicesEvidence,
+        )
+      }
+      const archivedJournal = transaction.markRollbackVerified({
+        finalizationApprovalSha256: input.finalizationApprovalSha256,
+        restoredDatabaseSha256: input.finalizationApproval.backupSha256,
+        sourceGeneration: input.finalizationApproval.sourceGeneration,
+        servingGeneration: input.finalizationApproval.servingGeneration,
+        readServices: input.readServicesEvidence,
+      })
+      return { status: 'ROLLED_BACK', archivedJournal }
+    } catch (error) {
+      // Finalization begins from an already-restored HOLD. Preserve the exact
+      // journal stage for hash-bound continuation; never rewrite it as a new HOLD.
+      throw error
     }
   })
 }

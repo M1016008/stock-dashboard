@@ -131,6 +131,7 @@ export function jpOhlcvRepairOwnerEnvironment(input: {
     'STOCK_DATA_VOLUME_UUID',
     'STOCK_DATA_MIN_FREE_BYTES',
     'STOCK_DATA_MIN_FREE_PERCENT',
+    'STOCKBOARD_JP_OHLCV_EXECUTION_CONFIGURATION_SHA256',
   ].reduce((environment, key) => {
     const value = process.env[key]
     if (value !== undefined) environment[key] = value

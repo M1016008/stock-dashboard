@@ -598,7 +598,7 @@ for (const [name, override, expectedStage] of [
   const journal = JSON.parse(fs.readFileSync(repairPaths.journal, 'utf8'))
   markOriginalRunnerStopped(repairPaths)
   const rollbackApprovalWithoutProcessRecovery: JpOhlcvRepairRollbackApproval = {
-    version: 1,
+    version: 2,
     action: 'ROLLBACK',
     repairApprovalSha256: approvalSha256,
     journalSha256: stableSha256(journal),
@@ -611,6 +611,19 @@ for (const [name, override, expectedStage] of [
     servingGenerationTarget: approval.servingGenerationBefore,
     reason: 'fixture operator approval after simulated SIGKILL',
     originalRunnerRecovery: runnerRecoveryFor(repairPaths),
+    emergencyRecovery: {
+      originalExecutionPlanSha256: approval.derivedPlanSha256,
+      recoveryExecutionPlanSha256: 'c'.repeat(64),
+      recoveryConfigurationFileSha256: 'd'.repeat(64),
+      expectedRestoredTargetRows: 157,
+      backupRuntimeSnapshotSha256: 'e'.repeat(64),
+      backupRuntimeSnapshotFileSha256: 'f'.repeat(64),
+      sourcePackageApprovalSha256: '1'.repeat(64),
+      originalConfigurationSha256: '2'.repeat(64),
+      originalConfigurationFileSha256: '3'.repeat(64),
+      backupMetadataFileSha256: '4'.repeat(64),
+      readServiceSnapshotFileSha256: '5'.repeat(64),
+    },
   }
   await assert.rejects(async () => {
     JpOhlcvProductionRepairTransaction.resumeForRollback({
