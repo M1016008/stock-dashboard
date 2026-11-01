@@ -69,6 +69,7 @@ Phase 1:
 
 Phase 2 stacked drafts:
 
+- `ADR-jp-repair-reader-admission.md`
 - `ADR-jp-ohlcv-publication-policy.md`
 - `phase2-pr-h-normal-updater.md`
 - `phase2-pr-i-process-e2e-and-running-recovery.md`
@@ -79,6 +80,8 @@ Phase 2 stacked drafts:
 - `jp-source-reader-lineage-inventory.md`
 - `ADR-jp-ohlcv-known-conflict-publication.md`
 - `jp-ohlcv-production-bootstrap-and-corporate-action.md`
+- `phase2-pr-k-p0-scale-evidence.md`
+- `phase2-pr-k-claude-review.md`
 
 ## Implementation sequence
 
