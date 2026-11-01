@@ -28,7 +28,8 @@ outside Git under `.audit/`; no Production or OWC file is created.
 - approval-hash-bound recording of observed post-swap state without re-swapping;
 - helper timeout: `OLD_ACTIVE`;
 - fsync failure: pending evidence retained and execution rejected;
-- concurrent/stale journal writer rejected by lock-before-CAS;
+- concurrent transition blocked by pending precondition; initial writer lock
+  rejects `EEXIST`; stale transition is rejected by CAS;
 - initial no-replace collision and stale transition CAS rejected;
 - corrupt journal, manifest and integrity receipt rejected;
 - corrupt full-`quick_check` receipt rejected;
@@ -75,6 +76,20 @@ runtime and Reader/cache generation convergence remain P1.
 | Physical power loss | `UNKNOWN` |
 | Full 12-hour normal/abnormal contract | `HOLD` |
 | Price Basis, Coverage bootstrap, running Run recovery | unchanged P1 |
+
+## Independent review and code quality
+
+Claude Code's final read-only review found `P0=0`, `P1=0` and seven tracked
+P2 gaps. The Draft technical gate is `GO`; Production remains `HOLD`. The P2s
+cover approval-object semantics, broader restart negatives, a true two-process
+transition race, the second CAS boundary, broader generation negatives,
+identity-bound pending-artifact recovery and cross-process barrier enforcement.
+
+This PR adds one permanent adapter and one fixture harness; it does not add a
+second activation state machine or Recovery orchestrator. The adapter reuses
+the PR #45 state machine and the existing `sqlite-integrity-contract`. The
+temporary fixture is removed after each run. Exact added/deleted lines and
+dependency changes are reported from the final Git diff in the PR description.
 
 Restart support classifies `OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`; it does
 not choose an automatic swap or swap-back. `SWAP_INTENT + NEW_ACTIVE` can be

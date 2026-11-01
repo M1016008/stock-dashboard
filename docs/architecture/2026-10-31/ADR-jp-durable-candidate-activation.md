@@ -64,7 +64,7 @@ integrity receipt and its package-level executable/measurement evidence.
 | after helper returns, before `SWAPPED` persistence | `NEW_ACTIVE` with journal at `SWAP_INTENT` | approval-bound observation record only; no swap |
 | helper timeout before swap | `OLD_ACTIVE` | none |
 | journal fsync/directory sync failure | pending artifact, HOLD | none |
-| concurrent or stale journal writer | pending lock, no-replace or CAS rejection | none |
+| concurrent or stale journal writer | pending precondition, initial-path exclusive lock/no-replace, or transition CAS rejection | none |
 | missing/corrupt journal, manifest or receipt | fail closed | none |
 | both paths do not match sealed old/new manifests | `AMBIGUOUS` | none |
 
@@ -113,6 +113,16 @@ WAL/SHM paths. The Reader/Writer barrier must therefore remain continuously
 enforced from final Candidate verification through service reconnection and
 generation convergence. A finite `lsof` scan is evidence at one instant, not an
 admission control mechanism.
+
+The byte-verified seal and the metadata-only swap may span processes only when
+the approved barrier receipt is revalidated as the same continuously enforced
+admission boundary. A callback invocation by itself does not establish that
+Production property.
+
+A retained pending or temporary journal artifact is intentionally blocking.
+An identity-bound operator recovery/clear procedure is not implemented in this
+PR and remains a Production prerequisite; operators must not delete either
+artifact manually.
 
 ## OWC test plan
 
