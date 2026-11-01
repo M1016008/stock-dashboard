@@ -48,6 +48,15 @@ export type AtomicBundleActivationJournal = {
   journalSha256: string
 }
 
+export const ATOMIC_BUNDLE_ACTIVATION_PHASES: AtomicBundleActivationJournal['phase'][] = [
+  'PREPARED',
+  'SWAP_INTENT',
+  'SWAPPED',
+  'GENERATION_RECONCILED',
+  'COMMITTED',
+  'HOLD',
+]
+
 export type AtomicBundlePosition = 'OLD_ACTIVE' | 'NEW_ACTIVE' | 'AMBIGUOUS'
 
 export function sha256SqliteBundleFile(file: string): string {
@@ -292,7 +301,7 @@ export function assertAtomicBundleActivationJournal(journal: AtomicBundleActivat
     || !SHA256.test(journal.newManifestSha256)
     || journal.oldManifestSha256 === journal.newManifestSha256
     || (journal.recoveryApprovalSha256 !== null && !SHA256.test(journal.recoveryApprovalSha256))
-    || !['PREPARED', 'SWAP_INTENT', 'SWAPPED', 'GENERATION_RECONCILED', 'COMMITTED', 'HOLD'].includes(journal.phase)
+    || !ATOMIC_BUNDLE_ACTIVATION_PHASES.includes(journal.phase)
     || !Number.isFinite(Date.parse(journal.createdAt)) || !Number.isFinite(Date.parse(journal.updatedAt))
     || Date.parse(journal.updatedAt) < Date.parse(journal.createdAt)
     || stableSha256(journalBody(journal)) !== journal.journalSha256) {

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "kind": "JP_OHLCV_PRICE_BASIS_READ_ONLY_EVIDENCE",
+  "observedAt": "2026-11-01T06:42:14.000Z",
+  "targetTradingDate": "2026-07-17",
+  "provider": {
+    "name": "J-Quants daily_quotes",
+    "envelopeRows": 4442,
+    "acceptedTradingRows": 4218,
+    "validNoTradeRows": 224,
+    "invalidRows": 0,
+    "adjustedContentSha256": "cfbf6d48f9b0f2438484f04154a800a55bd41d03a2d5622f9be44e4c7ac2bb20"
+  },
+  "productionCoverage": {
+    "existingRows": 157,
+    "exactMatches": 155,
+    "missingRows": 4061,
+    "conflictCodes": [
+      "1447",
+      "2164"
+    ],
+    "existingRowsSha256": "f99b15aedd35e37efe68b41621f27f1c762cae5bd9e5521746b5e1cdd379a507",
+    "missingKeysSha256": "cc195e3651ed44232110035e4d3463c165a76a0d821f0cfc7904fd8f7a8bb10b"
+  },
+  "approvedMissingPriceBasis": {
+    "rowsCompared": 4061,
+    "finiteRawAdjustedPairs": 4061,
+    "rawEqualsAdjustedRows": 4061,
+    "targetDateUnitAdjustmentFactorRows": 4061,
+    "pairSha256": "6fb2f93b2fe07d90669c2a7ff929e73115a6fc04fc5e21025f0583cbf581d34e"
+  },
+  "ticker8105": {
+    "rows": [
+      { "date": "2026-07-15", "rawClose": 138, "adjustedClose": 138, "adjustmentFactor": 1 },
+      { "date": "2026-07-16", "rawClose": 135, "adjustedClose": 135, "adjustmentFactor": 1 },
+      { "date": "2026-07-17", "rawOpen": 96, "rawHigh": 100, "rawLow": 87, "rawClose": 99, "rawVolume": 11237100, "adjustedClose": 99, "adjustmentFactor": 1 },
+      { "date": "2026-07-21", "rawClose": 104, "adjustedClose": 104, "adjustmentFactor": 1 }
+    ],
+    "rowsThrough2026_10_30": 70,
+    "nonUnitAdjustmentFactorRowsThrough2026_10_30": 0,
+    "conclusion": "The provider supplies no Corporate Action adjustment for this boundary. This evidence does not independently establish the economic cause of the price move."
+  },
+  "method": {
+    "productionRead": "one indexed sqlite3 -readonly query for target date",
+    "providerRead": "read-only J-Quants daily_quotes replay for target date and a separate 8105 date range",
+    "productionMutation": false,
+    "providerMutation": false
+  },
+  "limitations": [
+    "Raw provider response rows are intentionally not committed because they are source data; only aggregate counts and deterministic hashes are retained.",
+    "A provider response can be revised later, so a future Production package must obtain and seal a fresh envelope.",
+    "The all-ticker post-date Corporate Action chain has not yet been captured by a committed, replayable receipt.",
+    "This evidence does not authorize Production repair or adjudicate conflicts 1447 and 2164."
+  ]
+}

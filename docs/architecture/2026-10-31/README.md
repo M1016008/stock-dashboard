@@ -85,6 +85,10 @@ Phase 2 stacked drafts:
 - `ADR-jp-candidate-atomic-activation.md`
 - `ADR-jp-durable-candidate-activation.md`
 - `phase2-pr-m-durable-activation-evidence.md`
+- `phase2-pr-n-activation-recovery-contract.md`
+- `phase2-pr-n-claude-review.md`
+- `jp-production-db-consumer-inventory.md`
+- `jp-2026-07-17-price-basis-evidence.json`
 
 ## Implementation sequence
 
