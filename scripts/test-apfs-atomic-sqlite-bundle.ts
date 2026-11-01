@@ -290,14 +290,17 @@ async function main(): Promise<void> {
     assertSqliteBundleManifest(walBundle.path, walManifest)
 
     const gitHead = spawnSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
-    const gitStatus = spawnSync('/usr/bin/git', ['status', '--porcelain=v1'], { encoding: 'utf8' }).stdout
+    const gitStatus = spawnSync('/usr/bin/git', [
+      'status', '--porcelain=v1', '--untracked-files=no',
+    ], { encoding: 'utf8' }).stdout
+    const harnessSource = fileURLToPath(import.meta.url)
     const receiptBody = {
       version: 1,
       kind: 'JP_OHLCV_ATOMIC_BUNDLE_FIXTURE',
       startedAt: new Date(startedAt).toISOString(),
       completedAt: new Date().toISOString(),
       sourceCommit: gitHead,
-      workingTreeStatusSha256: createHash('sha256').update(gitStatus).digest('hex'),
+      trackedWorkingTreeStatusSha256: createHash('sha256').update(gitStatus).digest('hex'),
       runtime: {
         nodePath: process.execPath,
         nodeSha256: sha256File(process.execPath),
@@ -306,6 +309,8 @@ async function main(): Promise<void> {
       },
       rootFilesystem: 'APFS',
       rootDevice: String(fs.statSync(parent).dev),
+      harnessSource,
+      harnessSourceSha256: sha256File(harnessSource),
       helperSource: path.resolve('scripts/native/apfs-rename-swap.c'),
       helperSourceSha256: sha256File(path.resolve('scripts/native/apfs-rename-swap.c')),
       helperExecutableSha256: helperSha256,
