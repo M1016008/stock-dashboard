@@ -83,6 +83,8 @@ Phase 2 stacked drafts:
 - `phase2-pr-k-p0-scale-evidence.md`
 - `phase2-pr-k-claude-review.md`
 - `ADR-jp-candidate-atomic-activation.md`
+- `ADR-jp-durable-candidate-activation.md`
+- `phase2-pr-m-durable-activation-evidence.md`
 
 ## Implementation sequence
 

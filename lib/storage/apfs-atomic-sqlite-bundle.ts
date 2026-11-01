@@ -41,6 +41,7 @@ export type AtomicBundleActivationJournal = {
   candidatePath: string
   oldManifestSha256: string
   newManifestSha256: string
+  recoveryApprovalSha256: string | null
   phase: 'PREPARED' | 'SWAP_INTENT' | 'SWAPPED' | 'GENERATION_RECONCILED' | 'COMMITTED' | 'HOLD'
   createdAt: string
   updatedAt: string
@@ -49,7 +50,7 @@ export type AtomicBundleActivationJournal = {
 
 export type AtomicBundlePosition = 'OLD_ACTIVE' | 'NEW_ACTIVE' | 'AMBIGUOUS'
 
-function sha256File(file: string): string {
+export function sha256SqliteBundleFile(file: string): string {
   const hash = createHash('sha256')
   const descriptor = fs.openSync(file, 'r')
   const buffer = Buffer.allocUnsafe(8 * 1024 * 1024)
@@ -68,6 +69,21 @@ function sha256File(file: string): string {
 function manifestBody(manifest: SqliteBundleManifest): Omit<SqliteBundleManifest, 'manifestSha256'> {
   const { manifestSha256: _manifestSha256, ...body } = manifest
   return body
+}
+
+function assertOptionalIntegrityReceiptIdentity(bundlePath: string, manifest: SqliteBundleManifest): void {
+  const file = path.join(bundlePath, 'integrity-receipt.json')
+  if (!fs.existsSync(file)) return
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file) {
+    throw new Error('SQLITE_BUNDLE_INTEGRITY_RECEIPT_FILE_INVALID')
+  }
+  const receipt = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>
+  const { receiptSha256, ...body } = receipt
+  if (receiptSha256 !== manifest.integrityReceiptSha256
+    || stableSha256(body) !== receiptSha256) {
+    throw new Error('SQLITE_BUNDLE_INTEGRITY_RECEIPT_IDENTITY_MISMATCH')
+  }
 }
 
 function journalBody(journal: AtomicBundleActivationJournal): Omit<AtomicBundleActivationJournal, 'journalSha256'> {
@@ -91,7 +107,7 @@ function assertMemberMetadata(bundlePath: string, member: SqliteBundleMember, ex
 }
 
 function assertMemberHash(bundlePath: string, member: SqliteBundleMember): void {
-  if (sha256File(path.join(bundlePath, member.file)) !== member.sha256) {
+  if (sha256SqliteBundleFile(path.join(bundlePath, member.file)) !== member.sha256) {
     throw new Error(`SQLITE_BUNDLE_MEMBER_HASH_MISMATCH:${member.file}`)
   }
 }
@@ -112,7 +128,7 @@ function observedJournalMode(databasePath: string): 'delete' | 'wal' {
   throw new Error(`SQLITE_BUNDLE_JOURNAL_MODE_UNSUPPORTED:${header[18]}:${header[19]}`)
 }
 
-function readBundleManifest(bundlePath: string): SqliteBundleManifest {
+export function readSqliteBundleManifest(bundlePath: string): SqliteBundleManifest {
   const file = path.join(bundlePath, 'bundle.json')
   const stat = fs.lstatSync(file)
   if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file) {
@@ -145,7 +161,7 @@ export function createSqliteBundleManifest(input: {
         sizeBytes: Number(stat.size),
         mtimeNs: String(stat.mtimeNs),
         ctimeNs: String(stat.ctimeNs),
-        sha256: sha256File(target),
+        sha256: sha256SqliteBundleFile(target),
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -199,10 +215,17 @@ export function assertSqliteBundleMetadata(bundlePath: string, manifest: SqliteB
     throw new Error('SQLITE_BUNDLE_DELETE_MODE_SIDECAR_PRESENT')
   }
   const allowedEntries = new Set(['stockboard.db', 'bundle.json'])
+  if (fs.existsSync(path.join(bundlePath, 'integrity-receipt.json'))) {
+    allowedEntries.add('integrity-receipt.json')
+  }
+  if (fs.existsSync(path.join(bundlePath, 'sqlite-integrity-receipt.json'))) {
+    allowedEntries.add('sqlite-integrity-receipt.json')
+  }
   if (manifest.wal) allowedEntries.add('stockboard.db-wal')
   if (manifest.shm) allowedEntries.add('stockboard.db-shm')
   const unexpected = fs.readdirSync(bundlePath).filter((entry) => !allowedEntries.has(entry))
   if (unexpected.length > 0) throw new Error(`SQLITE_BUNDLE_UNEXPECTED_ENTRY:${unexpected.sort().join(',')}`)
+  assertOptionalIntegrityReceiptIdentity(bundlePath, manifest)
   assertMemberMetadata(bundlePath, manifest.database, 'stockboard.db')
   if (manifest.wal) assertMemberMetadata(bundlePath, manifest.wal, 'stockboard.db-wal')
   if (manifest.shm) assertMemberMetadata(bundlePath, manifest.shm, 'stockboard.db-shm')
@@ -213,12 +236,13 @@ export function assertSqliteBundleMetadata(bundlePath: string, manifest: SqliteB
 
 export function createAtomicBundleActivationJournal(input: Omit<
   AtomicBundleActivationJournal,
-  'version' | 'kind' | 'phase' | 'journalSha256'
+  'version' | 'kind' | 'recoveryApprovalSha256' | 'phase' | 'journalSha256'
 >): AtomicBundleActivationJournal {
   const body = {
     version: 1 as const,
     kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const,
     ...input,
+    recoveryApprovalSha256: null,
     phase: 'PREPARED' as const,
   }
   const journal = { ...body, journalSha256: stableSha256(body) }
@@ -230,6 +254,7 @@ export function advanceAtomicBundleActivationJournal(
   current: AtomicBundleActivationJournal,
   phase: Exclude<AtomicBundleActivationJournal['phase'], 'PREPARED'>,
   updatedAt: string,
+  options?: { recoveryApprovalSha256?: string },
 ): AtomicBundleActivationJournal {
   assertAtomicBundleActivationJournal(current)
   const allowed: Record<AtomicBundleActivationJournal['phase'], AtomicBundleActivationJournal['phase'][]> = {
@@ -244,7 +269,15 @@ export function advanceAtomicBundleActivationJournal(
     throw new Error(`SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID:${current.phase}:${phase}`)
   }
   const { version: _version, kind: _kind, journalSha256: _journalSha256, phase: _phase, ...input } = current
-  const body = { version: 1 as const, kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const, ...input, phase, updatedAt }
+  const recoveryApprovalSha256 = options?.recoveryApprovalSha256 ?? current.recoveryApprovalSha256
+  const body = {
+    version: 1 as const,
+    kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const,
+    ...input,
+    recoveryApprovalSha256,
+    phase,
+    updatedAt,
+  }
   const next = { ...body, journalSha256: stableSha256(body) }
   assertAtomicBundleActivationJournal(next)
   return next
@@ -258,6 +291,7 @@ export function assertAtomicBundleActivationJournal(journal: AtomicBundleActivat
     || journal.activePath === journal.candidatePath || !SHA256.test(journal.oldManifestSha256)
     || !SHA256.test(journal.newManifestSha256)
     || journal.oldManifestSha256 === journal.newManifestSha256
+    || (journal.recoveryApprovalSha256 !== null && !SHA256.test(journal.recoveryApprovalSha256))
     || !['PREPARED', 'SWAP_INTENT', 'SWAPPED', 'GENERATION_RECONCILED', 'COMMITTED', 'HOLD'].includes(journal.phase)
     || !Number.isFinite(Date.parse(journal.createdAt)) || !Number.isFinite(Date.parse(journal.updatedAt))
     || Date.parse(journal.updatedAt) < Date.parse(journal.createdAt)
@@ -293,8 +327,8 @@ export function assertActiveBundlePublication(input: {
 }): void {
   assertSqliteBundleMetadata(input.journal.activePath, input.activeManifest)
   assertSqliteBundleMetadata(input.journal.candidatePath, input.candidateManifest)
-  if (stableSha256(readBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
-    || stableSha256(readBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
+  if (stableSha256(readSqliteBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
+    || stableSha256(readSqliteBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
     throw new Error('SQLITE_BUNDLE_ON_DISK_MANIFEST_MISMATCH')
   }
   const position = classifyAtomicBundlePosition(input)
@@ -327,8 +361,8 @@ export function executeAtomicBundleSwap(input: {
   }
   assertSqliteBundleMetadata(input.journal.activePath, input.activeManifest)
   assertSqliteBundleMetadata(input.journal.candidatePath, input.candidateManifest)
-  if (stableSha256(readBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
-    || stableSha256(readBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
+  if (stableSha256(readSqliteBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
+    || stableSha256(readSqliteBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
     throw new Error('SQLITE_BUNDLE_ON_DISK_MANIFEST_MISMATCH')
   }
   const executable = fs.lstatSync(input.executablePath)
@@ -336,7 +370,7 @@ export function executeAtomicBundleSwap(input: {
     || fs.realpathSync(input.executablePath) !== input.executablePath
     || (executable.mode & 0o111) === 0 || (executable.mode & 0o022) !== 0
     || (executable.uid !== 0 && executable.uid !== (process.getuid?.() ?? -1))
-    || sha256File(input.executablePath) !== input.executableSha256) {
+    || sha256SqliteBundleFile(input.executablePath) !== input.executableSha256) {
     throw new Error('SQLITE_BUNDLE_SWAP_EXECUTABLE_INVALID')
   }
   input.assertReaderWriterBarrierValid()
@@ -352,8 +386,8 @@ export function executeAtomicBundleSwap(input: {
     throw new Error(`SQLITE_BUNDLE_SWAP_FAILED:${result.status}:${result.signal}:${result.error?.message ?? result.stderr.trim()}`)
   }
   input.assertReaderWriterBarrierValid()
-  const activeManifest = readBundleManifest(input.journal.activePath)
-  const candidateManifest = readBundleManifest(input.journal.candidatePath)
+  const activeManifest = readSqliteBundleManifest(input.journal.activePath)
+  const candidateManifest = readSqliteBundleManifest(input.journal.candidatePath)
   assertSqliteBundleMetadata(input.journal.activePath, activeManifest)
   assertSqliteBundleMetadata(input.journal.candidatePath, candidateManifest)
   if (classifyAtomicBundlePosition({ journal: input.journal, activeManifest, candidateManifest }) !== 'NEW_ACTIVE') {
