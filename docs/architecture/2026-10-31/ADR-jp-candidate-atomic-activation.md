@@ -52,6 +52,15 @@ same active path read the new value. This is expected inode behavior and proves
 that atomic rename does not replace Reader admission, reconnect, or cache
 generation checks.
 
+The replayable fixture receipt for implementation commit
+`897c770faba0bfcb5fd6161007683108255b0a38` has file SHA-256
+`2a2bb52084296400ed1ea6ed503b961c78b54ba8f67d37f86d1fbc52788bfe12`
+and canonical receipt SHA-256
+`4bf7de0073be7388b657467dbad5b493cf56a37de49ac52a872378ec4bf558e7`.
+It records Node 24.11.1, the Node/helper/harness hashes, input DB and manifest
+hashes, and a clean tracked worktree. The receipt remains outside Git under
+`.audit/phase2-atomic-candidate`.
+
 ## Guarantees and limits
 
 | Condition | Status | Evidence / limit |
