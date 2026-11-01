@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  ATOMIC_BUNDLE_ACTIVATION_PHASES,
   advanceAtomicBundleActivationJournal,
   assertAtomicBundleActivationJournal,
   assertSqliteBundleManifest,
@@ -19,6 +20,10 @@ import {
   assertSqliteIntegrityReceipt,
   type SqliteIntegrityReceipt,
 } from '@/lib/storage/sqlite-integrity-contract'
+import {
+  assertAtomicBundleRecoveryApproval,
+  type AtomicBundleRecoveryApproval,
+} from '@/lib/storage/atomic-bundle-recovery-approval'
 
 const SHA256 = /^[a-f0-9]{64}$/
 export const SQLITE_BUNDLE_INTEGRITY_RECEIPT = 'integrity-receipt.json'
@@ -63,6 +68,41 @@ export type DurableActivationObservation = DurableActivationJournalRead & {
   candidateManifest: SqliteBundleManifest
   activeReceipt: SqliteBundleIntegrityReceipt
   candidateReceipt: SqliteBundleIntegrityReceipt
+}
+
+export type DurableActivationArtifactClassification = {
+  version: 1
+  kind: 'JP_OHLCV_DURABLE_ACTIVATION_ARTIFACT_CLASSIFICATION'
+  journalPath: string
+  checkedAt: string
+  transactionId: string
+  currentJournalSha256: string
+  currentJournalFileSha256: string
+  currentJournalPhase: AtomicBundleActivationJournal['phase']
+  snapshotStable: boolean
+  pendingArtifactPresent: boolean
+  pendingArtifactValid: boolean
+  pending: null | {
+    fileSha256: string
+    previousJournalSha256: string | null
+    nextJournalSha256: string
+    nextPhase: AtomicBundleActivationJournal['phase']
+    intentSha256: string
+  }
+  temporaries: Array<{
+    file: string
+    fileSha256: string
+    journalSha256: string | null
+    phase: AtomicBundleActivationJournal['phase'] | null
+    valid: boolean
+  }>
+  classification:
+    | 'CLEAN'
+    | 'WRITE_NOT_PUBLISHED'
+    | 'PUBLISHED_PENDING_CLEANUP'
+    | 'AMBIGUOUS'
+  destructiveActionAllowed: false
+  receiptSha256: string
 }
 
 function receiptBody(receipt: SqliteBundleIntegrityReceipt): Omit<SqliteBundleIntegrityReceipt, 'receiptSha256'> {
@@ -120,10 +160,206 @@ function journalArtifacts(journalPath: string): { pending: string; temporaryPref
   }
 }
 
+function artifactClassificationBody(
+  receipt: DurableActivationArtifactClassification,
+): Omit<DurableActivationArtifactClassification, 'receiptSha256'> {
+  const { receiptSha256: _receiptSha256, ...body } = receipt
+  return body
+}
+
+function artifactClassificationFor(
+  receipt: Omit<DurableActivationArtifactClassification, 'receiptSha256' | 'classification'>,
+): DurableActivationArtifactClassification['classification'] {
+  if (!receipt.snapshotStable) return 'AMBIGUOUS'
+  if (!receipt.pendingArtifactPresent && receipt.temporaries.length === 0) return 'CLEAN'
+  if (!receipt.pendingArtifactValid || receipt.pending === null
+    || receipt.temporaries.some((artifact) => !artifact.valid)) return 'AMBIGUOUS'
+  if (receipt.currentJournalSha256 === receipt.pending.previousJournalSha256
+    && receipt.temporaries.length === 1
+    && receipt.temporaries[0]?.journalSha256 === receipt.pending.nextJournalSha256
+    && receipt.temporaries[0]?.phase === receipt.pending.nextPhase) {
+    return 'WRITE_NOT_PUBLISHED'
+  }
+  if (receipt.currentJournalSha256 === receipt.pending.nextJournalSha256
+    && receipt.currentJournalPhase === receipt.pending.nextPhase
+    && receipt.pending.nextPhase !== 'PREPARED'
+    && receipt.temporaries.length === 0) return 'PUBLISHED_PENDING_CLEANUP'
+  return 'AMBIGUOUS'
+}
+
+function secureArtifactFile(file: string): fs.Stats | null {
+  try {
+    const stat = fs.lstatSync(file)
+    const currentUid = process.getuid?.()
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(file) !== file
+      || (stat.mode & 0o022) !== 0
+      || (stat.uid !== 0 && currentUid !== undefined && stat.uid !== currentUid)) return null
+    return stat
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+export function classifyDurableActivationArtifacts(input: {
+  journalPath: string
+  checkedAt: string
+}): DurableActivationArtifactClassification {
+  if (!Number.isFinite(Date.parse(input.checkedAt))) {
+    throw new Error('SQLITE_BUNDLE_ARTIFACT_CLASSIFICATION_TIME_INVALID')
+  }
+  const current = readDurableActivationJournal(input.journalPath)
+  const directory = path.dirname(input.journalPath)
+  const { pending, temporaryPrefix } = journalArtifacts(input.journalPath)
+  let pendingEvidence: DurableActivationArtifactClassification['pending'] = null
+  let pendingArtifactPresent = false
+  let pendingInvalid = false
+  try {
+    fs.lstatSync(pending)
+    pendingArtifactPresent = true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (pendingArtifactPresent) {
+    try {
+      if (!secureArtifactFile(pending)) throw new Error('invalid pending file')
+      const pendingBytes = fs.readFileSync(pending)
+      const parsed = JSON.parse(pendingBytes.toString('utf8')) as Record<string, unknown>
+      const { intentSha256, ...body } = parsed
+      if (parsed.version !== 1
+        || parsed.kind !== 'JP_OHLCV_ATOMIC_BUNDLE_JOURNAL_WRITE_INTENT'
+        || parsed.journalPath !== input.journalPath
+        || (parsed.previousJournalSha256 !== null && !SHA256.test(String(parsed.previousJournalSha256)))
+        || !SHA256.test(String(parsed.nextJournalSha256))
+        || !ATOMIC_BUNDLE_ACTIVATION_PHASES.includes(
+          parsed.nextPhase as AtomicBundleActivationJournal['phase'],
+        )
+        || !SHA256.test(String(intentSha256))
+        || stableSha256(body) !== intentSha256) {
+        throw new Error('invalid pending intent')
+      }
+      pendingEvidence = {
+        fileSha256: sha256Bytes(pendingBytes),
+        previousJournalSha256: parsed.previousJournalSha256 as string | null,
+        nextJournalSha256: String(parsed.nextJournalSha256),
+        nextPhase: parsed.nextPhase as AtomicBundleActivationJournal['phase'],
+        intentSha256: String(intentSha256),
+      }
+    } catch {
+      pendingInvalid = true
+    }
+  }
+  const temporaries = fs.readdirSync(directory)
+    .filter((entry) => entry.startsWith(temporaryPrefix)).sort()
+    .map((file) => {
+      const absolute = path.join(directory, file)
+      let journalSha256: string | null = null
+      let phase: AtomicBundleActivationJournal['phase'] | null = null
+      let fileSha256: string
+      let valid = false
+      try {
+        const stat = secureArtifactFile(absolute)
+        if (!stat) {
+          return {
+            file,
+            fileSha256: stableSha256({
+              invalidArtifact: true,
+              file,
+            }),
+            journalSha256: null,
+            phase: null,
+            valid: false,
+          }
+        }
+        const bytes = fs.readFileSync(absolute)
+        fileSha256 = sha256Bytes(bytes)
+        const parsed = JSON.parse(bytes.toString('utf8')) as AtomicBundleActivationJournal
+        assertAtomicBundleActivationJournal(parsed)
+        if (file !== `${temporaryPrefix}${parsed.journalSha256}`
+          || parsed.transactionId !== current.journal.transactionId) {
+          throw new Error('temporary identity mismatch')
+        }
+        if (pendingEvidence?.previousJournalSha256 === current.journal.journalSha256
+          && pendingEvidence.nextJournalSha256 === parsed.journalSha256) {
+          if (parsed.phase === 'PREPARED') throw new Error('illegal temporary transition')
+          const expected = advanceAtomicBundleActivationJournal(
+            current.journal,
+            parsed.phase,
+            parsed.updatedAt,
+            { recoveryApprovalSha256: parsed.recoveryApprovalSha256 ?? undefined },
+          )
+          if (expected.journalSha256 !== parsed.journalSha256) {
+            throw new Error('temporary transition mismatch')
+          }
+        }
+        journalSha256 = parsed.journalSha256
+        phase = parsed.phase
+        valid = true
+      } catch {
+        fileSha256 = stableSha256({ invalidArtifact: true, file })
+        journalSha256 = null
+        phase = null
+      }
+      return { file, fileSha256, journalSha256, phase, valid }
+    })
+  let snapshotStable = false
+  try {
+    const after = readDurableActivationJournal(input.journalPath)
+    snapshotStable = after.journal.journalSha256 === current.journal.journalSha256
+      && after.fileSha256 === current.fileSha256
+  } catch {
+    snapshotStable = false
+  }
+  const body = {
+    version: 1 as const,
+    kind: 'JP_OHLCV_DURABLE_ACTIVATION_ARTIFACT_CLASSIFICATION' as const,
+    journalPath: input.journalPath,
+    checkedAt: input.checkedAt,
+    transactionId: current.journal.transactionId,
+    currentJournalSha256: current.journal.journalSha256,
+    currentJournalFileSha256: current.fileSha256,
+    currentJournalPhase: current.journal.phase,
+    snapshotStable,
+    pendingArtifactPresent,
+    pendingArtifactValid: pendingArtifactPresent && !pendingInvalid,
+    pending: pendingEvidence,
+    temporaries,
+    destructiveActionAllowed: false as const,
+  }
+  const classification = artifactClassificationFor(body)
+  const receiptBody = { ...body, classification }
+  return { ...receiptBody, receiptSha256: stableSha256(receiptBody) }
+}
+
+export function assertDurableActivationArtifactClassification(
+  receipt: DurableActivationArtifactClassification,
+): void {
+  try {
+    if (receipt.version !== 1
+      || receipt.kind !== 'JP_OHLCV_DURABLE_ACTIVATION_ARTIFACT_CLASSIFICATION'
+      || !Array.isArray(receipt.temporaries)
+      || !['CLEAN', 'WRITE_NOT_PUBLISHED', 'PUBLISHED_PENDING_CLEANUP', 'AMBIGUOUS']
+        .includes(receipt.classification)
+      || !SHA256.test(receipt.receiptSha256)
+      || stableSha256(artifactClassificationBody(receipt)) !== receipt.receiptSha256
+      || artifactClassificationFor(receipt) !== receipt.classification
+      || receipt.destructiveActionAllowed !== false) {
+      throw new Error('invalid classification')
+    }
+  } catch {
+    throw new Error('SQLITE_BUNDLE_ARTIFACT_CLASSIFICATION_INVALID')
+  }
+}
+
 function listDurabilityIssues(journalPath: string): string[] {
   const { pending, temporaryPrefix } = journalArtifacts(journalPath)
   const issues: string[] = []
-  if (fs.existsSync(pending)) issues.push('PENDING_WRITE_INTENT_PRESENT')
+  try {
+    fs.lstatSync(pending)
+    issues.push('PENDING_WRITE_INTENT_PRESENT')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
   const temporaries = fs.readdirSync(path.dirname(journalPath))
     .filter((entry) => entry.startsWith(temporaryPrefix)).sort()
   if (temporaries.length > 0) issues.push(`TEMPORARY_JOURNAL_PRESENT:${temporaries.join(',')}`)
@@ -611,22 +847,30 @@ export function executeDurableAtomicBundleSwap(input: {
 
 export function recordDurableSwapObservedAfterRestart(input: {
   journalPath: string
-  updatedAt: string
+  recoveryApproval: AtomicBundleRecoveryApproval
   recoveryApprovalSha256: string
+  barrierReceiptSha256: string
   assertReaderWriterBarrierValid: () => void
   checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
 }): DurableActivationObservation {
-  if (!SHA256.test(input.recoveryApprovalSha256)) {
-    throw new Error('SQLITE_BUNDLE_RECOVERY_APPROVAL_INVALID')
-  }
   input.assertReaderWriterBarrierValid()
   const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: true })
   if (before.durabilityIssues.length > 0 || before.journal.phase !== 'SWAP_INTENT'
     || before.position !== 'NEW_ACTIVE' || before.journal.recoveryApprovalSha256 !== null) {
     throw new Error('SQLITE_BUNDLE_RESTART_OBSERVATION_PRECONDITION_INVALID')
   }
+  const transitionAt = new Date().toISOString()
+  assertAtomicBundleRecoveryApproval({
+    approval: input.recoveryApproval,
+    approvalSha256: input.recoveryApprovalSha256,
+    journal: before.journal,
+    journalFileSha256: before.fileSha256,
+    activeIntegrityReceiptSha256: before.activeReceipt.receiptSha256,
+    barrierReceiptSha256: input.barrierReceiptSha256,
+    transitionAt,
+  })
   input.assertReaderWriterBarrierValid()
-  const swapped = advanceAtomicBundleActivationJournal(before.journal, 'SWAPPED', input.updatedAt, {
+  const swapped = advanceAtomicBundleActivationJournal(before.journal, 'SWAPPED', transitionAt, {
     recoveryApprovalSha256: input.recoveryApprovalSha256,
   })
   persistDurableActivationTransition({

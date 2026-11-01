@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,6 +14,8 @@ import {
 } from '@/lib/storage/apfs-atomic-sqlite-bundle'
 import {
   assertDurableActivationGenerationConvergence,
+  assertDurableActivationArtifactClassification,
+  classifyDurableActivationArtifacts,
   commitDurableAtomicBundleActivation,
   createSqliteBundleIntegrityReceipt,
   executeDurableAtomicBundleSwap,
@@ -27,6 +29,10 @@ import {
   recordDurableSwapObservedAfterRestart,
   sealDurableSwapIntent,
 } from '@/lib/storage/durable-atomic-bundle-activation'
+import {
+  atomicBundleRecoveryApprovalSha256,
+  type AtomicBundleRecoveryApproval,
+} from '@/lib/storage/atomic-bundle-recovery-approval'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
   createFullSqliteIntegrityReceipt,
@@ -189,8 +195,49 @@ function assertKilled(result: ReturnType<typeof spawnSync>): void {
   assert.equal(result.signal, 'SIGKILL')
 }
 
+function waitForFile(file: string, timeoutMs = 10_000): void {
+  const deadline = Date.now() + timeoutMs
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  while (!fs.existsSync(file)) {
+    if (Date.now() >= deadline) throw new Error(`fixture_wait_timeout:${file}`)
+    Atomics.wait(sleeper, 0, 0, 10)
+  }
+}
+
+function writeChildResult(file: string, result: Record<string, unknown>): void {
+  fs.writeFileSync(file, `${JSON.stringify(result)}\n`, { flag: 'wx' })
+}
+
+function restartApproval(input: {
+  observation: ReturnType<typeof inspectDurableAtomicBundleActivation>
+  barrierReceiptSha256: string
+  now?: Date
+  issuedAt?: string
+  expiresAt?: string
+}): { approval: AtomicBundleRecoveryApproval; approvalSha256: string } {
+  const now = input.now ?? new Date()
+  const approval: AtomicBundleRecoveryApproval = {
+    version: 1,
+    action: 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP',
+    transactionId: input.observation.journal.transactionId,
+    journalSha256: input.observation.journal.journalSha256,
+    journalFileSha256: input.observation.fileSha256,
+    oldManifestSha256: input.observation.journal.oldManifestSha256,
+    newManifestSha256: input.observation.journal.newManifestSha256,
+    activeIntegrityReceiptSha256: input.observation.activeReceipt.receiptSha256,
+    barrierReceiptSha256: input.barrierReceiptSha256,
+    allowedTransition: 'SWAP_INTENT_TO_SWAPPED',
+    automaticSwapAllowed: false,
+    automaticSwapBackAllowed: false,
+    issuedAt: input.issuedAt ?? new Date(now.getTime() - 1_000).toISOString(),
+    expiresAt: input.expiresAt ?? new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
+    reason: 'Record a byte-verified NEW_ACTIVE observation after restart without invoking swap.',
+  }
+  return { approval, approvalSha256: atomicBundleRecoveryApprovalSha256(approval) }
+}
+
 function childMode(): never | void {
-  const [mode, journalPath, executable] = process.argv.slice(2)
+  const [mode, journalPath, executable, ...rest] = process.argv.slice(2)
   if (mode === '--inspect') {
     const observation = inspectDurableAtomicBundleActivation({ journalPath, verifyByteIdentity: false })
     process.stdout.write(JSON.stringify({
@@ -200,6 +247,83 @@ function childMode(): never | void {
       activeCacheGeneration: observation.activeReceipt.cacheGeneration,
     }))
     return
+  }
+  if (mode === '--race-seal-winner') {
+    const [ready, contended, result] = rest
+    try {
+      const observation = sealDurableSwapIntent({
+        journalPath,
+        updatedAt: executable,
+        assertReaderWriterBarrierValid: () => {},
+        checkpoint: (checkpoint) => {
+          if (checkpoint !== 'PENDING_LOCK_ACQUIRED') return
+          fs.writeFileSync(ready, 'ready\n', { flag: 'wx' })
+          waitForFile(contended)
+        },
+      })
+      writeChildResult(result, { status: 'SUCCESS', phase: observation.journal.phase })
+    } catch (error) {
+      writeChildResult(result, { status: 'REJECTED', error: String(error) })
+    }
+    return
+  }
+  if (mode === '--race-seal-loser') {
+    const [ready, contended, result] = rest
+    waitForFile(ready)
+    try {
+      sealDurableSwapIntent({
+        journalPath,
+        updatedAt: executable,
+        assertReaderWriterBarrierValid: () => {},
+      })
+      writeChildResult(result, { status: 'UNEXPECTED_SUCCESS' })
+    } catch (error) {
+      writeChildResult(result, { status: 'REJECTED', error: String(error) })
+    } finally {
+      fs.writeFileSync(contended, 'contended\n', { flag: 'wx' })
+    }
+    return
+  }
+  if (mode === '--race-cas-seal') {
+    const [ready, gate, result] = rest
+    try {
+      sealDurableSwapIntent({
+        journalPath,
+        updatedAt: executable,
+        assertReaderWriterBarrierValid: () => {},
+        checkpoint: (checkpoint) => {
+          if (checkpoint !== 'PENDING_DIRECTORY_FSYNC') return
+          fs.writeFileSync(ready, 'ready\n', { flag: 'wx' })
+          waitForFile(gate)
+        },
+      })
+      writeChildResult(result, { status: 'UNEXPECTED_SUCCESS' })
+    } catch (error) {
+      writeChildResult(result, { status: 'REJECTED', error: String(error) })
+    }
+    return
+  }
+  if (mode === '--displace-journal') {
+    const [ready, gate, result] = rest
+    waitForFile(ready)
+    const current = readDurableActivationJournal(journalPath).journal
+    const displaced = advanceAtomicBundleActivationJournal(current, 'HOLD', executable)
+    fs.writeFileSync(journalPath, `${JSON.stringify(displaced, null, 2)}\n`)
+    fs.writeFileSync(gate, 'continue\n', { flag: 'wx' })
+    writeChildResult(result, { status: 'DISPLACED', journalSha256: displaced.journalSha256 })
+    return
+  }
+  if (mode === '--crash-seal-checkpoint') {
+    const [checkpointName] = rest
+    sealDurableSwapIntent({
+      journalPath,
+      updatedAt: executable,
+      assertReaderWriterBarrierValid: () => {},
+      checkpoint: (checkpoint) => {
+        if (checkpoint === checkpointName) process.kill(process.pid, 'SIGKILL')
+      },
+    })
+    throw new Error('durable_fixture_journal_crash_not_injected')
   }
   if (!['--crash-before-swap', '--crash-after-swap'].includes(mode)) return
   let barriers = 0
@@ -218,6 +342,16 @@ function childMode(): never | void {
     },
   })
   throw new Error('durable_fixture_crash_not_injected')
+}
+
+async function waitForChild(child: ReturnType<typeof spawn>): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => {
+      if (code === 0) resolve()
+      else reject(new Error(`fixture_child_failed:${code ?? signal}`))
+    })
+  })
 }
 
 function inspectInFreshProcess(script: string, journalPath: string): {
@@ -398,20 +532,98 @@ async function main(): Promise<void> {
       observedCacheGeneration: 'after-crash-new-cache',
       assertReaderWriterBarrierValid: () => {},
     }), /SQLITE_BUNDLE_GENERATION_RECONCILE_PHASE_INVALID/)
+    const restartObservation = inspectDurableAtomicBundleActivation({
+      journalPath: afterCrash.journalPath,
+      verifyByteIdentity: true,
+    })
+    const recoveryNow = new Date()
+    const barrierReceiptSha256 = 'b'.repeat(64)
+    const approvedRestart = restartApproval({
+      observation: restartObservation,
+      barrierReceiptSha256,
+      now: recoveryNow,
+    })
+    const assertRecoveryRejected = (
+      approval: AtomicBundleRecoveryApproval,
+      suppliedBarrierReceiptSha256 = barrierReceiptSha256,
+    ): void => {
+      assert.throws(() => recordDurableSwapObservedAfterRestart({
+        journalPath: afterCrash.journalPath,
+        recoveryApproval: approval,
+        recoveryApprovalSha256: atomicBundleRecoveryApprovalSha256(approval),
+        barrierReceiptSha256: suppliedBarrierReceiptSha256,
+        assertReaderWriterBarrierValid: () => {},
+      }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_MISMATCH/)
+    }
     assert.throws(() => recordDurableSwapObservedAfterRestart({
       journalPath: afterCrash.journalPath,
-      updatedAt: '2026-11-01T00:00:04.000Z',
+      recoveryApproval: {} as AtomicBundleRecoveryApproval,
       recoveryApprovalSha256: 'invalid',
+      barrierReceiptSha256,
       assertReaderWriterBarrierValid: () => {},
-    }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_INVALID/)
+    }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_MISMATCH/)
+    assert.throws(() => recordDurableSwapObservedAfterRestart({
+      journalPath: afterCrash.journalPath,
+      recoveryApproval: approvedRestart.approval,
+      recoveryApprovalSha256: 'd'.repeat(64),
+      barrierReceiptSha256,
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_MISMATCH/)
+    const approvalWithExtraKey = {
+      ...approvedRestart.approval,
+      unsealedAuthority: true,
+    } as AtomicBundleRecoveryApproval
+    assertRecoveryRejected(approvalWithExtraKey)
+    assertRecoveryRejected({ ...approvedRestart.approval, transactionId: 'unrelated-transaction' })
+    assertRecoveryRejected(approvedRestart.approval, 'c'.repeat(64))
+    assertRecoveryRejected({ ...approvedRestart.approval, journalFileSha256: 'c'.repeat(64) })
+    assertRecoveryRejected({ ...approvedRestart.approval, oldManifestSha256: 'c'.repeat(64) })
+    assertRecoveryRejected({ ...approvedRestart.approval, activeIntegrityReceiptSha256: 'c'.repeat(64) })
+    assertRecoveryRejected({
+      ...approvedRestart.approval,
+      automaticSwapAllowed: true,
+    } as unknown as AtomicBundleRecoveryApproval)
+    assertRecoveryRejected({
+      ...approvedRestart.approval,
+      action: 'UNAPPROVED_ACTION',
+    } as unknown as AtomicBundleRecoveryApproval)
+    assertRecoveryRejected({ ...approvedRestart.approval, reason: '' })
+    assertRecoveryRejected({ ...approvedRestart.approval, issuedAt: 'invalid' })
+    const expiredApproval = restartApproval({
+      observation: restartObservation,
+      barrierReceiptSha256,
+      issuedAt: new Date(recoveryNow.getTime() - 20 * 60 * 1000).toISOString(),
+      expiresAt: new Date(recoveryNow.getTime() - 5 * 60 * 1000).toISOString(),
+    })
+    assertRecoveryRejected(expiredApproval.approval)
+    const futureApproval = restartApproval({
+      observation: restartObservation,
+      barrierReceiptSha256,
+      issuedAt: new Date(recoveryNow.getTime() + 60_000).toISOString(),
+      expiresAt: new Date(recoveryNow.getTime() + 10 * 60 * 1000).toISOString(),
+    })
+    assertRecoveryRejected(futureApproval.approval)
+    const overlongApproval = restartApproval({
+      observation: restartObservation,
+      barrierReceiptSha256,
+      issuedAt: new Date(recoveryNow.getTime() - 1_000).toISOString(),
+      expiresAt: new Date(recoveryNow.getTime() + 15 * 60 * 1000).toISOString(),
+    })
+    assertRecoveryRejected(overlongApproval.approval)
+    const markersBeforeRestartRecord = [marker(afterCrash.active.path), marker(afterCrash.candidate.path)]
     const restartRecorded = recordDurableSwapObservedAfterRestart({
       journalPath: afterCrash.journalPath,
-      updatedAt: '2026-11-01T00:00:04.000Z',
-      recoveryApprovalSha256: 'a'.repeat(64),
+      recoveryApproval: approvedRestart.approval,
+      recoveryApprovalSha256: approvedRestart.approvalSha256,
+      barrierReceiptSha256,
       assertReaderWriterBarrierValid: () => {},
     })
     assert.equal(restartRecorded.journal.phase, 'SWAPPED')
-    assert.equal(restartRecorded.journal.recoveryApprovalSha256, 'a'.repeat(64))
+    assert.equal(restartRecorded.journal.recoveryApprovalSha256, approvedRestart.approvalSha256)
+    assert.deepEqual(
+      [marker(afterCrash.active.path), marker(afterCrash.candidate.path)],
+      markersBeforeRestartRecord,
+    )
 
     const timeout = setupActivation(root, 'timeout')
     sealDurableSwapIntent({
@@ -446,6 +658,26 @@ async function main(): Promise<void> {
     assert.equal(fsyncRestart.phase, 'SWAP_INTENT')
     assert.equal(fsyncRestart.position, 'OLD_ACTIVE')
     assert.deepEqual(fsyncRestart.durabilityIssues, ['PENDING_WRITE_INTENT_PRESENT'])
+    const publishedPending = classifyDurableActivationArtifacts({
+      journalPath: fsyncFailure.journalPath,
+      checkedAt: '2026-11-01T00:00:02.500Z',
+    })
+    assert.equal(publishedPending.classification, 'PUBLISHED_PENDING_CLEANUP')
+    assert.equal(publishedPending.destructiveActionAllowed, false)
+    assert.doesNotThrow(() => assertDurableActivationArtifactClassification(publishedPending))
+    assert.throws(() => assertDurableActivationArtifactClassification({
+      ...publishedPending,
+      classification: 'CLEAN',
+    }), /SQLITE_BUNDLE_ARTIFACT_CLASSIFICATION_INVALID/)
+    const { receiptSha256: _publishedReceiptSha256, ...publishedBody } = publishedPending
+    const forgedPublished = {
+      ...publishedBody,
+      classification: 'CLEAN' as const,
+    }
+    assert.throws(() => assertDurableActivationArtifactClassification({
+      ...forgedPublished,
+      receiptSha256: stableSha256(forgedPublished),
+    }), /SQLITE_BUNDLE_ARTIFACT_CLASSIFICATION_INVALID/)
     assert.throws(() => executeDurableAtomicBundleSwap({
       journalPath: fsyncFailure.journalPath,
       executablePath: executable,
@@ -454,6 +686,45 @@ async function main(): Promise<void> {
       updatedAt: '2026-11-01T00:00:03.000Z',
       assertReaderWriterBarrierValid: () => {},
     }), /SQLITE_BUNDLE_DURABLE_SWAP_PRECONDITION_INVALID/)
+
+    const unpublishedCrash = setupActivation(root, 'unpublished-crash')
+    assertKilled(spawnSync(process.execPath, [
+      '--import', 'tsx', script, '--crash-seal-checkpoint', unpublishedCrash.journalPath,
+      '2026-11-01T00:00:02.000Z', 'JOURNAL_FILE_FSYNC',
+    ], { encoding: 'utf8' }))
+    const unpublishedArtifacts = classifyDurableActivationArtifacts({
+      journalPath: unpublishedCrash.journalPath,
+      checkedAt: '2026-11-01T00:00:02.500Z',
+    })
+    assert.equal(unpublishedArtifacts.classification, 'WRITE_NOT_PUBLISHED')
+    assert.equal(unpublishedArtifacts.temporaries.length, 1)
+    assert.equal(unpublishedArtifacts.destructiveActionAllowed, false)
+    fs.chmodSync(`${unpublishedCrash.journalPath}.pending`, 0o666)
+    assert.equal(classifyDurableActivationArtifacts({
+      journalPath: unpublishedCrash.journalPath,
+      checkedAt: '2026-11-01T00:00:02.750Z',
+    }).classification, 'AMBIGUOUS')
+
+    const corruptTemporary = setupActivation(root, 'corrupt-temporary')
+    fs.writeFileSync(`${corruptTemporary.journalPath}.tmp-corrupt`, '{not-json}\n', { mode: 0o600 })
+    assert.equal(classifyDurableActivationArtifacts({
+      journalPath: corruptTemporary.journalPath,
+      checkedAt: '2026-11-01T00:00:02.500Z',
+    }).classification, 'AMBIGUOUS')
+
+    const danglingPending = setupActivation(root, 'dangling-pending')
+    fs.symlinkSync(path.join(root, 'missing-pending-target'), `${danglingPending.journalPath}.pending`)
+    const danglingClassification = classifyDurableActivationArtifacts({
+      journalPath: danglingPending.journalPath,
+      checkedAt: '2026-11-01T00:00:02.500Z',
+    })
+    assert.equal(danglingClassification.classification, 'AMBIGUOUS')
+    assert.equal(danglingClassification.pendingArtifactPresent, true)
+    assert.equal(danglingClassification.pendingArtifactValid, false)
+    assert.deepEqual(
+      readDurableActivationJournal(danglingPending.journalPath).durabilityIssues,
+      ['PENDING_WRITE_INTENT_PRESENT'],
+    )
 
     const concurrent = setupActivation(root, 'concurrent')
     let concurrentRejected = false
@@ -478,6 +749,55 @@ async function main(): Promise<void> {
       updatedAt: '2026-11-01T00:00:03.000Z',
       assertReaderWriterBarrierValid: () => {},
     }), /SQLITE_BUNDLE_DURABLE_SWAP_INTENT_PRECONDITION_INVALID/)
+
+    const processRace = setupActivation(root, 'process-race')
+    const raceReady = path.join(root, 'process-race-ready')
+    const raceContended = path.join(root, 'process-race-contended')
+    const raceResultA = path.join(root, 'process-race-result-a')
+    const raceResultB = path.join(root, 'process-race-result-b')
+    const raceChildA = spawn(process.execPath, [
+      '--import', 'tsx', script, '--race-seal-winner', processRace.journalPath,
+      '2026-11-01T00:00:02.000Z', raceReady, raceContended, raceResultA,
+    ], { stdio: 'ignore' })
+    const raceChildB = spawn(process.execPath, [
+      '--import', 'tsx', script, '--race-seal-loser', processRace.journalPath,
+      '2026-11-01T00:00:02.500Z', raceReady, raceContended, raceResultB,
+    ], { stdio: 'ignore' })
+    await Promise.all([waitForChild(raceChildA), waitForChild(raceChildB)])
+    const raceResults = [raceResultA, raceResultB]
+      .map((file) => JSON.parse(fs.readFileSync(file, 'utf8')) as { status: string; error?: string })
+    assert.equal(raceResults.filter((row) => row.status === 'SUCCESS').length, 1)
+    assert.equal(raceResults.filter((row) => row.status === 'REJECTED').length, 1)
+    assert.match(
+      raceResults.find((row) => row.status === 'REJECTED')?.error ?? '',
+      /EEXIST|SQLITE_BUNDLE_DURABLE_SWAP_INTENT_PRECONDITION_INVALID/,
+    )
+    assert.equal(readDurableActivationJournal(processRace.journalPath).journal.phase, 'SWAP_INTENT')
+
+    const processCas = setupActivation(root, 'process-cas')
+    const casReady = path.join(root, 'process-cas-ready')
+    const casGate = path.join(root, 'process-cas-go')
+    const casWriterResult = path.join(root, 'process-cas-writer-result')
+    const casAttackerResult = path.join(root, 'process-cas-attacker-result')
+    const casWriter = spawn(process.execPath, [
+      '--import', 'tsx', script, '--race-cas-seal', processCas.journalPath,
+      '2026-11-01T00:00:02.000Z', casReady, casGate, casWriterResult,
+    ])
+    const casAttacker = spawn(process.execPath, [
+      '--import', 'tsx', script, '--displace-journal', processCas.journalPath,
+      '2026-11-01T00:00:01.500Z', casReady, casGate, casAttackerResult,
+    ])
+    await Promise.all([waitForChild(casWriter), waitForChild(casAttacker)])
+    const casWriterOutcome = JSON.parse(fs.readFileSync(casWriterResult, 'utf8')) as {
+      status: string; error: string
+    }
+    assert.equal(casWriterOutcome.status, 'REJECTED')
+    assert.match(casWriterOutcome.error, /SQLITE_BUNDLE_DURABLE_JOURNAL_CAS_MISMATCH/)
+    assert.equal(readDurableActivationJournal(processCas.journalPath).journal.phase, 'HOLD')
+    assert.equal(classifyDurableActivationArtifacts({
+      journalPath: processCas.journalPath,
+      checkedAt: '2026-11-01T00:00:02.500Z',
+    }).classification, 'AMBIGUOUS')
 
     const staleCas = setupActivation(root, 'stale-cas')
     assert.throws(() => sealDurableSwapIntent({
@@ -633,7 +953,9 @@ async function main(): Promise<void> {
       crashAfterSwapRecovery: 'APPROVAL_HASH_BOUND_SWAPPED',
       ambiguous: 'FAIL_CLOSED_NO_AUTOMATIC_SWAP',
       fsyncFailure: 'PENDING_WRITE_INTENT_FAIL_CLOSED',
-      concurrentJournalWriter: 'EXCLUSIVE_PENDING_LOCK_AND_NO_REPLACE',
+      recoveryApproval: 'HASH_CONTRACT_BOUND_AUTHORITY_WIRING_PENDING',
+      blockingArtifacts: 'READ_ONLY_CLASSIFIED_NO_DESTRUCTIVE_ACTION',
+      concurrentJournalWriter: 'INDEPENDENT_PROCESS_EXCLUSIVE_PENDING_LOCK_AND_SECOND_CAS',
       integrityReceipt: 'EXISTING_FULL_CHECK_RECEIPT_AND_DB_WAL_SHM_GENERATIONS_BOUND',
       physicalPowerLoss: 'UNKNOWN',
     }))
