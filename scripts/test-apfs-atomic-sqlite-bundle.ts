@@ -59,7 +59,13 @@ function createDatabase(file: string, value: string): void {
   }
 }
 
-function createBundle(root: string, directory: string, value: string, generation: string): {
+function createBundle(
+  root: string,
+  directory: string,
+  value: string,
+  generation: string,
+  transactionId = 'fixture-atomic-activation',
+): {
   path: string
   manifest: SqliteBundleManifest
 } {
@@ -69,7 +75,7 @@ function createBundle(root: string, directory: string, value: string, generation
   const manifest = createSqliteBundleManifest({
     bundlePath,
     bundleId: `${directory}-bundle`,
-    transactionId: 'fixture-atomic-activation',
+    transactionId,
     createdAt: '2026-11-01T00:00:00.000Z',
     sourceGeneration: `${generation}-source`,
     servingGeneration: `${generation}-serving`,
@@ -91,7 +97,7 @@ function activationIntent(input: {
   candidateManifest: SqliteBundleManifest
 }): ReturnType<typeof createAtomicBundleActivationJournal> {
   const prepared = createAtomicBundleActivationJournal({
-    transactionId: input.activeManifest.transactionId,
+    transactionId: input.candidateManifest.transactionId,
     activePath: input.activePath,
     candidatePath: input.candidatePath,
     oldManifestSha256: input.activeManifest.manifestSha256,
@@ -168,7 +174,7 @@ async function main(): Promise<void> {
     const probe = spawnSync(executable, ['--probe', root], { encoding: 'utf8' })
     assert.equal(probe.status, 0, probe.stderr)
 
-    const active = createBundle(root, 'active', 'old', 'old')
+    const active = createBundle(root, 'active', 'old', 'old', 'previous-atomic-activation')
     const candidate = createBundle(root, 'candidate', 'new', 'new')
     const intent = activationIntent({
       activePath: active.path,
@@ -204,7 +210,9 @@ async function main(): Promise<void> {
       updatedAt: intent.createdAt,
     }), /SQLITE_BUNDLE_ACTIVATION_JOURNAL_INVALID/)
 
-    const rejectedActive = createBundle(root, 'rejected-active', 'rejected-old', 'rejected-old')
+    const rejectedActive = createBundle(
+      root, 'rejected-active', 'rejected-old', 'rejected-old', 'previous-rejected-activation',
+    )
     const rejectedCandidate = createBundle(root, 'rejected-candidate', 'rejected-new', 'rejected-new')
     const rejectedIntent = activationIntent({
       activePath: rejectedActive.path,
@@ -287,7 +295,9 @@ async function main(): Promise<void> {
       staleReader.close()
     }
 
-    const crashActive = createBundle(root, 'crash-active', 'crash-old', 'crash-old')
+    const crashActive = createBundle(
+      root, 'crash-active', 'crash-old', 'crash-old', 'previous-crash-activation',
+    )
     const crashCandidate = createBundle(root, 'crash-candidate', 'crash-new', 'crash-new')
     const crashIntent = activationIntent({
       activePath: crashActive.path,
@@ -315,7 +325,9 @@ async function main(): Promise<void> {
       candidateManifest: loadManifest(crashCandidate.path),
     }), 'NEW_ACTIVE')
 
-    const timeoutActive = createBundle(root, 'timeout-active', 'timeout-old', 'timeout-old')
+    const timeoutActive = createBundle(
+      root, 'timeout-active', 'timeout-old', 'timeout-old', 'previous-timeout-activation',
+    )
     const timeoutCandidate = createBundle(root, 'timeout-candidate', 'timeout-new', 'timeout-new')
     const timeoutIntent = activationIntent({
       activePath: timeoutActive.path,

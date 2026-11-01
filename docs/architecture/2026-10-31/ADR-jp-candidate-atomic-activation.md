@@ -30,7 +30,9 @@ and integrity boundary before publication. The transition cannot be hidden
 inside service startup.
 
 The activation journal is stored outside both swapped directories and seals the
-old and new manifest hashes. At `SWAP_INTENT`, the manifests uniquely classify
+old and new manifest hashes. Bundles may originate from different transactions;
+their sealed hashes, not equal transaction IDs, define the swap. At
+`SWAP_INTENT`, the manifests uniquely classify
 the filesystem as `OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`. `AMBIGUOUS` always
 fails closed and requires an independently approved recovery.
 
@@ -89,7 +91,7 @@ and its canonical receipt SHA-256 is
 
 The swap helper has no copy fallback. If the syscall, inode verification, or
 parent-directory fsync reports failure, the orchestrator preserves both bundle
-paths and the journal. It must inspect the sealed manifests and request a new
+paths and the journal hashes. It must inspect the sealed manifests and request a new
 hash-bound approval; it must not invoke swap again automatically.
 
 ## Maintenance impact

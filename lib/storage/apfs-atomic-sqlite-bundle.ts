@@ -272,8 +272,6 @@ export function classifyAtomicBundlePosition(input: {
   candidateManifest: SqliteBundleManifest
 }): AtomicBundlePosition {
   assertAtomicBundleActivationJournal(input.journal)
-  if (input.activeManifest.transactionId !== input.journal.transactionId
-    || input.candidateManifest.transactionId !== input.journal.transactionId) return 'AMBIGUOUS'
   const active = input.activeManifest.manifestSha256
   const candidate = input.candidateManifest.manifestSha256
   if (active === input.journal.oldManifestSha256 && candidate === input.journal.newManifestSha256) {
@@ -320,6 +318,9 @@ export function executeAtomicBundleSwap(input: {
   assertAtomicBundleActivationJournal(input.journal)
   if (input.journal.phase !== 'SWAP_INTENT'
     || classifyAtomicBundlePosition(input) !== 'OLD_ACTIVE'
+    || input.candidateManifest.journalMode !== 'delete'
+    || input.candidateManifest.wal !== null
+    || input.candidateManifest.shm !== null
     || !SHA256.test(input.executableSha256)
     || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new Error('SQLITE_BUNDLE_SWAP_PRECONDITION_INVALID')
