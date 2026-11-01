@@ -31,25 +31,27 @@ evidence and partial evidence remain operator-approved HOLD states.
 
 ## Integrity boundary
 
-`full-quick-check-receipt.json` records the actual full-check artifact identity,
-including the sealed SQLite executable, result, DB/WAL/SHM hashes and all three
-generations. `integrity-receipt.json` binds that receipt and:
+`sqlite-integrity-receipt.json` reuses the established
+`sqlite-integrity-contract` whole-file `quick_check` receipt rather than adding
+a second integrity contract. The activation `integrity-receipt.json` binds that
+receipt and:
 
 - DB, WAL and SHM SHA-256 identities;
 - the independent full-`quick_check` receipt SHA-256;
 - Source, Serving and Cache generations;
 - journal mode and the candidate transaction.
 
-The manifest seals the canonical integrity-receipt hash. A caller-provided
-64-character placeholder is not accepted as full-check evidence. Full byte verification
-is required before durable `SWAP_INTENT`. After that proof, metadata and receipt
+The manifest seals the canonical activation-receipt hash. The isolated E2E runs
+an actual read-only `PRAGMA quick_check` before creating the established receipt;
+it does not use a placeholder receipt. Full byte verification is required before
+durable `SWAP_INTENT`. After that proof, metadata and receipt
 identity may be used only while the Reader/Writer barrier remains valid. A
 changed candidate, changed receipt, WAL/DELETE transition or unexpected sidecar
 requires a new receipt and manifest.
 
 This contract does not claim that a receipt created by a test fixture proves
 Production database health. Production must provide the corresponding sealed
-full-check artifact created by its approved executable.
+integrity receipt and its package-level executable/measurement evidence.
 
 ## Software crash result
 

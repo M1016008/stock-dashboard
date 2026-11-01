@@ -15,29 +15,14 @@ import {
   type AtomicBundlePosition,
   type SqliteBundleManifest,
 } from '@/lib/storage/apfs-atomic-sqlite-bundle'
+import {
+  assertSqliteIntegrityReceipt,
+  type SqliteIntegrityReceipt,
+} from '@/lib/storage/sqlite-integrity-contract'
 
 const SHA256 = /^[a-f0-9]{64}$/
 export const SQLITE_BUNDLE_INTEGRITY_RECEIPT = 'integrity-receipt.json'
-export const SQLITE_FULL_QUICK_CHECK_RECEIPT = 'full-quick-check-receipt.json'
-
-export type SqliteFullQuickCheckReceipt = {
-  version: 1
-  kind: 'JP_OHLCV_SQLITE_FULL_QUICK_CHECK'
-  transactionId: string
-  bundleId: string
-  completedAt: string
-  sourceGeneration: string
-  servingGeneration: string
-  cacheGeneration: string
-  journalMode: 'delete' | 'wal'
-  databaseSha256: string
-  walSha256: string | null
-  shmSha256: string | null
-  sqliteExecutableSha256: string
-  pragma: 'quick_check'
-  result: 'ok'
-  receiptSha256: string
-}
+export const SQLITE_CANDIDATE_INTEGRITY_RECEIPT = 'sqlite-integrity-receipt.json'
 
 export type SqliteBundleIntegrityReceipt = {
   version: 1
@@ -81,13 +66,6 @@ export type DurableActivationObservation = DurableActivationJournalRead & {
 }
 
 function receiptBody(receipt: SqliteBundleIntegrityReceipt): Omit<SqliteBundleIntegrityReceipt, 'receiptSha256'> {
-  const { receiptSha256: _receiptSha256, ...body } = receipt
-  return body
-}
-
-function quickCheckReceiptBody(
-  receipt: SqliteFullQuickCheckReceipt,
-): Omit<SqliteFullQuickCheckReceipt, 'receiptSha256'> {
   const { receiptSha256: _receiptSha256, ...body } = receipt
   return body
 }
@@ -189,6 +167,7 @@ function durableReplaceJournal(input: {
   const pendingDescriptor = fs.openSync(pending, 'wx', 0o600)
   let preservePending = false
   let pendingOpen = true
+  let publishedReadback: DurableActivationJournalRead | null = null
   try {
     input.checkpoint?.('PENDING_LOCK_ACQUIRED')
     const staleTemporaries = fs.readdirSync(directory)
@@ -252,6 +231,17 @@ function durableReplaceJournal(input: {
     }
     input.checkpoint?.('JOURNAL_DIRECTORY_FSYNC')
     syncDirectory(directory)
+    const journalBytes = fs.readFileSync(input.journalPath)
+    const journalReadback = assertJournalFile(input.journalPath)
+    if (journalReadback.journalSha256 !== input.journal.journalSha256
+      || fs.readdirSync(directory).some((entry) => entry.startsWith(temporaryPrefix))) {
+      throw new Error('SQLITE_BUNDLE_DURABLE_JOURNAL_READBACK_MISMATCH')
+    }
+    publishedReadback = {
+      journal: journalReadback,
+      fileSha256: sha256Bytes(journalBytes),
+      durabilityIssues: [],
+    }
     input.checkpoint?.('PENDING_REMOVE_DIRECTORY_FSYNC')
     fs.unlinkSync(pending)
     syncDirectory(directory)
@@ -270,70 +260,28 @@ function durableReplaceJournal(input: {
     if (pendingOpen) fs.closeSync(pendingDescriptor)
   }
 
-  const readback = readDurableActivationJournal(input.journalPath)
-  if (readback.durabilityIssues.length > 0
-    || readback.journal.journalSha256 !== input.journal.journalSha256) {
-    throw new Error('SQLITE_BUNDLE_DURABLE_JOURNAL_READBACK_MISMATCH')
-  }
-  return readback
+  if (!publishedReadback) throw new Error('SQLITE_BUNDLE_DURABLE_JOURNAL_READBACK_MISSING')
+  return publishedReadback
 }
 
-export function createSqliteFullQuickCheckReceipt(input: {
-  bundlePath: string
-  transactionId: string
-  bundleId: string
-  completedAt: string
-  sourceGeneration: string
-  servingGeneration: string
-  cacheGeneration: string
-  journalMode: 'delete' | 'wal'
-  sqliteExecutableSha256: string
-}): SqliteFullQuickCheckReceipt {
-  const member = (name: string): string | null => {
-    const file = path.join(input.bundlePath, name)
-    return fs.existsSync(file) ? sha256SqliteBundleFile(file) : null
-  }
-  const body = {
-    version: 1 as const,
-    kind: 'JP_OHLCV_SQLITE_FULL_QUICK_CHECK' as const,
-    transactionId: input.transactionId,
-    bundleId: input.bundleId,
-    completedAt: input.completedAt,
-    sourceGeneration: input.sourceGeneration,
-    servingGeneration: input.servingGeneration,
-    cacheGeneration: input.cacheGeneration,
-    journalMode: input.journalMode,
-    databaseSha256: member('stockboard.db') ?? '',
-    walSha256: member('stockboard.db-wal'),
-    shmSha256: member('stockboard.db-shm'),
-    sqliteExecutableSha256: input.sqliteExecutableSha256,
-    pragma: 'quick_check' as const,
-    result: 'ok' as const,
-  }
-  if (!SHA256.test(body.databaseSha256) || !SHA256.test(body.sqliteExecutableSha256)) {
-    throw new Error('SQLITE_FULL_QUICK_CHECK_EVIDENCE_REQUIRED')
-  }
-  return { ...body, receiptSha256: stableSha256(body) }
-}
-
-export function persistSqliteFullQuickCheckReceipt(
+export function persistSqliteCandidateIntegrityReceipt(
   bundlePath: string,
-  receipt: SqliteFullQuickCheckReceipt,
+  receipt: SqliteIntegrityReceipt,
 ): void {
-  if (stableSha256(quickCheckReceiptBody(receipt)) !== receipt.receiptSha256) {
-    throw new Error('SQLITE_FULL_QUICK_CHECK_RECEIPT_INVALID')
-  }
-  immutableJson(path.join(bundlePath, SQLITE_FULL_QUICK_CHECK_RECEIPT), receipt)
+  assertSqliteIntegrityReceipt(receipt)
+  immutableJson(path.join(bundlePath, SQLITE_CANDIDATE_INTEGRITY_RECEIPT), receipt)
 }
 
-export function readSqliteFullQuickCheckReceipt(bundlePath: string): SqliteFullQuickCheckReceipt {
-  const file = path.join(bundlePath, SQLITE_FULL_QUICK_CHECK_RECEIPT)
+export function readSqliteCandidateIntegrityReceipt(bundlePath: string): SqliteIntegrityReceipt {
+  const file = path.join(bundlePath, SQLITE_CANDIDATE_INTEGRITY_RECEIPT)
   const stat = fs.lstatSync(file)
   if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file
     || (stat.mode & 0o022) !== 0) {
-    throw new Error('SQLITE_FULL_QUICK_CHECK_RECEIPT_FILE_INVALID')
+    throw new Error('SQLITE_CANDIDATE_INTEGRITY_RECEIPT_FILE_INVALID')
   }
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as SqliteFullQuickCheckReceipt
+  const receipt = JSON.parse(fs.readFileSync(file, 'utf8')) as SqliteIntegrityReceipt
+  assertSqliteIntegrityReceipt(receipt)
+  return receipt
 }
 
 export function createSqliteBundleIntegrityReceipt(input: {
@@ -350,7 +298,7 @@ export function createSqliteBundleIntegrityReceipt(input: {
     const file = path.join(input.bundlePath, name)
     return fs.existsSync(file) ? sha256SqliteBundleFile(file) : null
   }
-  const quickCheck = readSqliteFullQuickCheckReceipt(input.bundlePath)
+  const quickCheck = readSqliteCandidateIntegrityReceipt(input.bundlePath)
   const body = {
     version: 1 as const,
     kind: 'JP_OHLCV_SQLITE_BUNDLE_INTEGRITY' as const,
@@ -365,7 +313,7 @@ export function createSqliteBundleIntegrityReceipt(input: {
     walSha256: member('stockboard.db-wal'),
     shmSha256: member('stockboard.db-shm'),
     fullQuickCheck: 'ok' as const,
-    fullQuickCheckReceiptSha256: quickCheck.receiptSha256,
+    fullQuickCheckReceiptSha256: stableSha256(quickCheck),
   }
   const receipt = { ...body, receiptSha256: stableSha256(body) }
   if (!SHA256.test(receipt.databaseSha256) || !SHA256.test(receipt.fullQuickCheckReceiptSha256)) {
@@ -408,7 +356,7 @@ export function assertSqliteBundleIntegrityReceipt(
   if (options.verifyByteIdentity) assertSqliteBundleManifest(bundlePath, manifest)
   else assertSqliteBundleMetadata(bundlePath, manifest)
   const receipt = readSqliteBundleIntegrityReceipt(bundlePath)
-  const quickCheck = readSqliteFullQuickCheckReceipt(bundlePath)
+  const quickCheck = readSqliteCandidateIntegrityReceipt(bundlePath)
   if (receipt.version !== 1 || receipt.kind !== 'JP_OHLCV_SQLITE_BUNDLE_INTEGRITY'
     || receipt.transactionId !== manifest.transactionId || receipt.bundleId !== manifest.bundleId
     || !Number.isFinite(Date.parse(receipt.completedAt)) || !receipt.cacheGeneration
@@ -423,19 +371,17 @@ export function assertSqliteBundleIntegrityReceipt(
     || receipt.receiptSha256 !== manifest.integrityReceiptSha256) {
     throw new Error('SQLITE_BUNDLE_INTEGRITY_RECEIPT_MISMATCH')
   }
-  if (quickCheck.version !== 1 || quickCheck.kind !== 'JP_OHLCV_SQLITE_FULL_QUICK_CHECK'
-    || quickCheck.transactionId !== receipt.transactionId || quickCheck.bundleId !== receipt.bundleId
-    || !Number.isFinite(Date.parse(quickCheck.completedAt))
+  if (!['BACKUP_COMPLETE', 'CANDIDATE_POST_WRITE'].includes(quickCheck.kind)
+    || quickCheck.transactionId !== receipt.transactionId
     || quickCheck.sourceGeneration !== receipt.sourceGeneration
     || quickCheck.servingGeneration !== receipt.servingGeneration
-    || quickCheck.cacheGeneration !== receipt.cacheGeneration
-    || quickCheck.journalMode !== receipt.journalMode
-    || quickCheck.databaseSha256 !== receipt.databaseSha256
-    || quickCheck.walSha256 !== receipt.walSha256 || quickCheck.shmSha256 !== receipt.shmSha256
-    || !SHA256.test(quickCheck.sqliteExecutableSha256) || quickCheck.pragma !== 'quick_check'
-    || quickCheck.result !== 'ok'
-    || stableSha256(quickCheckReceiptBody(quickCheck)) !== quickCheck.receiptSha256
-    || quickCheck.receiptSha256 !== receipt.fullQuickCheckReceiptSha256) {
+    || path.basename(quickCheck.artifact.realpath) !== 'stockboard.db'
+    || quickCheck.artifact.sha256 !== receipt.databaseSha256
+    || quickCheck.artifact.sizeBytes !== manifest.database.sizeBytes
+    || quickCheck.sqliteCheck.command !== 'PRAGMA quick_check;'
+    || quickCheck.sqliteCheck.scope !== 'WHOLE_FILE_QUICK_CHECK'
+    || quickCheck.sqliteCheck.result !== 'ok'
+    || stableSha256(quickCheck) !== receipt.fullQuickCheckReceiptSha256) {
     throw new Error('SQLITE_FULL_QUICK_CHECK_RECEIPT_MISMATCH')
   }
   return receipt
@@ -482,6 +428,90 @@ export function assertDurableActivationGenerationConvergence(input: {
     || receipt.cacheGeneration !== input.cacheGeneration) {
     throw new Error('SQLITE_BUNDLE_GENERATION_CONVERGENCE_MISMATCH')
   }
+}
+
+export function recordDurableGenerationReconciled(input: {
+  journalPath: string
+  updatedAt: string
+  observedSourceGeneration: string
+  observedServingGeneration: string
+  observedCacheGeneration: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (before.journal.phase !== 'SWAPPED') {
+    throw new Error('SQLITE_BUNDLE_GENERATION_RECONCILE_PHASE_INVALID')
+  }
+  assertDurableActivationGenerationConvergence({
+    observation: before,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  input.assertReaderWriterBarrierValid()
+  const reconciled = advanceAtomicBundleActivationJournal(
+    before.journal, 'GENERATION_RECONCILED', input.updatedAt,
+  )
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: reconciled,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  assertDurableActivationGenerationConvergence({
+    observation: after,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  if (after.journal.phase !== 'GENERATION_RECONCILED') {
+    throw new Error('SQLITE_BUNDLE_GENERATION_RECONCILE_NOT_CONFIRMED')
+  }
+  return after
+}
+
+export function commitDurableAtomicBundleActivation(input: {
+  journalPath: string
+  updatedAt: string
+  observedSourceGeneration: string
+  observedServingGeneration: string
+  observedCacheGeneration: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (before.journal.phase !== 'GENERATION_RECONCILED') {
+    throw new Error('SQLITE_BUNDLE_COMMIT_PHASE_INVALID')
+  }
+  assertDurableActivationGenerationConvergence({
+    observation: before,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  input.assertReaderWriterBarrierValid()
+  const committed = advanceAtomicBundleActivationJournal(before.journal, 'COMMITTED', input.updatedAt)
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: committed,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  assertDurableActivationGenerationConvergence({
+    observation: after,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  if (after.journal.phase !== 'COMMITTED') throw new Error('SQLITE_BUNDLE_COMMIT_NOT_CONFIRMED')
+  return after
 }
 
 export function inspectDurableAtomicBundleActivation(input: {
@@ -543,6 +573,7 @@ export function executeDurableAtomicBundleSwap(input: {
   timeoutMs: number
   updatedAt: string
   assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
 }): DurableActivationObservation {
   input.assertReaderWriterBarrierValid()
   const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
@@ -550,6 +581,7 @@ export function executeDurableAtomicBundleSwap(input: {
     || before.position !== 'OLD_ACTIVE') {
     throw new Error('SQLITE_BUNDLE_DURABLE_SWAP_PRECONDITION_INVALID')
   }
+  const swapped = advanceAtomicBundleActivationJournal(before.journal, 'SWAPPED', input.updatedAt)
   executeAtomicBundleSwap({
     journal: before.journal,
     activeManifest: before.activeManifest,
@@ -559,12 +591,13 @@ export function executeDurableAtomicBundleSwap(input: {
     timeoutMs: input.timeoutMs,
     assertReaderWriterBarrierValid: input.assertReaderWriterBarrierValid,
   })
-  const swapped = advanceAtomicBundleActivationJournal(before.journal, 'SWAPPED', input.updatedAt)
   persistDurableActivationTransition({
     journalPath: input.journalPath,
     previousJournalSha256: before.journal.journalSha256,
     journal: swapped,
+    checkpoint: input.checkpoint,
   })
+  input.assertReaderWriterBarrierValid()
   const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
   if (after.durabilityIssues.length > 0 || after.journal.phase !== 'SWAPPED'
     || after.position !== 'NEW_ACTIVE') {

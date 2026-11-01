@@ -35,10 +35,13 @@ outside Git under `.audit/`; no Production or OWC file is created.
 - WAL transition without reseal rejected;
 - unrelated valid bundle produces `AMBIGUOUS` and no automatic swap.
 
-The integrity receipt binds DB/WAL/SHM hashes, the separately persisted
-full-`quick_check` receipt, its SQLite executable, and Source/Serving/Cache
-generations. External generation convergence rejects a stale Cache generation.
-Physical power-loss durability remains `UNKNOWN`.
+The activation receipt binds DB/WAL/SHM hashes, the existing
+`sqlite-integrity-contract` whole-file receipt, and Source/Serving/Cache
+generations. The fixture actually executes `PRAGMA quick_check`; Production
+must supply separately sealed executable/measurement evidence. A caller-provided
+generation observation with a stale Cache generation is rejected, but Reader
+and Cache observation is not implemented here and remains P1. Physical
+power-loss durability remains `UNKNOWN`.
 
 ## Production path evidence
 
@@ -70,10 +73,11 @@ runtime and Reader/cache generation convergence remain P1.
 | Full 12-hour normal/abnormal contract | `HOLD` |
 | Price Basis, Coverage bootstrap, running Run recovery | unchanged P1 |
 
-Restart support in this PR is classification only. It identifies
-`OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`; it intentionally does not choose or
-execute a recovery action. Operator-approved restart action remains a P1 design
-item before Production use.
+Restart support classifies `OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`; it does
+not choose an automatic swap or swap-back. Normal durable transitions now reach
+`GENERATION_RECONCILED` and `COMMITTED` only after caller-supplied generation
+observations match the active receipt. Operator-approved abnormal restart action
+remains a P1 design item before Production use.
 
 The software fault-injection test runs immediately before a directory `fsync`;
 actual syscall/media failure and physical power loss are not reproduced.

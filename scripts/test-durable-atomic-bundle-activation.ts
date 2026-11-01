@@ -13,17 +13,23 @@ import {
 } from '@/lib/storage/apfs-atomic-sqlite-bundle'
 import {
   assertDurableActivationGenerationConvergence,
+  commitDurableAtomicBundleActivation,
   createSqliteBundleIntegrityReceipt,
-  createSqliteFullQuickCheckReceipt,
   executeDurableAtomicBundleSwap,
   inspectDurableAtomicBundleActivation,
   persistInitialDurableActivationJournal,
+  persistSqliteCandidateIntegrityReceipt,
   persistSqliteBundleIntegrityReceipt,
-  persistSqliteFullQuickCheckReceipt,
   persistSqliteBundleManifest,
   readDurableActivationJournal,
+  recordDurableGenerationReconciled,
   sealDurableSwapIntent,
 } from '@/lib/storage/durable-atomic-bundle-activation'
+import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
+import {
+  createFullSqliteIntegrityReceipt,
+  sqliteArtifactIdentity,
+} from '@/lib/storage/sqlite-integrity-contract'
 
 type FixtureDatabase = {
   close(): void
@@ -76,18 +82,35 @@ function createSealedBundle(
   const bundlePath = path.join(root, directory)
   fs.mkdirSync(bundlePath)
   createDatabase(path.join(bundlePath, 'stockboard.db'), value)
-  const fullQuickCheck = createSqliteFullQuickCheckReceipt({
-    bundlePath,
+  const databasePath = path.join(bundlePath, 'stockboard.db')
+  const startedAt = Date.now()
+  const database = new DatabaseSync(databasePath, { readOnly: true })
+  let quickCheckResult = ''
+  try {
+    quickCheckResult = String(database.prepare('PRAGMA quick_check;').get()?.quick_check)
+  } finally {
+    database.close()
+  }
+  const artifact = sqliteArtifactIdentity({ file: databasePath })
+  const fullQuickCheck = createFullSqliteIntegrityReceipt({
+    kind: 'BACKUP_COMPLETE',
     transactionId,
-    bundleId: `${directory}-bundle`,
-    completedAt: '2026-11-01T00:00:00.000Z',
+    createdAt: '2026-11-01T00:00:00.000Z',
+    artifact,
+    measurementEvidenceSha256: stableSha256({
+      command: 'PRAGMA quick_check;',
+      result: quickCheckResult,
+      databaseSha256: artifact.sha256,
+      runtime: process.execPath,
+    }),
+    quickCheckResult,
+    quickCheckElapsedMs: Date.now() - startedAt,
     sourceGeneration: `${generation}-source`,
     servingGeneration: `${generation}-serving`,
-    cacheGeneration: `${generation}-cache`,
-    journalMode: 'delete',
-    sqliteExecutableSha256: createHash('sha256').update('fixture-node-sqlite-executable').digest('hex'),
+    guarantees: ['fixture executed full SQLite quick_check before bundle sealing'],
+    limitations: ['fixture receipt does not prove Production or OWC media durability'],
   })
-  persistSqliteFullQuickCheckReceipt(bundlePath, fullQuickCheck)
+  persistSqliteCandidateIntegrityReceipt(bundlePath, fullQuickCheck)
   const receipt = createSqliteBundleIntegrityReceipt({
     bundlePath,
     transactionId,
@@ -262,7 +285,7 @@ async function main(): Promise<void> {
       servingGeneration: 'normal-new-serving',
       cacheGeneration: 'stale-cache',
     }), /SQLITE_BUNDLE_GENERATION_CONVERGENCE_MISMATCH/)
-    assert.equal(barrierChecks, 6)
+    assert.equal(barrierChecks, 7)
     assert.equal(marker(normal.active.path), 'normal-new')
     assert.deepEqual(inspectInFreshProcess(script, normal.journalPath), {
       phase: 'SWAPPED',
@@ -270,6 +293,42 @@ async function main(): Promise<void> {
       durabilityIssues: [],
       activeCacheGeneration: 'normal-new-cache',
     })
+    const reconciled = recordDurableGenerationReconciled({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'normal-new-source',
+      observedServingGeneration: 'normal-new-serving',
+      observedCacheGeneration: 'normal-new-cache',
+      assertReaderWriterBarrierValid: () => { barrierChecks += 1 },
+    })
+    assert.equal(reconciled.journal.phase, 'GENERATION_RECONCILED')
+    const committed = commitDurableAtomicBundleActivation({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'normal-new-source',
+      observedServingGeneration: 'normal-new-serving',
+      observedCacheGeneration: 'normal-new-cache',
+      assertReaderWriterBarrierValid: () => { barrierChecks += 1 },
+    })
+    assert.equal(committed.journal.phase, 'COMMITTED')
+    assert.equal(barrierChecks, 13)
+
+    const invalidTransitionTime = setupActivation(root, 'invalid-transition-time')
+    sealDurableSwapIntent({
+      journalPath: invalidTransitionTime.journalPath,
+      updatedAt: '2026-11-01T00:00:02.000Z',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.throws(() => executeDurableAtomicBundleSwap({
+      journalPath: invalidTransitionTime.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-10-31T23:59:59.000Z',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID/)
+    assert.equal(marker(invalidTransitionTime.active.path), 'invalid-transition-time-old')
+    assert.equal(inspectInFreshProcess(script, invalidTransitionTime.journalPath).position, 'OLD_ACTIVE')
 
     const beforeCrash = setupActivation(root, 'before-crash')
     sealDurableSwapIntent({
@@ -363,6 +422,53 @@ async function main(): Promise<void> {
       assertReaderWriterBarrierValid: () => {},
     }), /SQLITE_BUNDLE_DURABLE_SWAP_INTENT_PRECONDITION_INVALID/)
 
+    const initialLockRoot = path.join(root, 'initial-lock-state')
+    fs.mkdirSync(initialLockRoot)
+    const initialLockActive = createSealedBundle(
+      root, 'initial-lock-active', 'initial-lock-old', 'initial-lock-old', 'initial-lock-old-transaction',
+    )
+    const initialLockCandidate = createSealedBundle(
+      root, 'initial-lock-candidate', 'initial-lock-new', 'initial-lock-new', 'initial-lock-new-transaction',
+    )
+    const initialLockPath = path.join(initialLockRoot, 'activation.json')
+    const initialLockJournal = createAtomicBundleActivationJournal({
+      transactionId: initialLockCandidate.manifest.transactionId,
+      activePath: initialLockActive.path,
+      candidatePath: initialLockCandidate.path,
+      oldManifestSha256: initialLockActive.manifest.manifestSha256,
+      newManifestSha256: initialLockCandidate.manifest.manifestSha256,
+      createdAt: '2026-11-01T00:00:00.000Z',
+      updatedAt: '2026-11-01T00:00:00.000Z',
+    })
+    let exclusiveCreateRejected = false
+    persistInitialDurableActivationJournal({
+      journalPath: initialLockPath,
+      journal: initialLockJournal,
+      checkpoint: (checkpoint) => {
+        if (checkpoint !== 'PENDING_LOCK_ACQUIRED') return
+        assert.throws(() => persistInitialDurableActivationJournal({
+          journalPath: initialLockPath,
+          journal: initialLockJournal,
+        }), /EEXIST/)
+        exclusiveCreateRejected = true
+      },
+    })
+    assert.equal(exclusiveCreateRejected, true)
+
+    const noReplaceRoot = path.join(root, 'no-replace-state')
+    fs.mkdirSync(noReplaceRoot)
+    const noReplacePath = path.join(noReplaceRoot, 'activation.json')
+    const collisionBytes = '{"collision":true}\n'
+    assert.throws(() => persistInitialDurableActivationJournal({
+      journalPath: noReplacePath,
+      journal: initialLockJournal,
+      checkpoint: (checkpoint) => {
+        if (checkpoint === 'JOURNAL_RENAME') fs.writeFileSync(noReplacePath, collisionBytes, { flag: 'wx' })
+      },
+    }), /EEXIST/)
+    assert.equal(fs.readFileSync(noReplacePath, 'utf8'), collisionBytes)
+    assert.equal(fs.existsSync(`${noReplacePath}.pending`), true)
+
     const partial = setupActivation(root, 'partial')
     fs.unlinkSync(path.join(partial.candidate.path, 'integrity-receipt.json'))
     assert.throws(() => inspectDurableAtomicBundleActivation({
@@ -393,9 +499,9 @@ async function main(): Promise<void> {
     }), /SQLITE_BUNDLE_INTEGRITY_RECEIPT_(?:IDENTITY_)?MISMATCH/)
 
     const corruptQuickCheck = setupActivation(root, 'corrupt-quick-check')
-    const quickCheckPath = path.join(corruptQuickCheck.candidate.path, 'full-quick-check-receipt.json')
+    const quickCheckPath = path.join(corruptQuickCheck.candidate.path, 'sqlite-integrity-receipt.json')
     const quickCheck = JSON.parse(fs.readFileSync(quickCheckPath, 'utf8')) as Record<string, unknown>
-    fs.writeFileSync(quickCheckPath, `${JSON.stringify({ ...quickCheck, cacheGeneration: 'tampered' })}\n`)
+    fs.writeFileSync(quickCheckPath, `${JSON.stringify({ ...quickCheck, sourceGeneration: 'tampered' })}\n`)
     assert.throws(() => inspectDurableAtomicBundleActivation({
       journalPath: corruptQuickCheck.journalPath, verifyByteIdentity: false,
     }), /SQLITE_FULL_QUICK_CHECK_RECEIPT_MISMATCH/)
@@ -452,8 +558,8 @@ async function main(): Promise<void> {
       crashAfterSwap: 'NEW_ACTIVE',
       ambiguous: 'FAIL_CLOSED_NO_AUTOMATIC_SWAP',
       fsyncFailure: 'PENDING_WRITE_INTENT_FAIL_CLOSED',
-      concurrentJournalWriter: 'FAIL_CLOSED_BEFORE_CAS',
-      integrityReceipt: 'FULL_QUICK_CHECK_DB_WAL_SHM_SOURCE_SERVING_CACHE_BOUND',
+      concurrentJournalWriter: 'EXCLUSIVE_PENDING_LOCK_AND_NO_REPLACE',
+      integrityReceipt: 'EXISTING_FULL_CHECK_RECEIPT_AND_DB_WAL_SHM_GENERATIONS_BOUND',
       physicalPowerLoss: 'UNKNOWN',
     }))
   } finally {
