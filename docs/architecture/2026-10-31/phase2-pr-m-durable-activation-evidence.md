@@ -27,15 +27,18 @@ outside Git under `.audit/`; no Production or OWC file is created.
 - SIGKILL after helper and before `SWAPPED`: `NEW_ACTIVE`;
 - helper timeout: `OLD_ACTIVE`;
 - fsync failure: pending evidence retained and execution rejected;
+- concurrent/stale journal writer rejected by lock-before-CAS;
 - corrupt journal, manifest and integrity receipt rejected;
+- corrupt full-`quick_check` receipt rejected;
 - missing receipt rejected;
 - post-verification candidate mutation rejected;
 - WAL transition without reseal rejected;
 - unrelated valid bundle produces `AMBIGUOUS` and no automatic swap.
 
-The receipt binds DB/WAL/SHM hashes, independent full-check receipt hash and
-Source/Serving/Cache generations. Physical power-loss durability remains
-`UNKNOWN`.
+The integrity receipt binds DB/WAL/SHM hashes, the separately persisted
+full-`quick_check` receipt, its SQLite executable, and Source/Serving/Cache
+generations. External generation convergence rejects a stale Cache generation.
+Physical power-loss durability remains `UNKNOWN`.
 
 ## Production path evidence
 
@@ -59,12 +62,21 @@ runtime and Reader/cache generation convergence remain P1.
 | Durable journal software-crash contract | `VERIFIED` at isolated fixture scale |
 | Restart old/new/ambiguous classification | `VERIFIED` |
 | Integrity receipt and byte-identity boundary | `VERIFIED` at fixture scale |
+| Concurrent journal mutation | `VERIFIED` fail-closed at fixture scale |
 | Production path compatibility | `HOLD`; requires approved path migration |
 | Old-inode Reader convergence | `HOLD` |
 | OWC 551 GB / CoW / ENOSPC | `UNKNOWN` and `HOLD` |
 | Physical power loss | `UNKNOWN` |
 | Full 12-hour normal/abnormal contract | `HOLD` |
 | Price Basis, Coverage bootstrap, running Run recovery | unchanged P1 |
+
+Restart support in this PR is classification only. It identifies
+`OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`; it intentionally does not choose or
+execute a recovery action. Operator-approved restart action remains a P1 design
+item before Production use.
+
+The software fault-injection test runs immediately before a directory `fsync`;
+actual syscall/media failure and physical power loss are not reproduced.
 
 ## Removal and evolution
 

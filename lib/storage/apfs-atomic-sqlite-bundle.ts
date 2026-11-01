@@ -217,6 +217,9 @@ export function assertSqliteBundleMetadata(bundlePath: string, manifest: SqliteB
   if (fs.existsSync(path.join(bundlePath, 'integrity-receipt.json'))) {
     allowedEntries.add('integrity-receipt.json')
   }
+  if (fs.existsSync(path.join(bundlePath, 'full-quick-check-receipt.json'))) {
+    allowedEntries.add('full-quick-check-receipt.json')
+  }
   if (manifest.wal) allowedEntries.add('stockboard.db-wal')
   if (manifest.shm) allowedEntries.add('stockboard.db-shm')
   const unexpected = fs.readdirSync(bundlePath).filter((entry) => !allowedEntries.has(entry))

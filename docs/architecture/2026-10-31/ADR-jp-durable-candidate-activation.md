@@ -12,10 +12,12 @@ Before the swap, `SWAP_INTENT` is valid only after this sequence completes:
 
 1. verify both bundle manifests and their sealed integrity receipts;
 2. verify DB/WAL/SHM byte hashes once under the Reader/Writer barrier;
-3. write and fsync a pending write-intent artifact;
-4. write and fsync the next journal to a same-directory temporary file;
-5. rename the temporary file over the journal and fsync the parent directory;
-6. remove the pending artifact, fsync the parent again, and read back the
+3. atomically acquire the pending artifact before evaluating journal CAS;
+4. validate existence/CAS and write/fsync the pending write intent;
+5. write and fsync the next journal to a same-directory temporary file;
+6. revalidate CAS, publish the initial journal with no-replace linking or
+   replace an existing journal, and fsync the parent directory;
+7. remove the pending artifact, fsync the parent again, and read back the
    journal.
 
 The pending artifact is not another state machine. It makes a failed journal
@@ -29,21 +31,25 @@ evidence and partial evidence remain operator-approved HOLD states.
 
 ## Integrity boundary
 
-`integrity-receipt.json` binds:
+`full-quick-check-receipt.json` records the actual full-check artifact identity,
+including the sealed SQLite executable, result, DB/WAL/SHM hashes and all three
+generations. `integrity-receipt.json` binds that receipt and:
 
 - DB, WAL and SHM SHA-256 identities;
 - the independent full-`quick_check` receipt SHA-256;
 - Source, Serving and Cache generations;
 - journal mode and the candidate transaction.
 
-The manifest seals the canonical integrity-receipt hash. Full byte verification
+The manifest seals the canonical integrity-receipt hash. A caller-provided
+64-character placeholder is not accepted as full-check evidence. Full byte verification
 is required before durable `SWAP_INTENT`. After that proof, metadata and receipt
 identity may be used only while the Reader/Writer barrier remains valid. A
 changed candidate, changed receipt, WAL/DELETE transition or unexpected sidecar
 requires a new receipt and manifest.
 
-This contract does not claim that a hash string alone proves database health.
-The full-check receipt remains an independent required artifact.
+This contract does not claim that a receipt created by a test fixture proves
+Production database health. Production must provide the corresponding sealed
+full-check artifact created by its approved executable.
 
 ## Software crash result
 
@@ -53,11 +59,13 @@ The full-check receipt remains an independent required artifact.
 | after helper returns, before `SWAPPED` persistence | `NEW_ACTIVE` with journal at `SWAP_INTENT` | none |
 | helper timeout before swap | `OLD_ACTIVE` | none |
 | journal fsync/directory sync failure | pending artifact, HOLD | none |
+| concurrent or stale journal writer | exclusive pending lock/CAS rejection | none |
 | missing/corrupt journal, manifest or receipt | fail closed | none |
 | both paths do not match sealed old/new manifests | `AMBIGUOUS` | none |
 
-`fsync` and parent-directory sync are implemented and exercised with injected
-software failures. Sudden power loss, controller write-cache behavior and
+`fsync` and parent-directory sync are implemented. The fixture injects a
+software exception immediately before a directory sync; it does not emulate a
+kernel-level fsync failure. Sudden power loss, controller write-cache behavior and
 `F_FULLFSYNC` durability on the Production OWC device are not proven and remain
 `UNKNOWN`.
 
@@ -94,6 +102,12 @@ The point-in-time handle scan cannot prevent a new same-user ad-hoc connection.
 Reader admission and immutable Trigger runtime therefore remain Production P1
 blockers. Atomic swap prevents partial candidate publication, but it does not
 make stale Readers converge.
+
+An open SQLite connection can retain the old DB inode and lazily reopen old
+WAL/SHM paths. The Reader/Writer barrier must therefore remain continuously
+enforced from final Candidate verification through service reconnection and
+generation convergence. A finite `lsof` scan is evidence at one instant, not an
+admission control mechanism.
 
 ## OWC test plan
 
