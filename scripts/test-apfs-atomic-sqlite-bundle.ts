@@ -324,7 +324,7 @@ async function main(): Promise<void> {
       candidateManifest: timeoutCandidate.manifest,
     })
     const slowExecutable = path.join(root, 'slow-swap')
-    fs.writeFileSync(slowExecutable, '#!/bin/sh\nsleep 5\n', { mode: 0o700 })
+    fs.writeFileSync(slowExecutable, '#!/bin/sh\nwhile :; do :; done\n', { mode: 0o700 })
     assert.throws(() => executeAtomicBundleSwap({
       journal: timeoutIntent,
       activeManifest: timeoutActive.manifest,
