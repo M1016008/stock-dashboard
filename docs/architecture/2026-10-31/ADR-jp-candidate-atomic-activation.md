@@ -34,6 +34,10 @@ old and new manifest hashes. At `SWAP_INTENT`, the manifests uniquely classify
 the filesystem as `OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`. `AMBIGUOUS` always
 fails closed and requires an independently approved recovery.
 
+This PR defines and validates the journal transitions in memory. Durable
+journal write/fsync/readback remains unimplemented and is a Production blocker;
+the ADR describes the required location, not a completed persistence adapter.
+
 ## Isolated evidence
 
 The committed fixture compiles the native helper from source, verifies APFS
@@ -41,7 +45,9 @@ advertises `VOL_CAP_INT_RENAME_SWAP`, and checks the post-swap directory inodes.
 It exercises:
 
 - successful directory-entry swap;
-- SIGKILL immediately before and immediately after the swap syscall;
+- SIGKILL at the orchestrator barrier immediately before invoking the helper and
+  immediately after the helper returns;
+- helper timeout before a swap;
 - unknown/tampered manifests;
 - Source/Serving mismatch;
 - explicit `DELETE` to `WAL` resealing;
@@ -52,14 +58,10 @@ same active path read the new value. This is expected inode behavior and proves
 that atomic rename does not replace Reader admission, reconnect, or cache
 generation checks.
 
-The replayable fixture receipt for implementation commit
-`897c770faba0bfcb5fd6161007683108255b0a38` has file SHA-256
-`2a2bb52084296400ed1ea6ed503b961c78b54ba8f67d37f86d1fbc52788bfe12`
-and canonical receipt SHA-256
-`4bf7de0073be7388b657467dbad5b493cf56a37de49ac52a872378ec4bf558e7`.
-It records Node 24.11.1, the Node/helper/harness hashes, input DB and manifest
-hashes, and a clean tracked worktree. The receipt remains outside Git under
-`.audit/phase2-atomic-candidate`.
+The auditable run receipt records the implementation commit, Node/helper/harness
+hashes, input DB and manifest hashes, and whether tracked files were clean. Its
+timestamps and durations intentionally make each run unique. The final receipt
+remains outside Git under `.audit/phase2-atomic-candidate`.
 
 ## Guarantees and limits
 
@@ -67,11 +69,12 @@ hashes, and a clean tracked worktree. The receipt remains outside Git under
 | --- | --- | --- |
 | macOS API and SDK support | `VERIFIED` | macOS 26.3.1 SDK exposes `renameatx_np` and `RENAME_SWAP` |
 | APFS swap on isolated host filesystem | `VERIFIED` | native helper checks volume capability and exchanged inodes |
-| Process SIGKILL before/after syscall | `VERIFIED` | fixture resolves old or new active manifest without a missing-path interval |
-| Bundle member and journal-mode identity | `VERIFIED` | manifest hashes DB/WAL/SHM and reads `PRAGMA journal_mode` |
+| Process SIGKILL around helper invocation | `VERIFIED` | library path and sealed journal classify old before invocation and new after helper completion |
+| Interruption inside syscall / physical power loss | `UNKNOWN` | parent `fsync` is implemented; `F_FULLFSYNC` and hardware loss are not proven |
+| Bundle member and journal-mode identity | `VERIFIED` | manifest seals DB/WAL/SHM metadata and hashes; SQLite header bytes prove DELETE/WAL without opening the DB; unlisted sidecars are rejected |
 | Old-inode Reader behavior | `VERIFIED` | stale connection retained old data after swap |
 | Generation reconciliation contract | `PARTIAL` | pure gate rejects mismatch; current Production Readers do not all consume it |
-| Sudden power-loss durability | `UNKNOWN` | process SIGKILL is not physical power loss; parent fsync is implemented but not a hardware proof |
+| Durable activation journal | `UNKNOWN` | phase ordering is validated; persistence and crash readback are not implemented |
 | OWC filesystem support, CoW, ENOSPC | `UNKNOWN` | no file or clone was created on OWC; separate approval required |
 | 551 GB bundle swap and rollback | `UNKNOWN` | fixture scale only |
 | Full Reader/cache reconnection | `HOLD` | direct Readers and mutable Trigger runtime remain open P1 items |
@@ -86,7 +89,7 @@ hash-bound approval; it must not invoke swap again automatically.
 ## Maintenance impact
 
 Replacing the existing 30-minute post-activation rollback reserve with a
-proven five-minute swap-back stage would change the PR #44 arithmetic projection
+future proven five-minute swap-back stage would change the PR #44 arithmetic projection
 from about 650.36 minutes to 625.36 minutes, leaving about 94.64 minutes in the
 12-hour window. That is only a model. It is not a GO because the five-minute
 OWC/551 GB bound, full derived workload, service restoration, ENOSPC, and power

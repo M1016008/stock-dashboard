@@ -1,22 +1,19 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 
 const SHA256 = /^[a-f0-9]{64}$/
 const BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
-  DatabaseSync: new (file: string, options: { readOnly: boolean }) => {
-    close(): void
-    prepare(sql: string): { get(): Record<string, unknown> | undefined }
-  }
-}
 
 export type SqliteBundleMember = {
   file: string
+  device: string
+  inode: string
   sizeBytes: number
+  mtimeNs: string
+  ctimeNs: string
   sha256: string
 }
 
@@ -78,28 +75,41 @@ function journalBody(journal: AtomicBundleActivationJournal): Omit<AtomicBundleA
   return body
 }
 
-function assertMember(bundlePath: string, member: SqliteBundleMember, expectedFile: string): void {
+function assertMemberMetadata(bundlePath: string, member: SqliteBundleMember, expectedFile: string): void {
   if (member.file !== expectedFile || !Number.isSafeInteger(member.sizeBytes) || member.sizeBytes <= 0
-    || !SHA256.test(member.sha256)) {
+    || !member.device || !member.inode || !member.mtimeNs || !member.ctimeNs || !SHA256.test(member.sha256)) {
     throw new Error(`SQLITE_BUNDLE_MEMBER_INVALID:${expectedFile}`)
   }
   const file = path.join(bundlePath, member.file)
-  const stat = fs.lstatSync(file)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== member.sizeBytes
-    || fs.realpathSync(file) !== file || sha256File(file) !== member.sha256) {
+  const stat = fs.lstatSync(file, { bigint: true })
+  if (!stat.isFile() || stat.isSymbolicLink()
+    || fs.realpathSync(file) !== file || String(stat.dev) !== member.device
+    || String(stat.ino) !== member.inode || Number(stat.size) !== member.sizeBytes
+    || String(stat.mtimeNs) !== member.mtimeNs || String(stat.ctimeNs) !== member.ctimeNs) {
     throw new Error(`SQLITE_BUNDLE_MEMBER_IDENTITY_MISMATCH:${expectedFile}`)
   }
 }
 
-function observedJournalMode(databasePath: string): 'delete' | 'wal' {
-  const database = new DatabaseSync(databasePath, { readOnly: true })
-  try {
-    const mode = String(database.prepare('PRAGMA journal_mode;').get()?.journal_mode).toLowerCase()
-    if (mode !== 'delete' && mode !== 'wal') throw new Error(`SQLITE_BUNDLE_JOURNAL_MODE_UNSUPPORTED:${mode}`)
-    return mode
-  } finally {
-    database.close()
+function assertMemberHash(bundlePath: string, member: SqliteBundleMember): void {
+  if (sha256File(path.join(bundlePath, member.file)) !== member.sha256) {
+    throw new Error(`SQLITE_BUNDLE_MEMBER_HASH_MISMATCH:${member.file}`)
   }
+}
+
+function observedJournalMode(databasePath: string): 'delete' | 'wal' {
+  const descriptor = fs.openSync(databasePath, 'r')
+  const header = Buffer.alloc(20)
+  try {
+    if (fs.readSync(descriptor, header, 0, header.length, 0) !== header.length
+      || header.subarray(0, 16).toString('binary') !== 'SQLite format 3\u0000') {
+      throw new Error('SQLITE_BUNDLE_DATABASE_HEADER_INVALID')
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  if (header[18] === 1 && header[19] === 1) return 'delete'
+  if (header[18] === 2 && header[19] === 2) return 'wal'
+  throw new Error(`SQLITE_BUNDLE_JOURNAL_MODE_UNSUPPORTED:${header[18]}:${header[19]}`)
 }
 
 function readBundleManifest(bundlePath: string): SqliteBundleManifest {
@@ -124,11 +134,19 @@ export function createSqliteBundleManifest(input: {
   const member = (file: string): SqliteBundleMember | null => {
     const target = path.join(input.bundlePath, file)
     try {
-      const stat = fs.lstatSync(target)
+      const stat = fs.lstatSync(target, { bigint: true })
       if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) {
         throw new Error(`SQLITE_BUNDLE_MEMBER_INVALID:${file}`)
       }
-      return { file, sizeBytes: stat.size, sha256: sha256File(target) }
+      return {
+        file,
+        device: String(stat.dev),
+        inode: String(stat.ino),
+        sizeBytes: Number(stat.size),
+        mtimeNs: String(stat.mtimeNs),
+        ctimeNs: String(stat.ctimeNs),
+        sha256: sha256File(target),
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
@@ -156,6 +174,13 @@ export function createSqliteBundleManifest(input: {
 }
 
 export function assertSqliteBundleManifest(bundlePath: string, manifest: SqliteBundleManifest): void {
+  assertSqliteBundleMetadata(bundlePath, manifest)
+  assertMemberHash(bundlePath, manifest.database)
+  if (manifest.wal) assertMemberHash(bundlePath, manifest.wal)
+  if (manifest.shm) assertMemberHash(bundlePath, manifest.shm)
+}
+
+export function assertSqliteBundleMetadata(bundlePath: string, manifest: SqliteBundleManifest): void {
   const stat = fs.lstatSync(bundlePath)
   if (!path.isAbsolute(bundlePath) || !stat.isDirectory() || stat.isSymbolicLink()
     || fs.realpathSync(bundlePath) !== bundlePath || manifest.version !== 1
@@ -173,9 +198,14 @@ export function assertSqliteBundleManifest(bundlePath: string, manifest: SqliteB
   if (manifest.journalMode === 'delete' && (manifest.wal !== null || manifest.shm !== null)) {
     throw new Error('SQLITE_BUNDLE_DELETE_MODE_SIDECAR_PRESENT')
   }
-  assertMember(bundlePath, manifest.database, 'stockboard.db')
-  if (manifest.wal) assertMember(bundlePath, manifest.wal, 'stockboard.db-wal')
-  if (manifest.shm) assertMember(bundlePath, manifest.shm, 'stockboard.db-shm')
+  const allowedEntries = new Set(['stockboard.db', 'bundle.json'])
+  if (manifest.wal) allowedEntries.add('stockboard.db-wal')
+  if (manifest.shm) allowedEntries.add('stockboard.db-shm')
+  const unexpected = fs.readdirSync(bundlePath).filter((entry) => !allowedEntries.has(entry))
+  if (unexpected.length > 0) throw new Error(`SQLITE_BUNDLE_UNEXPECTED_ENTRY:${unexpected.sort().join(',')}`)
+  assertMemberMetadata(bundlePath, manifest.database, 'stockboard.db')
+  if (manifest.wal) assertMemberMetadata(bundlePath, manifest.wal, 'stockboard.db-wal')
+  if (manifest.shm) assertMemberMetadata(bundlePath, manifest.shm, 'stockboard.db-shm')
   if (observedJournalMode(path.join(bundlePath, manifest.database.file)) !== manifest.journalMode) {
     throw new Error('SQLITE_BUNDLE_JOURNAL_MODE_MISMATCH')
   }
@@ -183,16 +213,41 @@ export function assertSqliteBundleManifest(bundlePath: string, manifest: SqliteB
 
 export function createAtomicBundleActivationJournal(input: Omit<
   AtomicBundleActivationJournal,
-  'version' | 'kind' | 'journalSha256'
+  'version' | 'kind' | 'phase' | 'journalSha256'
 >): AtomicBundleActivationJournal {
   const body = {
     version: 1 as const,
     kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const,
     ...input,
+    phase: 'PREPARED' as const,
   }
   const journal = { ...body, journalSha256: stableSha256(body) }
   assertAtomicBundleActivationJournal(journal)
   return journal
+}
+
+export function advanceAtomicBundleActivationJournal(
+  current: AtomicBundleActivationJournal,
+  phase: Exclude<AtomicBundleActivationJournal['phase'], 'PREPARED'>,
+  updatedAt: string,
+): AtomicBundleActivationJournal {
+  assertAtomicBundleActivationJournal(current)
+  const allowed: Record<AtomicBundleActivationJournal['phase'], AtomicBundleActivationJournal['phase'][]> = {
+    PREPARED: ['SWAP_INTENT', 'HOLD'],
+    SWAP_INTENT: ['SWAPPED', 'HOLD'],
+    SWAPPED: ['GENERATION_RECONCILED', 'HOLD'],
+    GENERATION_RECONCILED: ['COMMITTED', 'HOLD'],
+    COMMITTED: [],
+    HOLD: [],
+  }
+  if (!allowed[current.phase].includes(phase) || Date.parse(updatedAt) < Date.parse(current.updatedAt)) {
+    throw new Error(`SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID:${current.phase}:${phase}`)
+  }
+  const { version: _version, kind: _kind, journalSha256: _journalSha256, phase: _phase, ...input } = current
+  const body = { version: 1 as const, kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const, ...input, phase, updatedAt }
+  const next = { ...body, journalSha256: stableSha256(body) }
+  assertAtomicBundleActivationJournal(next)
+  return next
 }
 
 export function assertAtomicBundleActivationJournal(journal: AtomicBundleActivationJournal): void {
@@ -202,6 +257,7 @@ export function assertAtomicBundleActivationJournal(journal: AtomicBundleActivat
     || path.dirname(journal.activePath) !== path.dirname(journal.candidatePath)
     || journal.activePath === journal.candidatePath || !SHA256.test(journal.oldManifestSha256)
     || !SHA256.test(journal.newManifestSha256)
+    || journal.oldManifestSha256 === journal.newManifestSha256
     || !['PREPARED', 'SWAP_INTENT', 'SWAPPED', 'GENERATION_RECONCILED', 'COMMITTED', 'HOLD'].includes(journal.phase)
     || !Number.isFinite(Date.parse(journal.createdAt)) || !Number.isFinite(Date.parse(journal.updatedAt))
     || Date.parse(journal.updatedAt) < Date.parse(journal.createdAt)
@@ -216,6 +272,8 @@ export function classifyAtomicBundlePosition(input: {
   candidateManifest: SqliteBundleManifest
 }): AtomicBundlePosition {
   assertAtomicBundleActivationJournal(input.journal)
+  if (input.activeManifest.transactionId !== input.journal.transactionId
+    || input.candidateManifest.transactionId !== input.journal.transactionId) return 'AMBIGUOUS'
   const active = input.activeManifest.manifestSha256
   const candidate = input.candidateManifest.manifestSha256
   if (active === input.journal.oldManifestSha256 && candidate === input.journal.newManifestSha256) {
@@ -235,6 +293,12 @@ export function assertActiveBundlePublication(input: {
   servingGeneration: string
   activeDatabaseHandleCount: number
 }): void {
+  assertSqliteBundleMetadata(input.journal.activePath, input.activeManifest)
+  assertSqliteBundleMetadata(input.journal.candidatePath, input.candidateManifest)
+  if (stableSha256(readBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
+    || stableSha256(readBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
+    throw new Error('SQLITE_BUNDLE_ON_DISK_MANIFEST_MISMATCH')
+  }
   const position = classifyAtomicBundlePosition(input)
   if (!['GENERATION_RECONCILED', 'COMMITTED'].includes(input.journal.phase)
     || position !== 'NEW_ACTIVE' || input.activeDatabaseHandleCount !== 0
@@ -260,8 +324,8 @@ export function executeAtomicBundleSwap(input: {
     || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new Error('SQLITE_BUNDLE_SWAP_PRECONDITION_INVALID')
   }
-  assertSqliteBundleManifest(input.journal.activePath, input.activeManifest)
-  assertSqliteBundleManifest(input.journal.candidatePath, input.candidateManifest)
+  assertSqliteBundleMetadata(input.journal.activePath, input.activeManifest)
+  assertSqliteBundleMetadata(input.journal.candidatePath, input.candidateManifest)
   if (stableSha256(readBundleManifest(input.journal.activePath)) !== stableSha256(input.activeManifest)
     || stableSha256(readBundleManifest(input.journal.candidatePath)) !== stableSha256(input.candidateManifest)) {
     throw new Error('SQLITE_BUNDLE_ON_DISK_MANIFEST_MISMATCH')
@@ -289,8 +353,8 @@ export function executeAtomicBundleSwap(input: {
   input.assertReaderWriterBarrierValid()
   const activeManifest = readBundleManifest(input.journal.activePath)
   const candidateManifest = readBundleManifest(input.journal.candidatePath)
-  assertSqliteBundleManifest(input.journal.activePath, activeManifest)
-  assertSqliteBundleManifest(input.journal.candidatePath, candidateManifest)
+  assertSqliteBundleMetadata(input.journal.activePath, activeManifest)
+  assertSqliteBundleMetadata(input.journal.candidatePath, candidateManifest)
   if (classifyAtomicBundlePosition({ journal: input.journal, activeManifest, candidateManifest }) !== 'NEW_ACTIVE') {
     throw new Error('SQLITE_BUNDLE_SWAP_POSTCONDITION_INVALID')
   }

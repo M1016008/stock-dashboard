@@ -22,6 +22,18 @@ static int inspect_directory(const char *path, struct stat *result) {
   return 1;
 }
 
+static int inspect_entry(int parent, const char *name, struct stat *result) {
+  if (fstatat(parent, name, result, AT_SYMLINK_NOFOLLOW) != 0) {
+    perror(name);
+    return 0;
+  }
+  if (!S_ISDIR(result->st_mode)) {
+    fprintf(stderr, "bundle entry must be a real directory: %s\n", name);
+    return 0;
+  }
+  return 1;
+}
+
 static int parent_path(const char *path, char *result, size_t length) {
   if (strlen(path) >= length) return 0;
   strcpy(result, path);
@@ -79,12 +91,6 @@ int main(int argc, char **argv) {
 
   struct stat left_before;
   struct stat right_before;
-  if (!inspect_directory(argv[2], &left_before) || !inspect_directory(argv[3], &right_before)) return 65;
-  if (left_before.st_dev != right_before.st_dev || left_before.st_ino == right_before.st_ino) {
-    fprintf(stderr, "bundle directories must be distinct entries on one filesystem\n");
-    return 66;
-  }
-
   char left_parent[PATH_MAX];
   char right_parent[PATH_MAX];
   if (!parent_path(argv[2], left_parent, sizeof(left_parent))
@@ -94,25 +100,47 @@ int main(int argc, char **argv) {
     return 67;
   }
   if (!volume_supports_swap(left_parent)) return 68;
+  const char *left_name = strrchr(argv[2], '/');
+  const char *right_name = strrchr(argv[3], '/');
+  if (left_name == NULL || right_name == NULL || left_name[1] == '\0' || right_name[1] == '\0') return 67;
+  left_name += 1;
+  right_name += 1;
 
-  if (renameatx_np(AT_FDCWD, argv[2], AT_FDCWD, argv[3], RENAME_SWAP) != 0) {
+  int parent = open(left_parent, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+  if (parent < 0) {
+    perror("open parent");
+    return 68;
+  }
+  if (!inspect_entry(parent, left_name, &left_before)
+      || !inspect_entry(parent, right_name, &right_before)) {
+    close(parent);
+    return 65;
+  }
+  if (left_before.st_dev != right_before.st_dev || left_before.st_ino == right_before.st_ino) {
+    fprintf(stderr, "bundle directories must be distinct entries on one filesystem\n");
+    close(parent);
+    return 66;
+  }
+
+  if (renameatx_np(parent, left_name, parent, right_name, RENAME_SWAP) != 0) {
     perror("renameatx_np");
+    close(parent);
     return 69;
   }
 
   struct stat left_after;
   struct stat right_after;
-  if (!inspect_directory(argv[2], &left_after) || !inspect_directory(argv[3], &right_after)
+  if (!inspect_entry(parent, left_name, &left_after) || !inspect_entry(parent, right_name, &right_after)
       || left_after.st_dev != right_before.st_dev || left_after.st_ino != right_before.st_ino
       || right_after.st_dev != left_before.st_dev || right_after.st_ino != left_before.st_ino) {
     fprintf(stderr, "post-swap inode verification failed\n");
+    close(parent);
     return 70;
   }
 
-  int parent = open(left_parent, O_RDONLY | O_CLOEXEC);
-  if (parent < 0 || fsync(parent) != 0) {
+  if (fsync(parent) != 0) {
     perror("parent fsync");
-    if (parent >= 0) close(parent);
+    close(parent);
     return 71;
   }
   close(parent);

@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
 import {
+  advanceAtomicBundleActivationJournal,
   assertActiveBundlePublication,
   assertSqliteBundleManifest,
   classifyAtomicBundlePosition,
@@ -83,6 +84,24 @@ function loadManifest(bundlePath: string): SqliteBundleManifest {
   return JSON.parse(fs.readFileSync(path.join(bundlePath, 'bundle.json'), 'utf8')) as SqliteBundleManifest
 }
 
+function activationIntent(input: {
+  activePath: string
+  candidatePath: string
+  activeManifest: SqliteBundleManifest
+  candidateManifest: SqliteBundleManifest
+}): ReturnType<typeof createAtomicBundleActivationJournal> {
+  const prepared = createAtomicBundleActivationJournal({
+    transactionId: input.activeManifest.transactionId,
+    activePath: input.activePath,
+    candidatePath: input.candidatePath,
+    oldManifestSha256: input.activeManifest.manifestSha256,
+    newManifestSha256: input.candidateManifest.manifestSha256,
+    createdAt: '2026-11-01T00:00:00.000Z',
+    updatedAt: '2026-11-01T00:00:00.000Z',
+  })
+  return advanceAtomicBundleActivationJournal(prepared, 'SWAP_INTENT', '2026-11-01T00:00:01.000Z')
+}
+
 function helperSwap(executable: string, left: string, right: string): void {
   const result = spawnSync(executable, ['--swap', left, right], { encoding: 'utf8' })
   if (result.error || result.status !== 0) {
@@ -101,10 +120,33 @@ function marker(databasePath: string): string {
 
 function runCrashChild(): never {
   const [, , mode, executable, activePath, candidatePath] = process.argv
-  if (mode === '--crash-before-swap') process.kill(process.pid, 'SIGKILL')
-  if (mode !== '--crash-after-swap') throw new Error('fixture_crash_mode_invalid')
-  helperSwap(executable, activePath, candidatePath)
-  process.kill(process.pid, 'SIGKILL')
+  if (!['--crash-before-swap', '--crash-after-swap'].includes(mode)) {
+    throw new Error('fixture_crash_mode_invalid')
+  }
+  const activeManifest = loadManifest(activePath)
+  const candidateManifest = loadManifest(candidatePath)
+  const journal = activationIntent({
+    activePath,
+    candidatePath,
+    activeManifest,
+    candidateManifest,
+  })
+  let barrierChecks = 0
+  executeAtomicBundleSwap({
+    journal,
+    activeManifest,
+    candidateManifest,
+    executablePath: executable,
+    executableSha256: sha256File(executable),
+    timeoutMs: 30_000,
+    assertReaderWriterBarrierValid: () => {
+      barrierChecks += 1
+      if ((mode === '--crash-before-swap' && barrierChecks === 1)
+        || (mode === '--crash-after-swap' && barrierChecks === 2)) {
+        process.kill(process.pid, 'SIGKILL')
+      }
+    },
+  })
   throw new Error('unreachable')
 }
 
@@ -128,33 +170,47 @@ async function main(): Promise<void> {
 
     const active = createBundle(root, 'active', 'old', 'old')
     const candidate = createBundle(root, 'candidate', 'new', 'new')
-    const intent = createAtomicBundleActivationJournal({
-      transactionId: 'fixture-atomic-activation',
+    const intent = activationIntent({
       activePath: active.path,
       candidatePath: candidate.path,
-      oldManifestSha256: active.manifest.manifestSha256,
-      newManifestSha256: candidate.manifest.manifestSha256,
-      phase: 'SWAP_INTENT',
-      createdAt: '2026-11-01T00:00:00.000Z',
-      updatedAt: '2026-11-01T00:00:01.000Z',
+      activeManifest: active.manifest,
+      candidateManifest: candidate.manifest,
     })
     assert.equal(classifyAtomicBundlePosition({
       journal: intent,
       activeManifest: active.manifest,
       candidateManifest: candidate.manifest,
     }), 'OLD_ACTIVE')
+    assert.throws(() => advanceAtomicBundleActivationJournal(
+      createAtomicBundleActivationJournal({
+        transactionId: intent.transactionId,
+        activePath: intent.activePath,
+        candidatePath: intent.candidatePath,
+        oldManifestSha256: intent.oldManifestSha256,
+        newManifestSha256: intent.newManifestSha256,
+        createdAt: intent.createdAt,
+        updatedAt: intent.createdAt,
+      }),
+      'COMMITTED',
+      '2026-11-01T00:00:02.000Z',
+    ), /SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID/)
+    assert.throws(() => createAtomicBundleActivationJournal({
+      transactionId: intent.transactionId,
+      activePath: intent.activePath,
+      candidatePath: intent.candidatePath,
+      oldManifestSha256: intent.oldManifestSha256,
+      newManifestSha256: intent.oldManifestSha256,
+      createdAt: intent.createdAt,
+      updatedAt: intent.createdAt,
+    }), /SQLITE_BUNDLE_ACTIVATION_JOURNAL_INVALID/)
 
     const rejectedActive = createBundle(root, 'rejected-active', 'rejected-old', 'rejected-old')
     const rejectedCandidate = createBundle(root, 'rejected-candidate', 'rejected-new', 'rejected-new')
-    const rejectedIntent = createAtomicBundleActivationJournal({
-      transactionId: 'fixture-rejected-activation',
+    const rejectedIntent = activationIntent({
       activePath: rejectedActive.path,
       candidatePath: rejectedCandidate.path,
-      oldManifestSha256: rejectedActive.manifest.manifestSha256,
-      newManifestSha256: rejectedCandidate.manifest.manifestSha256,
-      phase: 'SWAP_INTENT',
-      createdAt: '2026-11-01T00:00:00.000Z',
-      updatedAt: '2026-11-01T00:00:01.000Z',
+      activeManifest: rejectedActive.manifest,
+      candidateManifest: rejectedCandidate.manifest,
     })
     fs.writeFileSync(path.join(rejectedCandidate.path, 'bundle.json'), `${JSON.stringify({
       ...rejectedCandidate.manifest, sourceGeneration: 'tampered',
@@ -190,16 +246,10 @@ async function main(): Promise<void> {
     assert.equal(classifyAtomicBundlePosition({
       journal: intent, activeManifest: activeAfter, candidateManifest: candidateAfter,
     }), 'NEW_ACTIVE')
-    const reconciled = createAtomicBundleActivationJournal({
-      transactionId: intent.transactionId,
-      activePath: intent.activePath,
-      candidatePath: intent.candidatePath,
-      oldManifestSha256: intent.oldManifestSha256,
-      newManifestSha256: intent.newManifestSha256,
-      phase: 'GENERATION_RECONCILED',
-      createdAt: intent.createdAt,
-      updatedAt: '2026-11-01T00:00:02.000Z',
-    })
+    const swapped = advanceAtomicBundleActivationJournal(intent, 'SWAPPED', '2026-11-01T00:00:02.000Z')
+    const reconciled = advanceAtomicBundleActivationJournal(
+      swapped, 'GENERATION_RECONCILED', '2026-11-01T00:00:03.000Z',
+    )
     assertActiveBundlePublication({
       journal: reconciled,
       activeManifest: activeAfter,
@@ -239,17 +289,56 @@ async function main(): Promise<void> {
 
     const crashActive = createBundle(root, 'crash-active', 'crash-old', 'crash-old')
     const crashCandidate = createBundle(root, 'crash-candidate', 'crash-new', 'crash-new')
+    const crashIntent = activationIntent({
+      activePath: crashActive.path,
+      candidatePath: crashCandidate.path,
+      activeManifest: crashActive.manifest,
+      candidateManifest: crashCandidate.manifest,
+    })
     const script = fileURLToPath(import.meta.url)
     const crashBefore = spawnSync(process.execPath, [
       '--import', 'tsx', script, '--crash-before-swap', executable, crashActive.path, crashCandidate.path,
     ], { encoding: 'utf8' })
     assertKilled(crashBefore)
-    assert.equal(marker(path.join(crashActive.path, 'stockboard.db')), 'crash-old')
+    assert.equal(classifyAtomicBundlePosition({
+      journal: crashIntent,
+      activeManifest: loadManifest(crashActive.path),
+      candidateManifest: loadManifest(crashCandidate.path),
+    }), 'OLD_ACTIVE')
     const crashAfter = spawnSync(process.execPath, [
       '--import', 'tsx', script, '--crash-after-swap', executable, crashActive.path, crashCandidate.path,
     ], { encoding: 'utf8' })
     assertKilled(crashAfter)
-    assert.equal(marker(path.join(crashActive.path, 'stockboard.db')), 'crash-new')
+    assert.equal(classifyAtomicBundlePosition({
+      journal: crashIntent,
+      activeManifest: loadManifest(crashActive.path),
+      candidateManifest: loadManifest(crashCandidate.path),
+    }), 'NEW_ACTIVE')
+
+    const timeoutActive = createBundle(root, 'timeout-active', 'timeout-old', 'timeout-old')
+    const timeoutCandidate = createBundle(root, 'timeout-candidate', 'timeout-new', 'timeout-new')
+    const timeoutIntent = activationIntent({
+      activePath: timeoutActive.path,
+      candidatePath: timeoutCandidate.path,
+      activeManifest: timeoutActive.manifest,
+      candidateManifest: timeoutCandidate.manifest,
+    })
+    const slowExecutable = path.join(root, 'slow-swap')
+    fs.writeFileSync(slowExecutable, '#!/bin/sh\nsleep 5\n', { mode: 0o700 })
+    assert.throws(() => executeAtomicBundleSwap({
+      journal: timeoutIntent,
+      activeManifest: timeoutActive.manifest,
+      candidateManifest: timeoutCandidate.manifest,
+      executablePath: slowExecutable,
+      executableSha256: sha256File(slowExecutable),
+      timeoutMs: 20,
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_SWAP_FAILED/)
+    assert.equal(classifyAtomicBundlePosition({
+      journal: timeoutIntent,
+      activeManifest: loadManifest(timeoutActive.path),
+      candidateManifest: loadManifest(timeoutCandidate.path),
+    }), 'OLD_ACTIVE')
 
     const tampered = { ...loadManifest(crashActive.path), sourceGeneration: 'tampered' }
     assert.throws(() => assertSqliteBundleManifest(crashActive.path, tampered), /SQLITE_BUNDLE_MANIFEST_INVALID/)
@@ -274,20 +363,29 @@ async function main(): Promise<void> {
     const walDatabase = new DatabaseSync(path.join(walBundle.path, 'stockboard.db'))
     try {
       assert.equal(String(walDatabase.prepare('PRAGMA journal_mode=WAL;').get()?.journal_mode), 'wal')
+      walDatabase.exec("UPDATE marker SET value='wal-value-2';")
+      const walManifest = createSqliteBundleManifest({
+        bundlePath: walBundle.path,
+        bundleId: 'wal-bundle-resealed',
+        transactionId: 'fixture-atomic-activation',
+        createdAt: '2026-11-01T00:00:04.000Z',
+        sourceGeneration: 'wal-source',
+        servingGeneration: 'wal-serving',
+        journalMode: 'wal',
+        integrityReceiptSha256: 'd'.repeat(64),
+      })
+      assert.ok(walManifest.wal && walManifest.shm)
+      assertSqliteBundleManifest(walBundle.path, walManifest)
     } finally {
       walDatabase.close()
     }
-    const walManifest = createSqliteBundleManifest({
-      bundlePath: walBundle.path,
-      bundleId: 'wal-bundle-resealed',
-      transactionId: 'fixture-atomic-activation',
-      createdAt: '2026-11-01T00:00:04.000Z',
-      sourceGeneration: 'wal-source',
-      servingGeneration: 'wal-serving',
-      journalMode: 'wal',
-      integrityReceiptSha256: 'd'.repeat(64),
-    })
-    assertSqliteBundleManifest(walBundle.path, walManifest)
+    assert.throws(() => assertSqliteBundleManifest(walBundle.path, walBundle.manifest),
+      /SQLITE_BUNDLE_MEMBER_IDENTITY_MISMATCH|SQLITE_BUNDLE_UNEXPECTED_ENTRY/)
+
+    const extraSidecar = createBundle(root, 'extra-sidecar', 'extra-sidecar', 'extra-sidecar')
+    fs.writeFileSync(path.join(extraSidecar.path, 'stockboard.db-journal'), 'unsealed')
+    assert.throws(() => assertSqliteBundleManifest(extraSidecar.path, extraSidecar.manifest),
+      /SQLITE_BUNDLE_UNEXPECTED_ENTRY/)
 
     const gitHead = spawnSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim()
     const gitStatus = spawnSync('/usr/bin/git', [
@@ -326,6 +424,7 @@ async function main(): Promise<void> {
         oldInodeReaderRetention: 'OBSERVED',
         crashBeforeSwap: 'OLD_ACTIVE',
         crashAfterSwap: 'NEW_ACTIVE',
+        helperTimeoutBeforeSwap: 'OLD_ACTIVE',
         generationMismatch: 'REJECTED',
         unknownManifest: 'AMBIGUOUS_FAIL_CLOSED',
         tamperedOnDiskManifest: 'REJECTED_BEFORE_SWAP',
