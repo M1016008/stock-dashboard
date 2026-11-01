@@ -42,6 +42,23 @@ import {
   createFullSqliteIntegrityReceipt,
   sqliteArtifactIdentity,
 } from '@/lib/storage/sqlite-integrity-contract'
+import {
+  ATOMIC_BUNDLE_CONSUMER_TOPOLOGY,
+  assertAtomicBundleConsumerAdmission,
+  prepareAtomicBundleConsumerAdmission,
+  type ApprovedAtomicBundleConsumer,
+  type AtomicBundleConsumerObservation,
+  type AtomicBundleWriterObservation,
+} from '@/lib/jp-ohlcv-bundle-consumer-admission'
+import {
+  JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS,
+  JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS,
+} from '@/lib/jp-ohlcv-maintenance-orchestrator'
+import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
+import type {
+  ApprovedWriterIdentity,
+} from '@/lib/storage/weekly-writer-hold'
 
 type FixtureDatabase = {
   close(): void
@@ -319,6 +336,91 @@ function reverseRestartApproval(input: {
   return { approval, approvalSha256: atomicBundleRecoveryApprovalSha256(approval) }
 }
 
+function consumerAdmissionFixture(
+  activation: ReturnType<typeof inspectDurableAtomicBundleActivation>,
+  journalPath: string,
+): Parameters<typeof assertAtomicBundleConsumerAdmission>[0] {
+  const approvedConsumers: ApprovedAtomicBundleConsumer[] = ATOMIC_BUNDLE_CONSUMER_TOPOLOGY.map(
+    (consumer) => ({
+      ...consumer,
+      definitionSha256: stableSha256({ label: consumer.label, identity: 'plist' }),
+      executableSha256: stableSha256({ label: consumer.label, identity: 'runtime' }),
+      runtimeManifestSha256: stableSha256({ label: consumer.label, identity: 'manifest' }),
+      argumentsSha256: stableSha256({ label: consumer.label, identity: 'arguments' }),
+      program: `/sealed/${consumer.role.toLowerCase()}`,
+    }),
+  )
+  const databasePath = path.join(activation.journal.activePath, activation.activeManifest.database.file)
+  const observedConsumers: AtomicBundleConsumerObservation[] = approvedConsumers.map(
+    (consumer, index) => ({
+      ...consumer,
+      loaded: true,
+      disabled: false,
+      instances: 1,
+      pid: 200 + index,
+      startedAt: '2026-11-01T00:01:00.000Z',
+      reportedDatabasePath: databasePath,
+      reportedDatabaseDevice: activation.activeManifest.database.device,
+      reportedDatabaseInode: activation.activeManifest.database.inode,
+      directDatabaseHandle: consumer.access === 'DIRECT_SQLITE',
+      upstreamLabel: consumer.access === 'WEB_PROXY' ? 'com.stockboard.web' : null,
+      upstreamPid: consumer.access === 'WEB_PROXY' ? 200 : null,
+      sourceGeneration: activation.activeReceipt.sourceGeneration,
+      servingGeneration: activation.activeReceipt.servingGeneration,
+      cacheGeneration: activation.activeReceipt.cacheGeneration,
+    }),
+  )
+  const approvedWriters: ApprovedWriterIdentity[] = WEEKLY_BACKUP_WRITER_LABELS.map((label) => ({
+    label,
+    definitionSha256: label === 'com.stockboard.trigger-historical-scan'
+      ? approvedConsumers.find((consumer) => consumer.role === 'TRIGGER')!.definitionSha256
+      : stableSha256({ label, identity: 'plist' }),
+    program: label === 'com.stockboard.trigger-historical-scan'
+      ? approvedConsumers.find((consumer) => consumer.role === 'TRIGGER')!.program
+      : `/sealed/${label}`,
+  }))
+  const loaded = new Set<string>(JP_OHLCV_EXPECTED_LOADED_WRITER_LABELS)
+  const disabled = new Set<string>(JP_OHLCV_EXPECTED_DISABLED_WRITER_LABELS)
+  const observedWriters: AtomicBundleWriterObservation[] = approvedWriters.map((writer) => ({
+    ...writer,
+    loaded: loaded.has(writer.label),
+    disabled: disabled.has(writer.label),
+    instances: loaded.has(writer.label) ? 1 : 0,
+    pid: writer.label === 'com.stockboard.trigger-historical-scan' ? 203 : null,
+    processGroupId: writer.label === 'com.stockboard.trigger-historical-scan' ? 203 : null,
+    startedAt: writer.label === 'com.stockboard.trigger-historical-scan'
+      ? '2026-11-01T00:01:00.000Z' : null,
+  }))
+  const approvedConsumerSetSha256 = stableSha256(
+    [...approvedConsumers].sort((a, b) => a.label.localeCompare(b.label)),
+  )
+  const approvedWriterSetSha256 = stableSha256(
+    [...approvedWriters].sort((a, b) => a.label.localeCompare(b.label)),
+  )
+  let admissionBarrierChecks = 0
+  const permit = prepareAtomicBundleConsumerAdmission({
+    journalPath,
+    approvedConsumers,
+    approvedConsumerSetSha256,
+    approvedWriters,
+    approvedWriterSetSha256,
+    assertReaderWriterBarrierValid: () => { admissionBarrierChecks += 1 },
+  })
+  assert.equal(admissionBarrierChecks, 2)
+  for (const consumer of observedConsumers) consumer.startedAt = permit.issuedAt
+  observedWriters.find(
+    (writer) => writer.label === 'com.stockboard.trigger-historical-scan',
+  )!.startedAt = permit.issuedAt
+  return {
+    journalPath,
+    permit,
+    approvedConsumers,
+    observedConsumers,
+    approvedWriters,
+    observedWriters,
+  }
+}
+
 function childMode(): never | void {
   const [mode, journalPath, executable, ...rest] = process.argv.slice(2)
   if (mode === '--inspect') {
@@ -560,6 +662,10 @@ async function main(): Promise<void> {
     })
     assert.equal(reconciled.journal.phase, 'GENERATION_RECONCILED')
     assert.equal(inspectInFreshProcess(script, normal.journalPath).phase, 'GENERATION_RECONCILED')
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(consumerAdmissionFixture(reconciled, normal.journalPath)),
+      /SQLITE_BUNDLE_CONSUMER_ADMISSION_PHASE_INVALID/,
+    )
     assert.throws(() => sealDurableReverseIntent({
       journalPath: normal.journalPath,
       updatedAt: '2026-11-01T00:00:04.500Z',
@@ -586,6 +692,125 @@ async function main(): Promise<void> {
     })
     assert.equal(committed.journal.phase, 'COMMITTED')
     assert.equal(barrierChecks, 13)
+    const forwardFixture = consumerAdmissionFixture(committed, normal.journalPath)
+    const consumerWal = path.join(committed.journal.activePath, 'stockboard.db-wal')
+    fs.writeFileSync(consumerWal, 'consumer-created-after-permit\n')
+    const forwardAdmission = assertAtomicBundleConsumerAdmission(forwardFixture)
+    fs.rmSync(consumerWal)
+    assert.equal(forwardAdmission.admission, 'NEW_GENERATION')
+    assert.equal(forwardAdmission.journalPhase, 'COMMITTED')
+    assert.equal(forwardAdmission.sourceGeneration, 'normal-new-source')
+    assert.equal(forwardAdmission.loadedWriterLabels.length, 13)
+    assert.equal(forwardAdmission.unloadedWriterLabels.length, 3)
+    const staleForwardConsumer = consumerAdmissionFixture(committed, normal.journalPath)
+    staleForwardConsumer.observedConsumers[0].reportedDatabaseInode = 'stale-inode'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(staleForwardConsumer),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.web/,
+    )
+    const staleForwardGeneration = consumerAdmissionFixture(committed, normal.journalPath)
+    staleForwardGeneration.observedConsumers[1].sourceGeneration = 'stale-source'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(staleForwardGeneration),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.analog-search/,
+    )
+    const gatewayDirectHandle = consumerAdmissionFixture(committed, normal.journalPath)
+    gatewayDirectHandle.observedConsumers[2].directDatabaseHandle = true
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(gatewayDirectHandle),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.friend-readonly-gateway/,
+    )
+    const gatewayWrongUpstream = consumerAdmissionFixture(committed, normal.journalPath)
+    gatewayWrongUpstream.observedConsumers[2].upstreamPid = 999
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(gatewayWrongUpstream),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.friend-readonly-gateway/,
+    )
+    const gatewayWrongUpstreamLabel = consumerAdmissionFixture(committed, normal.journalPath)
+    gatewayWrongUpstreamLabel.observedConsumers[2].upstreamLabel = 'com.stockboard.analog-search'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(gatewayWrongUpstreamLabel),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.friend-readonly-gateway/,
+    )
+    const staleConsumerStart = consumerAdmissionFixture(committed, normal.journalPath)
+    staleConsumerStart.observedConsumers[0].startedAt = '2026-11-01T00:00:00.000Z'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(staleConsumerStart),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.web/,
+    )
+    const tamperedPermit = consumerAdmissionFixture(committed, normal.journalPath)
+    tamperedPermit.permit.databaseInode = 'tampered-inode'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(tamperedPermit),
+      /SQLITE_BUNDLE_CONSUMER_PERMIT_INVALID/,
+    )
+    const expiredPermit = consumerAdmissionFixture(committed, normal.journalPath)
+    expiredPermit.permit.issuedAt = '2026-10-31T23:44:00.000Z'
+    expiredPermit.permit.expiresAt = '2026-10-31T23:59:00.000Z'
+    const { permitSha256: _expiredHash, ...expiredPermitBody } = expiredPermit.permit
+    expiredPermit.permit.permitSha256 = stableSha256(expiredPermitBody)
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(expiredPermit),
+      /SQLITE_BUNDLE_CONSUMER_PERMIT_EXPIRED/,
+    )
+    const changedJournal = consumerAdmissionFixture(committed, normal.journalPath)
+    const originalJournalBytes = fs.readFileSync(normal.journalPath)
+    try {
+      fs.appendFileSync(normal.journalPath, '\n')
+      assert.throws(
+        () => assertAtomicBundleConsumerAdmission(changedJournal),
+        /SQLITE_BUNDLE_CONSUMER_JOURNAL_CHANGED/,
+      )
+    } finally {
+      fs.writeFileSync(normal.journalPath, originalJournalBytes)
+    }
+    const changedConsumerApproval = consumerAdmissionFixture(committed, normal.journalPath)
+    changedConsumerApproval.approvedConsumers[0].program = '/sealed/unapproved-web'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(changedConsumerApproval),
+      /SQLITE_BUNDLE_ADMISSION_APPROVAL_MISMATCH/,
+    )
+    const duplicateConsumerPid = consumerAdmissionFixture(committed, normal.journalPath)
+    duplicateConsumerPid.observedConsumers[1].pid = duplicateConsumerPid.observedConsumers[0].pid
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(duplicateConsumerPid),
+      /SQLITE_BUNDLE_CONSUMER_PID_REUSE_AMBIGUOUS/,
+    )
+    const accidentallyLoadedWriter = consumerAdmissionFixture(committed, normal.journalPath)
+    const unloadedWriter = accidentallyLoadedWriter.observedWriters.find(
+      (writer) => writer.label === JP_OHLCV_EXPECTED_UNLOADED_WRITER_LABELS[0],
+    )!
+    unloadedWriter.loaded = true
+    unloadedWriter.instances = 1
+    unloadedWriter.pid = 999
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(accidentallyLoadedWriter),
+      /SQLITE_BUNDLE_WRITER_STATE_MISMATCH/,
+    )
+    const mismatchedTriggerRuntime = consumerAdmissionFixture(committed, normal.journalPath)
+    const triggerWriter = mismatchedTriggerRuntime.observedWriters.find(
+      (writer) => writer.label === 'com.stockboard.trigger-historical-scan',
+    )!
+    triggerWriter.pid = 998
+    triggerWriter.processGroupId = 998
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(mismatchedTriggerRuntime),
+      /SQLITE_BUNDLE_TRIGGER_RUNTIME_MISMATCH/,
+    )
+    const staleTriggerWriter = consumerAdmissionFixture(committed, normal.journalPath)
+    staleTriggerWriter.observedWriters.find(
+      (writer) => writer.label === 'com.stockboard.trigger-historical-scan',
+    )!.startedAt = '2026-11-01T00:00:00.000Z'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(staleTriggerWriter),
+      /SQLITE_BUNDLE_WRITER_STATE_MISMATCH:com.stockboard.trigger-historical-scan/,
+    )
+    const missingWriterObservation = consumerAdmissionFixture(committed, normal.journalPath)
+    missingWriterObservation.observedWriters = missingWriterObservation.observedWriters.slice(1)
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(missingWriterObservation),
+      /SQLITE_BUNDLE_WRITER_OBSERVATION_MISMATCH/,
+    )
     assert.throws(() => sealDurableReverseIntent({
       journalPath: normal.journalPath,
       updatedAt: '2026-11-01T00:00:06.000Z',
@@ -621,6 +846,19 @@ async function main(): Promise<void> {
     assert.equal(reversed.journal.phase, 'PRE_CONSUMER_REVERSED')
     assert.equal(reversed.position, 'OLD_ACTIVE')
     assert.equal(marker(reverse.active.path), 'reverse-old')
+    const restoredAdmission = assertAtomicBundleConsumerAdmission(
+      consumerAdmissionFixture(reversed, reverse.journalPath),
+    )
+    assert.equal(restoredAdmission.admission, 'RESTORED_OLD_GENERATION')
+    assert.equal(restoredAdmission.journalPhase, 'PRE_CONSUMER_REVERSED')
+    assert.equal(restoredAdmission.sourceGeneration, 'reverse-old-source')
+    assert.notEqual(restoredAdmission.manifestSha256, forwardAdmission.manifestSha256)
+    const staleReverseConsumer = consumerAdmissionFixture(reversed, reverse.journalPath)
+    staleReverseConsumer.observedConsumers[3].reportedDatabaseInode = 'reverse-new-inode'
+    assert.throws(
+      () => assertAtomicBundleConsumerAdmission(staleReverseConsumer),
+      /SQLITE_BUNDLE_CONSUMER_RUNTIME_MISMATCH:com.stockboard.trigger-historical-scan/,
+    )
     assert.throws(() => commitDurableAtomicBundleActivation({
       journalPath: reverse.journalPath,
       updatedAt: '2026-11-01T00:00:07.000Z',
@@ -1408,6 +1646,9 @@ async function main(): Promise<void> {
       reverseSidecars: 'WAL_SHM_REJECTED',
       byteIdentityHashMismatch: 'REJECTED_WITH_METADATA_REBOUND',
       serviceReconnect: 'OLD_BUNDLE_REOPENED_BY_WEB_ANALOG_TRIGGER_FIXTURE',
+      consumerAdmissionForward: 'COMMITTED_NEW_GENERATION_4_CONSUMERS_13_3_WRITERS',
+      consumerAdmissionReverse: 'PRE_CONSUMER_REVERSED_OLD_GENERATION_4_CONSUMERS_13_3_WRITERS',
+      generationReconciledAdmission: 'REJECTED_UNTIL_COMMITTED',
       ambiguous: 'FAIL_CLOSED_NO_AUTOMATIC_SWAP',
       fsyncFailure: 'PENDING_WRITE_INTENT_FAIL_CLOSED',
       recoveryApproval: 'HASH_CONTRACT_BOUND_AUTHORITY_WIRING_PENDING',
