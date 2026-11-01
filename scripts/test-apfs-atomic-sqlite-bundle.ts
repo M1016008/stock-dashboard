@@ -258,8 +258,19 @@ async function main(): Promise<void> {
     const reconciled = advanceAtomicBundleActivationJournal(
       swapped, 'GENERATION_RECONCILED', '2026-11-01T00:00:03.000Z',
     )
-    assertActiveBundlePublication({
+    assert.throws(() => assertActiveBundlePublication({
       journal: reconciled,
+      activeManifest: activeAfter,
+      candidateManifest: candidateAfter,
+      sourceGeneration: 'new-source',
+      servingGeneration: 'new-serving',
+      activeDatabaseHandleCount: 0,
+    }), /SQLITE_BUNDLE_PUBLICATION_NOT_RECONCILED/)
+    const committed = advanceAtomicBundleActivationJournal(
+      reconciled, 'COMMITTED', '2026-11-01T00:00:04.000Z',
+    )
+    assertActiveBundlePublication({
+      journal: committed,
       activeManifest: activeAfter,
       candidateManifest: candidateAfter,
       sourceGeneration: 'new-source',
@@ -267,7 +278,7 @@ async function main(): Promise<void> {
       activeDatabaseHandleCount: 0,
     })
     assert.throws(() => assertActiveBundlePublication({
-      journal: reconciled,
+      journal: committed,
       activeManifest: activeAfter,
       candidateManifest: candidateAfter,
       sourceGeneration: 'old-source',
@@ -275,7 +286,7 @@ async function main(): Promise<void> {
       activeDatabaseHandleCount: 0,
     }), /SQLITE_BUNDLE_PUBLICATION_NOT_RECONCILED/)
     assert.throws(() => assertActiveBundlePublication({
-      journal: reconciled,
+      journal: committed,
       activeManifest: activeAfter,
       candidateManifest: candidateAfter,
       sourceGeneration: 'new-source',

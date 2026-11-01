@@ -9,6 +9,7 @@ import {
   assertSqliteBundleManifest,
   assertSqliteBundleMetadata,
   classifyAtomicBundlePosition,
+  executeAtomicBundleReverseSwap,
   executeAtomicBundleSwap,
   readSqliteBundleManifest,
   sha256SqliteBundleFile,
@@ -669,6 +670,46 @@ export function assertDurableActivationGenerationConvergence(input: {
   }
 }
 
+export function assertDurablePreConsumerReverseGenerationConvergence(input: {
+  observation: DurableActivationObservation
+  sourceGeneration: string
+  servingGeneration: string
+  cacheGeneration: string
+}): void {
+  const { observation } = input
+  const oldReceipt = observation.activeManifest.manifestSha256 === observation.journal.oldManifestSha256
+    ? observation.activeReceipt
+    : observation.candidateManifest.manifestSha256 === observation.journal.oldManifestSha256
+      ? observation.candidateReceipt
+      : null
+  const phasePositionValid = (observation.journal.phase === 'REVERSE_INTENT'
+      && ['NEW_ACTIVE', 'OLD_ACTIVE'].includes(observation.position))
+    || (observation.journal.phase === 'PRE_CONSUMER_REVERSED' && observation.position === 'OLD_ACTIVE')
+  if (observation.durabilityIssues.length > 0 || !phasePositionValid
+    || oldReceipt === null
+    || oldReceipt.sourceGeneration !== input.sourceGeneration
+    || oldReceipt.servingGeneration !== input.servingGeneration
+    || oldReceipt.cacheGeneration !== input.cacheGeneration) {
+    throw new Error('SQLITE_BUNDLE_REVERSE_GENERATION_CONVERGENCE_MISMATCH')
+  }
+}
+
+function assertOldBundleByteIdentity(observation: DurableActivationObservation): void {
+  if (observation.activeManifest.manifestSha256 === observation.journal.oldManifestSha256) {
+    assertSqliteBundleIntegrityReceipt(
+      observation.journal.activePath, observation.activeManifest, { verifyByteIdentity: true },
+    )
+    return
+  }
+  if (observation.candidateManifest.manifestSha256 === observation.journal.oldManifestSha256) {
+    assertSqliteBundleIntegrityReceipt(
+      observation.journal.candidatePath, observation.candidateManifest, { verifyByteIdentity: true },
+    )
+    return
+  }
+  throw new Error('SQLITE_BUNDLE_OLD_BYTE_IDENTITY_AMBIGUOUS')
+}
+
 export function recordDurableGenerationReconciled(input: {
   journalPath: string
   updatedAt: string
@@ -841,6 +882,189 @@ export function executeDurableAtomicBundleSwap(input: {
   if (after.durabilityIssues.length > 0 || after.journal.phase !== 'SWAPPED'
     || after.position !== 'NEW_ACTIVE') {
     throw new Error('SQLITE_BUNDLE_DURABLE_SWAP_NOT_CONFIRMED')
+  }
+  return after
+}
+
+export function sealDurableReverseIntent(input: {
+  journalPath: string
+  updatedAt: string
+  observedSourceGeneration: string
+  observedServingGeneration: string
+  observedCacheGeneration: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (before.durabilityIssues.length > 0
+    || before.journal.phase !== 'SWAPPED'
+    || before.position !== 'NEW_ACTIVE'
+    || before.activeManifest.journalMode !== 'delete'
+    || before.activeManifest.wal !== null
+    || before.activeManifest.shm !== null
+    || before.candidateManifest.journalMode !== 'delete'
+    || before.candidateManifest.wal !== null
+    || before.candidateManifest.shm !== null) {
+    throw new Error('SQLITE_BUNDLE_DURABLE_REVERSE_INTENT_PRECONDITION_INVALID')
+  }
+  assertOldBundleByteIdentity(before)
+  const reverseView = { ...before, journal: { ...before.journal, phase: 'REVERSE_INTENT' as const } }
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: reverseView,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  input.assertReaderWriterBarrierValid()
+  const intent = advanceAtomicBundleActivationJournal(before.journal, 'REVERSE_INTENT', input.updatedAt)
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: intent,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: after,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  if (after.journal.phase !== 'REVERSE_INTENT' || after.position !== 'NEW_ACTIVE') {
+    throw new Error('SQLITE_BUNDLE_DURABLE_REVERSE_INTENT_NOT_CONFIRMED')
+  }
+  return after
+}
+
+export function executeDurableAtomicBundleReverse(input: {
+  journalPath: string
+  executablePath: string
+  executableSha256: string
+  timeoutMs: number
+  updatedAt: string
+  observedSourceGeneration: string
+  observedServingGeneration: string
+  observedCacheGeneration: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (before.durabilityIssues.length > 0 || before.journal.phase !== 'REVERSE_INTENT'
+    || before.position !== 'NEW_ACTIVE') {
+    throw new Error('SQLITE_BUNDLE_DURABLE_REVERSE_PRECONDITION_INVALID')
+  }
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: before,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  const reversed = advanceAtomicBundleActivationJournal(
+    before.journal, 'PRE_CONSUMER_REVERSED', input.updatedAt,
+  )
+  executeAtomicBundleReverseSwap({
+    journal: before.journal,
+    activeManifest: before.activeManifest,
+    candidateManifest: before.candidateManifest,
+    executablePath: input.executablePath,
+    executableSha256: input.executableSha256,
+    timeoutMs: input.timeoutMs,
+    assertReaderWriterBarrierValid: input.assertReaderWriterBarrierValid,
+  })
+  input.assertReaderWriterBarrierValid()
+  const afterSwap = inspectDurableAtomicBundleActivation({
+    journalPath: input.journalPath, verifyByteIdentity: false,
+  })
+  if (afterSwap.journal.phase !== 'REVERSE_INTENT' || afterSwap.position !== 'OLD_ACTIVE') {
+    throw new Error('SQLITE_BUNDLE_DURABLE_REVERSE_SWAP_NOT_CONFIRMED')
+  }
+  assertOldBundleByteIdentity(afterSwap)
+  input.assertReaderWriterBarrierValid()
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: afterSwap,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: reversed,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: after,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  if (after.journal.phase !== 'PRE_CONSUMER_REVERSED' || after.position !== 'OLD_ACTIVE') {
+    throw new Error('SQLITE_BUNDLE_DURABLE_REVERSE_NOT_CONFIRMED')
+  }
+  return after
+}
+
+export function recordDurableReverseObservedAfterRestart(input: {
+  journalPath: string
+  recoveryApproval: AtomicBundleRecoveryApproval
+  recoveryApprovalSha256: string
+  barrierReceiptSha256: string
+  observedSourceGeneration: string
+  observedServingGeneration: string
+  observedCacheGeneration: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (before.durabilityIssues.length > 0 || before.journal.phase !== 'REVERSE_INTENT'
+    || before.position !== 'OLD_ACTIVE' || before.journal.recoveryApprovalSha256 !== null) {
+    throw new Error('SQLITE_BUNDLE_REVERSE_RESTART_OBSERVATION_PRECONDITION_INVALID')
+  }
+  assertOldBundleByteIdentity(before)
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: before,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  const transitionAt = new Date().toISOString()
+  assertAtomicBundleRecoveryApproval({
+    approval: input.recoveryApproval,
+    approvalSha256: input.recoveryApprovalSha256,
+    journal: before.journal,
+    journalFileSha256: before.fileSha256,
+    activeIntegrityReceiptSha256: before.activeReceipt.receiptSha256,
+    barrierReceiptSha256: input.barrierReceiptSha256,
+    transitionAt,
+  })
+  input.assertReaderWriterBarrierValid()
+  const reversed = advanceAtomicBundleActivationJournal(
+    before.journal, 'PRE_CONSUMER_REVERSED', transitionAt,
+    { recoveryApprovalSha256: input.recoveryApprovalSha256 },
+  )
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: reversed,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  assertDurablePreConsumerReverseGenerationConvergence({
+    observation: after,
+    sourceGeneration: input.observedSourceGeneration,
+    servingGeneration: input.observedServingGeneration,
+    cacheGeneration: input.observedCacheGeneration,
+  })
+  if (after.journal.phase !== 'PRE_CONSUMER_REVERSED' || after.position !== 'OLD_ACTIVE'
+    || after.journal.recoveryApprovalSha256 !== input.recoveryApprovalSha256) {
+    throw new Error('SQLITE_BUNDLE_REVERSE_RESTART_OBSERVATION_NOT_CONFIRMED')
   }
   return after
 }

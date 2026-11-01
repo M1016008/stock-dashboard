@@ -5,7 +5,9 @@ const SHA256 = /^[a-f0-9]{64}$/
 
 export type AtomicBundleRecoveryApproval = {
   version: 1
-  action: 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP'
+  action:
+    | 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP'
+    | 'RECORD_OBSERVED_OLD_ACTIVE_AFTER_REVERSE_WITHOUT_SWAP'
   transactionId: string
   journalSha256: string
   journalFileSha256: string
@@ -13,7 +15,7 @@ export type AtomicBundleRecoveryApproval = {
   newManifestSha256: string
   activeIntegrityReceiptSha256: string
   barrierReceiptSha256: string
-  allowedTransition: 'SWAP_INTENT_TO_SWAPPED'
+  allowedTransition: 'SWAP_INTENT_TO_SWAPPED' | 'REVERSE_INTENT_TO_PRE_CONSUMER_REVERSED'
   automaticSwapAllowed: false
   automaticSwapBackAllowed: false
   issuedAt: string
@@ -45,9 +47,20 @@ export function assertAtomicBundleRecoveryApproval(input: {
   const expiresAt = Date.parse(approval.expiresAt)
   const now = Date.now()
   const transitionAt = Date.parse(input.transitionAt)
+  const expectedTransition = approval.action === 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP'
+    ? 'SWAP_INTENT_TO_SWAPPED'
+    : approval.action === 'RECORD_OBSERVED_OLD_ACTIVE_AFTER_REVERSE_WITHOUT_SWAP'
+      ? 'REVERSE_INTENT_TO_PRE_CONSUMER_REVERSED'
+      : null
+  const expectedJournalPhase = approval.action === 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP'
+    ? 'SWAP_INTENT'
+    : approval.action === 'RECORD_OBSERVED_OLD_ACTIVE_AFTER_REVERSE_WITHOUT_SWAP'
+      ? 'REVERSE_INTENT'
+      : null
   if (approval.version !== 1
     || JSON.stringify(Object.keys(approval).sort()) !== JSON.stringify(expectedKeys)
-    || approval.action !== 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP'
+    || expectedTransition === null
+    || journal.phase !== expectedJournalPhase
     || approval.transactionId !== journal.transactionId
     || approval.journalSha256 !== journal.journalSha256
     || approval.journalFileSha256 !== input.journalFileSha256
@@ -55,7 +68,7 @@ export function assertAtomicBundleRecoveryApproval(input: {
     || approval.newManifestSha256 !== journal.newManifestSha256
     || approval.activeIntegrityReceiptSha256 !== input.activeIntegrityReceiptSha256
     || approval.barrierReceiptSha256 !== input.barrierReceiptSha256
-    || approval.allowedTransition !== 'SWAP_INTENT_TO_SWAPPED'
+    || approval.allowedTransition !== expectedTransition
     || approval.automaticSwapAllowed !== false
     || approval.automaticSwapBackAllowed !== false
     || !SHA256.test(input.approvalSha256)
