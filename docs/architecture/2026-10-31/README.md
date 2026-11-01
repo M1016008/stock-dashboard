@@ -82,6 +82,7 @@ Phase 2 stacked drafts:
 - `jp-ohlcv-production-bootstrap-and-corporate-action.md`
 - `phase2-pr-k-p0-scale-evidence.md`
 - `phase2-pr-k-claude-review.md`
+- `ADR-jp-candidate-atomic-activation.md`
 
 ## Implementation sequence
 
