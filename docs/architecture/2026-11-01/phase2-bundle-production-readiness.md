@@ -212,12 +212,46 @@ successful directory swap.
     only declare the operation complete after every Reader, Cache and writer
     state matches the Package and the convergence Receipt.
 
-The existing primitive has no swap-back path. A swap-back before any Reader or
-writer opens the newly active Bundle is only a design intent that would require
-an approved Journal transition and isolated proof. Once consumers start, the
-active bytes and journal mode can change. Pre-Reader and post-reconnect
-swap-back therefore both remain Production P0/HOLD; no automatic swap-back is
-claimed by this design.
+PR #50 added a pre-consumer reverse path to the same activation Journal. It is
+limited to `SWAPPED -> REVERSE_INTENT -> PRE_CONSUMER_REVERSED`, requires the
+old Bundle byte identity, old Source/Serving/Cache generations, no WAL/SHM and
+the continuous Reader/Writer barrier, and never retries a swap automatically.
+`COMMITTED` is the irreversible Consumer Admission boundary. Reverse from
+`GENERATION_RECONCILED` or `COMMITTED` is rejected. A post-consumer swap-back
+therefore remains prohibited rather than being presented as Recovery.
+
+The isolated Consumer Admission contract binds `COMMITTED` to the new Bundle
+and `PRE_CONSUMER_REVERSED` to the old Bundle. Before any Consumer starts, it
+checks Manifest/Receipt metadata under the existing barrier; byte identity is
+inherited from the earlier full-integrity Receipt rather than rehashed at this
+boundary. It then issues a 15-minute Permit. After startup it rereads the
+unchanged Journal and compares Web, Analog, Gateway and Trigger process
+identities, the active DB
+inode and exact Source/Serving/Cache generations with that Permit. Trigger is
+also cross-bound to its writer record, and the final observation requires the
+13-loaded/3-unloaded launchd state; periodic loaded jobs may be idle without a
+PID, while the active Trigger PID must match both records. This split is
+necessary because legitimate Web startup may create WAL/SHM after the
+pre-start metadata proof. The synthetic
+fixture exercises the contract, including that post-Permit sidecar case; it
+does not constitute live process or Package-authority evidence. Current
+Production health responses do not expose all required identities and the
+Permit is not sealed by a Production Package. Post-start DB and Generation
+fields are therefore observations checked against the Permit, not independently
+re-derived authority. Production remains `HOLD`.
+
+## Reader availability during Candidate validation
+
+Keeping the old site online does not currently mean keeping the old DB bytes
+immutable. Web initializes the shared client by inspecting and, when needed,
+setting `journal_mode=WAL`; Dashboard cache misses write `dashboard_cache` in
+the primary DB, while API routes also write a sibling serving-cache DB. Trigger
+owns job, lock and result-table write paths. Analog is query-only, and Gateway
+proxies Web, but the four-service publication surface cannot be classified as
+read-only as a unit. Consequently the proposed three-hour
+Reader-online interval cannot satisfy the no-WAL/no-cache/no-Generation-drift
+Candidate boundary without a separately proven read-only serving target. It
+remains `HOLD`; this change does not add such a target or extend the Journal.
 
 ### Remaining admission limit
 
@@ -234,7 +268,7 @@ This document does not weaken the prior fail-closed rule.
 | Production blocker | Before | Current result | Status |
 | --- | --- | --- | --- |
 | OWC capacity / Retention | no approved release candidate | exact prewrite-only candidate and encrypted destination identified | `HOLD`; no bytes reclaimed and no operation authorized |
-| 19-agent Bundle migration | direct path inventory only | exact live state and minimal reconnect order fixed | `HOLD`; identity migration and post-reconnect rollback are unimplemented |
+| 19-agent Bundle migration | direct path inventory only | exact live state, reconnect order and isolated Consumer Admission contract fixed | `HOLD`; sealed identity migration and live Runtime generation/inode responses are unimplemented |
 | Source/Serving/Cache convergence | static map | unchanged | `HOLD` |
 | Full derived rebuild and 12-hour abnormal path | limited scale evidence | old-Bundle plus Candidate integrity proofs expose a second full-verification budget conflict | `HOLD` |
 | 4,061 Price Basis / Corporate Action | target-day adjusted pairs verified | unchanged; later factor chain and `8105` cause unresolved | `HOLD` |
