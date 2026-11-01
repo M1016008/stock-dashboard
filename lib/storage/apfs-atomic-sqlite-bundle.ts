@@ -41,6 +41,7 @@ export type AtomicBundleActivationJournal = {
   candidatePath: string
   oldManifestSha256: string
   newManifestSha256: string
+  recoveryApprovalSha256: string | null
   phase: 'PREPARED' | 'SWAP_INTENT' | 'SWAPPED' | 'GENERATION_RECONCILED' | 'COMMITTED' | 'HOLD'
   createdAt: string
   updatedAt: string
@@ -235,12 +236,13 @@ export function assertSqliteBundleMetadata(bundlePath: string, manifest: SqliteB
 
 export function createAtomicBundleActivationJournal(input: Omit<
   AtomicBundleActivationJournal,
-  'version' | 'kind' | 'phase' | 'journalSha256'
+  'version' | 'kind' | 'recoveryApprovalSha256' | 'phase' | 'journalSha256'
 >): AtomicBundleActivationJournal {
   const body = {
     version: 1 as const,
     kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const,
     ...input,
+    recoveryApprovalSha256: null,
     phase: 'PREPARED' as const,
   }
   const journal = { ...body, journalSha256: stableSha256(body) }
@@ -252,6 +254,7 @@ export function advanceAtomicBundleActivationJournal(
   current: AtomicBundleActivationJournal,
   phase: Exclude<AtomicBundleActivationJournal['phase'], 'PREPARED'>,
   updatedAt: string,
+  options?: { recoveryApprovalSha256?: string },
 ): AtomicBundleActivationJournal {
   assertAtomicBundleActivationJournal(current)
   const allowed: Record<AtomicBundleActivationJournal['phase'], AtomicBundleActivationJournal['phase'][]> = {
@@ -266,7 +269,15 @@ export function advanceAtomicBundleActivationJournal(
     throw new Error(`SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID:${current.phase}:${phase}`)
   }
   const { version: _version, kind: _kind, journalSha256: _journalSha256, phase: _phase, ...input } = current
-  const body = { version: 1 as const, kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const, ...input, phase, updatedAt }
+  const recoveryApprovalSha256 = options?.recoveryApprovalSha256 ?? current.recoveryApprovalSha256
+  const body = {
+    version: 1 as const,
+    kind: 'JP_OHLCV_ATOMIC_BUNDLE_ACTIVATION' as const,
+    ...input,
+    recoveryApprovalSha256,
+    phase,
+    updatedAt,
+  }
   const next = { ...body, journalSha256: stableSha256(body) }
   assertAtomicBundleActivationJournal(next)
   return next
@@ -280,6 +291,7 @@ export function assertAtomicBundleActivationJournal(journal: AtomicBundleActivat
     || journal.activePath === journal.candidatePath || !SHA256.test(journal.oldManifestSha256)
     || !SHA256.test(journal.newManifestSha256)
     || journal.oldManifestSha256 === journal.newManifestSha256
+    || (journal.recoveryApprovalSha256 !== null && !SHA256.test(journal.recoveryApprovalSha256))
     || !['PREPARED', 'SWAP_INTENT', 'SWAPPED', 'GENERATION_RECONCILED', 'COMMITTED', 'HOLD'].includes(journal.phase)
     || !Number.isFinite(Date.parse(journal.createdAt)) || !Number.isFinite(Date.parse(journal.updatedAt))
     || Date.parse(journal.updatedAt) < Date.parse(journal.createdAt)

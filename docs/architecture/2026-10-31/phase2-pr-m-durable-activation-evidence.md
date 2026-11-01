@@ -25,9 +25,11 @@ outside Git under `.audit/`; no Production or OWC file is created.
 - fresh-process restart classification;
 - SIGKILL before helper: `OLD_ACTIVE`;
 - SIGKILL after helper and before `SWAPPED`: `NEW_ACTIVE`;
+- approval-hash-bound recording of observed post-swap state without re-swapping;
 - helper timeout: `OLD_ACTIVE`;
 - fsync failure: pending evidence retained and execution rejected;
 - concurrent/stale journal writer rejected by lock-before-CAS;
+- initial no-replace collision and stale transition CAS rejected;
 - corrupt journal, manifest and integrity receipt rejected;
 - corrupt full-`quick_check` receipt rejected;
 - missing receipt rejected;
@@ -63,7 +65,8 @@ runtime and Reader/cache generation convergence remain P1.
 | Gate | Result |
 | --- | --- |
 | Durable journal software-crash contract | `VERIFIED` at isolated fixture scale |
-| Restart old/new/ambiguous classification | `VERIFIED` |
+| Restart old/new/ambiguous classification | `VERIFIED` detection at fixture scale |
+| Post-swap restart transition | `VERIFIED` only with explicit approval hash; no automatic swap |
 | Integrity receipt and byte-identity boundary | `VERIFIED` at fixture scale |
 | Concurrent journal mutation | `VERIFIED` fail-closed at fixture scale |
 | Production path compatibility | `HOLD`; requires approved path migration |
@@ -74,10 +77,12 @@ runtime and Reader/cache generation convergence remain P1.
 | Price Basis, Coverage bootstrap, running Run recovery | unchanged P1 |
 
 Restart support classifies `OLD_ACTIVE`, `NEW_ACTIVE`, or `AMBIGUOUS`; it does
-not choose an automatic swap or swap-back. Normal durable transitions now reach
+not choose an automatic swap or swap-back. `SWAP_INTENT + NEW_ACTIVE` can be
+recorded as `SWAPPED` only after full byte verification and with an explicit
+approval hash sealed into the journal. Normal durable transitions reach
 `GENERATION_RECONCILED` and `COMMITTED` only after caller-supplied generation
-observations match the active receipt. Operator-approved abnormal restart action
-remains a P1 design item before Production use.
+observations match the active receipt. The Production approval object and
+operator procedure remain P1 before Production use.
 
 The software fault-injection test runs immediately before a directory `fsync`;
 actual syscall/media failure and physical power loss are not reproduced.

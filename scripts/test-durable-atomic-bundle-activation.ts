@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  advanceAtomicBundleActivationJournal,
   createAtomicBundleActivationJournal,
   createSqliteBundleManifest,
   readSqliteBundleManifest,
@@ -23,6 +24,7 @@ import {
   persistSqliteBundleManifest,
   readDurableActivationJournal,
   recordDurableGenerationReconciled,
+  recordDurableSwapObservedAfterRestart,
   sealDurableSwapIntent,
 } from '@/lib/storage/durable-atomic-bundle-activation'
 import { stableSha256 } from '@/lib/jp-ohlcv-data-quality'
@@ -293,6 +295,22 @@ async function main(): Promise<void> {
       durabilityIssues: [],
       activeCacheGeneration: 'normal-new-cache',
     })
+    assert.throws(() => commitDurableAtomicBundleActivation({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'normal-new-source',
+      observedServingGeneration: 'normal-new-serving',
+      observedCacheGeneration: 'normal-new-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_COMMIT_PHASE_INVALID/)
+    assert.throws(() => recordDurableGenerationReconciled({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'normal-new-source',
+      observedServingGeneration: 'normal-new-serving',
+      observedCacheGeneration: 'stale-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_GENERATION_CONVERGENCE_MISMATCH/)
     const reconciled = recordDurableGenerationReconciled({
       journalPath: normal.journalPath,
       updatedAt: '2026-11-01T00:00:04.000Z',
@@ -302,6 +320,15 @@ async function main(): Promise<void> {
       assertReaderWriterBarrierValid: () => { barrierChecks += 1 },
     })
     assert.equal(reconciled.journal.phase, 'GENERATION_RECONCILED')
+    assert.equal(inspectInFreshProcess(script, normal.journalPath).phase, 'GENERATION_RECONCILED')
+    assert.throws(() => commitDurableAtomicBundleActivation({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'normal-new-source',
+      observedServingGeneration: 'normal-new-serving',
+      observedCacheGeneration: 'stale-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_GENERATION_CONVERGENCE_MISMATCH/)
     const committed = commitDurableAtomicBundleActivation({
       journalPath: normal.journalPath,
       updatedAt: '2026-11-01T00:00:05.000Z',
@@ -355,6 +382,36 @@ async function main(): Promise<void> {
     assert.equal(afterCrashRestart.phase, 'SWAP_INTENT')
     assert.equal(afterCrashRestart.position, 'NEW_ACTIVE')
     assert.deepEqual(afterCrashRestart.durabilityIssues, [])
+    assert.throws(() => executeDurableAtomicBundleSwap({
+      journalPath: afterCrash.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_SWAP_PRECONDITION_INVALID/)
+    assert.throws(() => recordDurableGenerationReconciled({
+      journalPath: afterCrash.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'after-crash-new-source',
+      observedServingGeneration: 'after-crash-new-serving',
+      observedCacheGeneration: 'after-crash-new-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_GENERATION_RECONCILE_PHASE_INVALID/)
+    assert.throws(() => recordDurableSwapObservedAfterRestart({
+      journalPath: afterCrash.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      recoveryApprovalSha256: 'invalid',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_INVALID/)
+    const restartRecorded = recordDurableSwapObservedAfterRestart({
+      journalPath: afterCrash.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      recoveryApprovalSha256: 'a'.repeat(64),
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.equal(restartRecorded.journal.phase, 'SWAPPED')
+    assert.equal(restartRecorded.journal.recoveryApprovalSha256, 'a'.repeat(64))
 
     const timeout = setupActivation(root, 'timeout')
     sealDurableSwapIntent({
@@ -421,6 +478,23 @@ async function main(): Promise<void> {
       updatedAt: '2026-11-01T00:00:03.000Z',
       assertReaderWriterBarrierValid: () => {},
     }), /SQLITE_BUNDLE_DURABLE_SWAP_INTENT_PRECONDITION_INVALID/)
+
+    const staleCas = setupActivation(root, 'stale-cas')
+    assert.throws(() => sealDurableSwapIntent({
+      journalPath: staleCas.journalPath,
+      updatedAt: '2026-11-01T00:00:02.000Z',
+      assertReaderWriterBarrierValid: () => {},
+      checkpoint: (checkpoint) => {
+        if (checkpoint !== 'PENDING_LOCK_ACQUIRED') return
+        const current = readDurableActivationJournal(staleCas.journalPath).journal
+        const displaced = advanceAtomicBundleActivationJournal(
+          current, 'HOLD', '2026-11-01T00:00:01.500Z',
+        )
+        fs.writeFileSync(staleCas.journalPath, `${JSON.stringify(displaced, null, 2)}\n`)
+      },
+    }), /SQLITE_BUNDLE_DURABLE_JOURNAL_CAS_MISMATCH/)
+    assert.equal(fs.existsSync(`${staleCas.journalPath}.pending`), false)
+    assert.equal(readDurableActivationJournal(staleCas.journalPath).journal.phase, 'HOLD')
 
     const initialLockRoot = path.join(root, 'initial-lock-state')
     fs.mkdirSync(initialLockRoot)
@@ -556,6 +630,7 @@ async function main(): Promise<void> {
       durableSwapIntentBeforeSwap: 'FSYNCED_AND_READ_BACK',
       crashBeforeSwap: 'OLD_ACTIVE',
       crashAfterSwap: 'NEW_ACTIVE',
+      crashAfterSwapRecovery: 'APPROVAL_HASH_BOUND_SWAPPED',
       ambiguous: 'FAIL_CLOSED_NO_AUTOMATIC_SWAP',
       fsyncFailure: 'PENDING_WRITE_INTENT_FAIL_CLOSED',
       concurrentJournalWriter: 'EXCLUSIVE_PENDING_LOCK_AND_NO_REPLACE',

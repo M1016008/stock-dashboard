@@ -188,6 +188,9 @@ function durableReplaceJournal(input: {
         current,
         input.journal.phase as Exclude<AtomicBundleActivationJournal['phase'], 'PREPARED'>,
         input.journal.updatedAt,
+        input.journal.recoveryApprovalSha256 === current.recoveryApprovalSha256
+          ? undefined
+          : { recoveryApprovalSha256: input.journal.recoveryApprovalSha256 ?? '' },
       )
       if (expected.journalSha256 !== input.journal.journalSha256) {
         throw new Error('SQLITE_BUNDLE_DURABLE_TRANSITION_MISMATCH')
@@ -602,6 +605,42 @@ export function executeDurableAtomicBundleSwap(input: {
   if (after.durabilityIssues.length > 0 || after.journal.phase !== 'SWAPPED'
     || after.position !== 'NEW_ACTIVE') {
     throw new Error('SQLITE_BUNDLE_DURABLE_SWAP_NOT_CONFIRMED')
+  }
+  return after
+}
+
+export function recordDurableSwapObservedAfterRestart(input: {
+  journalPath: string
+  updatedAt: string
+  recoveryApprovalSha256: string
+  assertReaderWriterBarrierValid: () => void
+  checkpoint?: (checkpoint: DurableActivationWriteCheckpoint) => void
+}): DurableActivationObservation {
+  if (!SHA256.test(input.recoveryApprovalSha256)) {
+    throw new Error('SQLITE_BUNDLE_RECOVERY_APPROVAL_INVALID')
+  }
+  input.assertReaderWriterBarrierValid()
+  const before = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: true })
+  if (before.durabilityIssues.length > 0 || before.journal.phase !== 'SWAP_INTENT'
+    || before.position !== 'NEW_ACTIVE' || before.journal.recoveryApprovalSha256 !== null) {
+    throw new Error('SQLITE_BUNDLE_RESTART_OBSERVATION_PRECONDITION_INVALID')
+  }
+  input.assertReaderWriterBarrierValid()
+  const swapped = advanceAtomicBundleActivationJournal(before.journal, 'SWAPPED', input.updatedAt, {
+    recoveryApprovalSha256: input.recoveryApprovalSha256,
+  })
+  persistDurableActivationTransition({
+    journalPath: input.journalPath,
+    previousJournalSha256: before.journal.journalSha256,
+    journal: swapped,
+    checkpoint: input.checkpoint,
+  })
+  input.assertReaderWriterBarrierValid()
+  const after = inspectDurableAtomicBundleActivation({ journalPath: input.journalPath, verifyByteIdentity: false })
+  if (after.durabilityIssues.length > 0 || after.journal.phase !== 'SWAPPED'
+    || after.position !== 'NEW_ACTIVE'
+    || after.journal.recoveryApprovalSha256 !== input.recoveryApprovalSha256) {
+    throw new Error('SQLITE_BUNDLE_RESTART_OBSERVATION_NOT_CONFIRMED')
   }
   return after
 }

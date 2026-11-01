@@ -26,8 +26,11 @@ publication.
 
 After restart, the durable journal and the two on-disk manifests classify the
 filesystem as `OLD_ACTIVE`, `NEW_ACTIVE` or `AMBIGUOUS`. Classification is
-read-only. It never invokes swap or changes a journal. `AMBIGUOUS`, corrupt
-evidence and partial evidence remain operator-approved HOLD states.
+read-only. It never invokes swap. A `SWAP_INTENT + NEW_ACTIVE` observation can
+advance to `SWAPPED` only through the dedicated restart-recording function,
+after full byte verification and with an explicit SHA-256 approval sealed in
+the journal. `AMBIGUOUS`, corrupt evidence and partial evidence remain HOLD
+states and cannot invoke automatic swap or swap-back.
 
 ## Integrity boundary
 
@@ -58,10 +61,10 @@ integrity receipt and its package-level executable/measurement evidence.
 | Failure point | Restart classification | Automatic action |
 | --- | --- | --- |
 | before helper invocation | `OLD_ACTIVE` | none |
-| after helper returns, before `SWAPPED` persistence | `NEW_ACTIVE` with journal at `SWAP_INTENT` | none |
+| after helper returns, before `SWAPPED` persistence | `NEW_ACTIVE` with journal at `SWAP_INTENT` | approval-bound observation record only; no swap |
 | helper timeout before swap | `OLD_ACTIVE` | none |
 | journal fsync/directory sync failure | pending artifact, HOLD | none |
-| concurrent or stale journal writer | exclusive pending lock/CAS rejection | none |
+| concurrent or stale journal writer | pending lock, no-replace or CAS rejection | none |
 | missing/corrupt journal, manifest or receipt | fail closed | none |
 | both paths do not match sealed old/new manifests | `AMBIGUOUS` | none |
 
