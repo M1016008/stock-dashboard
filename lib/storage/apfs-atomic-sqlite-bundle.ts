@@ -42,7 +42,15 @@ export type AtomicBundleActivationJournal = {
   oldManifestSha256: string
   newManifestSha256: string
   recoveryApprovalSha256: string | null
-  phase: 'PREPARED' | 'SWAP_INTENT' | 'SWAPPED' | 'GENERATION_RECONCILED' | 'COMMITTED' | 'HOLD'
+  phase:
+    | 'PREPARED'
+    | 'SWAP_INTENT'
+    | 'SWAPPED'
+    | 'GENERATION_RECONCILED'
+    | 'REVERSE_INTENT'
+    | 'PRE_CONSUMER_REVERSED'
+    | 'COMMITTED'
+    | 'HOLD'
   createdAt: string
   updatedAt: string
   journalSha256: string
@@ -53,6 +61,8 @@ export const ATOMIC_BUNDLE_ACTIVATION_PHASES: AtomicBundleActivationJournal['pha
   'SWAP_INTENT',
   'SWAPPED',
   'GENERATION_RECONCILED',
+  'REVERSE_INTENT',
+  'PRE_CONSUMER_REVERSED',
   'COMMITTED',
   'HOLD',
 ]
@@ -269,8 +279,10 @@ export function advanceAtomicBundleActivationJournal(
   const allowed: Record<AtomicBundleActivationJournal['phase'], AtomicBundleActivationJournal['phase'][]> = {
     PREPARED: ['SWAP_INTENT', 'HOLD'],
     SWAP_INTENT: ['SWAPPED', 'HOLD'],
-    SWAPPED: ['GENERATION_RECONCILED', 'HOLD'],
+    SWAPPED: ['GENERATION_RECONCILED', 'REVERSE_INTENT', 'HOLD'],
     GENERATION_RECONCILED: ['COMMITTED', 'HOLD'],
+    REVERSE_INTENT: ['PRE_CONSUMER_REVERSED', 'HOLD'],
+    PRE_CONSUMER_REVERSED: [],
     COMMITTED: [],
     HOLD: [],
   }
@@ -341,7 +353,7 @@ export function assertActiveBundlePublication(input: {
     throw new Error('SQLITE_BUNDLE_ON_DISK_MANIFEST_MISMATCH')
   }
   const position = classifyAtomicBundlePosition(input)
-  if (!['GENERATION_RECONCILED', 'COMMITTED'].includes(input.journal.phase)
+  if (input.journal.phase !== 'COMMITTED'
     || position !== 'NEW_ACTIVE' || input.activeDatabaseHandleCount !== 0
     || input.sourceGeneration !== input.activeManifest.sourceGeneration
     || input.servingGeneration !== input.activeManifest.servingGeneration) {
@@ -349,7 +361,7 @@ export function assertActiveBundlePublication(input: {
   }
 }
 
-export function executeAtomicBundleSwap(input: {
+type AtomicBundleSwapInput = {
   journal: AtomicBundleActivationJournal
   activeManifest: SqliteBundleManifest
   candidateManifest: SqliteBundleManifest
@@ -357,16 +369,30 @@ export function executeAtomicBundleSwap(input: {
   executableSha256: string
   timeoutMs: number
   assertReaderWriterBarrierValid: () => void
-}): { elapsedMs: number; position: 'NEW_ACTIVE' } {
+}
+
+function executeAtomicBundlePositionSwap(
+  input: AtomicBundleSwapInput,
+  contract: {
+    phase: 'SWAP_INTENT' | 'REVERSE_INTENT'
+    before: 'OLD_ACTIVE' | 'NEW_ACTIVE'
+    after: 'OLD_ACTIVE' | 'NEW_ACTIVE'
+    sidecarFree: 'candidate' | 'both'
+    errorPrefix: 'SQLITE_BUNDLE_SWAP' | 'SQLITE_BUNDLE_REVERSE'
+  },
+): { elapsedMs: number; position: 'OLD_ACTIVE' | 'NEW_ACTIVE' } {
   assertAtomicBundleActivationJournal(input.journal)
-  if (input.journal.phase !== 'SWAP_INTENT'
-    || classifyAtomicBundlePosition(input) !== 'OLD_ACTIVE'
+  const activeMustBeSidecarFree = contract.sidecarFree === 'both'
+  if (input.journal.phase !== contract.phase
+    || classifyAtomicBundlePosition(input) !== contract.before
     || input.candidateManifest.journalMode !== 'delete'
     || input.candidateManifest.wal !== null
     || input.candidateManifest.shm !== null
+    || (activeMustBeSidecarFree && (input.activeManifest.journalMode !== 'delete'
+      || input.activeManifest.wal !== null || input.activeManifest.shm !== null))
     || !SHA256.test(input.executableSha256)
     || !Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
-    throw new Error('SQLITE_BUNDLE_SWAP_PRECONDITION_INVALID')
+    throw new Error(`${contract.errorPrefix}_PRECONDITION_INVALID`)
   }
   assertSqliteBundleMetadata(input.journal.activePath, input.activeManifest)
   assertSqliteBundleMetadata(input.journal.candidatePath, input.candidateManifest)
@@ -380,7 +406,7 @@ export function executeAtomicBundleSwap(input: {
     || (executable.mode & 0o111) === 0 || (executable.mode & 0o022) !== 0
     || (executable.uid !== 0 && executable.uid !== (process.getuid?.() ?? -1))
     || sha256SqliteBundleFile(input.executablePath) !== input.executableSha256) {
-    throw new Error('SQLITE_BUNDLE_SWAP_EXECUTABLE_INVALID')
+    throw new Error(`${contract.errorPrefix}_EXECUTABLE_INVALID`)
   }
   input.assertReaderWriterBarrierValid()
   const started = Date.now()
@@ -392,15 +418,41 @@ export function executeAtomicBundleSwap(input: {
     env: { NODE_ENV: process.env.NODE_ENV ?? 'production', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
   })
   if (result.error || result.status !== 0) {
-    throw new Error(`SQLITE_BUNDLE_SWAP_FAILED:${result.status}:${result.signal}:${result.error?.message ?? result.stderr.trim()}`)
+    throw new Error(`${contract.errorPrefix}_FAILED:${result.status}:${result.signal}:${result.error?.message ?? result.stderr.trim()}`)
   }
   input.assertReaderWriterBarrierValid()
   const activeManifest = readSqliteBundleManifest(input.journal.activePath)
   const candidateManifest = readSqliteBundleManifest(input.journal.candidatePath)
   assertSqliteBundleMetadata(input.journal.activePath, activeManifest)
   assertSqliteBundleMetadata(input.journal.candidatePath, candidateManifest)
-  if (classifyAtomicBundlePosition({ journal: input.journal, activeManifest, candidateManifest }) !== 'NEW_ACTIVE') {
-    throw new Error('SQLITE_BUNDLE_SWAP_POSTCONDITION_INVALID')
+  if (classifyAtomicBundlePosition({ journal: input.journal, activeManifest, candidateManifest }) !== contract.after) {
+    throw new Error(`${contract.errorPrefix}_POSTCONDITION_INVALID`)
   }
-  return { elapsedMs: Date.now() - started, position: 'NEW_ACTIVE' }
+  return { elapsedMs: Date.now() - started, position: contract.after }
+}
+
+export function executeAtomicBundleSwap(input: AtomicBundleSwapInput): {
+  elapsedMs: number
+  position: 'NEW_ACTIVE'
+} {
+  return executeAtomicBundlePositionSwap(input, {
+    phase: 'SWAP_INTENT',
+    before: 'OLD_ACTIVE',
+    after: 'NEW_ACTIVE',
+    sidecarFree: 'candidate',
+    errorPrefix: 'SQLITE_BUNDLE_SWAP',
+  }) as { elapsedMs: number; position: 'NEW_ACTIVE' }
+}
+
+export function executeAtomicBundleReverseSwap(input: AtomicBundleSwapInput): {
+  elapsedMs: number
+  position: 'OLD_ACTIVE'
+} {
+  return executeAtomicBundlePositionSwap(input, {
+    phase: 'REVERSE_INTENT',
+    before: 'NEW_ACTIVE',
+    after: 'OLD_ACTIVE',
+    sidecarFree: 'both',
+    errorPrefix: 'SQLITE_BUNDLE_REVERSE',
+  }) as { elapsedMs: number; position: 'OLD_ACTIVE' }
 }

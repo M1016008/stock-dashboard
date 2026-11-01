@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   advanceAtomicBundleActivationJournal,
+  assertSqliteBundleManifest,
   createAtomicBundleActivationJournal,
   createSqliteBundleManifest,
   readSqliteBundleManifest,
@@ -18,6 +19,7 @@ import {
   classifyDurableActivationArtifacts,
   commitDurableAtomicBundleActivation,
   createSqliteBundleIntegrityReceipt,
+  executeDurableAtomicBundleReverse,
   executeDurableAtomicBundleSwap,
   inspectDurableAtomicBundleActivation,
   persistInitialDurableActivationJournal,
@@ -26,7 +28,9 @@ import {
   persistSqliteBundleManifest,
   readDurableActivationJournal,
   recordDurableGenerationReconciled,
+  recordDurableReverseObservedAfterRestart,
   recordDurableSwapObservedAfterRestart,
+  sealDurableReverseIntent,
   sealDurableSwapIntent,
 } from '@/lib/storage/durable-atomic-bundle-activation'
 import {
@@ -144,6 +148,39 @@ function createSealedBundle(
   return { path: bundlePath, manifest }
 }
 
+function mutateBundleBytesAndRebindMetadataWithoutHash(
+  bundlePath: string,
+  manifest: SqliteBundleManifest,
+): SqliteBundleManifest {
+  const databasePath = path.join(bundlePath, 'stockboard.db')
+  const descriptor = fs.openSync(databasePath, 'r+')
+  try {
+    const stat = fs.fstatSync(descriptor)
+    const byte = Buffer.alloc(1)
+    fs.readSync(descriptor, byte, 0, 1, stat.size - 1)
+    byte[0] ^= 0xff
+    fs.writeSync(descriptor, byte, 0, 1, stat.size - 1)
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  const stat = fs.lstatSync(databasePath, { bigint: true })
+  const { manifestSha256: _manifestSha256, ...body } = {
+    ...manifest,
+    database: {
+      ...manifest.database,
+      device: String(stat.dev),
+      inode: String(stat.ino),
+      sizeBytes: Number(stat.size),
+      mtimeNs: String(stat.mtimeNs),
+      ctimeNs: String(stat.ctimeNs),
+    },
+  }
+  const rebound = { ...body, manifestSha256: stableSha256(body) }
+  fs.writeFileSync(path.join(bundlePath, 'bundle.json'), `${JSON.stringify(rebound, null, 2)}\n`)
+  return rebound
+}
+
 function createPreparedJournal(input: {
   journalPath: string
   active: { path: string; manifest: SqliteBundleManifest }
@@ -179,6 +216,26 @@ function setupActivation(root: string, prefix: string): {
   const journalPath = path.join(state, 'activation.json')
   createPreparedJournal({ journalPath, active, candidate })
   return { active, candidate, journalPath }
+}
+
+function forwardToSwapped(input: {
+  journalPath: string
+  executablePath: string
+  executableSha256: string
+}): ReturnType<typeof executeDurableAtomicBundleSwap> {
+  sealDurableSwapIntent({
+    journalPath: input.journalPath,
+    updatedAt: '2026-11-01T00:00:02.000Z',
+    assertReaderWriterBarrierValid: () => {},
+  })
+  return executeDurableAtomicBundleSwap({
+    journalPath: input.journalPath,
+    executablePath: input.executablePath,
+    executableSha256: input.executableSha256,
+    timeoutMs: 30_000,
+    updatedAt: '2026-11-01T00:00:03.000Z',
+    assertReaderWriterBarrierValid: () => {},
+  })
 }
 
 function marker(bundlePath: string): string {
@@ -232,6 +289,32 @@ function restartApproval(input: {
     issuedAt: input.issuedAt ?? new Date(now.getTime() - 1_000).toISOString(),
     expiresAt: input.expiresAt ?? new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
     reason: 'Record a byte-verified NEW_ACTIVE observation after restart without invoking swap.',
+  }
+  return { approval, approvalSha256: atomicBundleRecoveryApprovalSha256(approval) }
+}
+
+function reverseRestartApproval(input: {
+  observation: ReturnType<typeof inspectDurableAtomicBundleActivation>
+  barrierReceiptSha256: string
+  now?: Date
+}): { approval: AtomicBundleRecoveryApproval; approvalSha256: string } {
+  const now = input.now ?? new Date()
+  const approval: AtomicBundleRecoveryApproval = {
+    version: 1,
+    action: 'RECORD_OBSERVED_OLD_ACTIVE_AFTER_REVERSE_WITHOUT_SWAP',
+    transactionId: input.observation.journal.transactionId,
+    journalSha256: input.observation.journal.journalSha256,
+    journalFileSha256: input.observation.fileSha256,
+    oldManifestSha256: input.observation.journal.oldManifestSha256,
+    newManifestSha256: input.observation.journal.newManifestSha256,
+    activeIntegrityReceiptSha256: input.observation.activeReceipt.receiptSha256,
+    barrierReceiptSha256: input.barrierReceiptSha256,
+    allowedTransition: 'REVERSE_INTENT_TO_PRE_CONSUMER_REVERSED',
+    automaticSwapAllowed: false,
+    automaticSwapBackAllowed: false,
+    issuedAt: new Date(now.getTime() - 1_000).toISOString(),
+    expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
+    reason: 'Record a byte-verified OLD_ACTIVE reverse observation without invoking another swap.',
   }
   return { approval, approvalSha256: atomicBundleRecoveryApprovalSha256(approval) }
 }
@@ -324,6 +407,28 @@ function childMode(): never | void {
       },
     })
     throw new Error('durable_fixture_journal_crash_not_injected')
+  }
+  if (['--crash-before-reverse', '--crash-after-reverse'].includes(mode)) {
+    const [sourceGeneration, servingGeneration, cacheGeneration] = rest
+    let barriers = 0
+    executeDurableAtomicBundleReverse({
+      journalPath,
+      executablePath: executable,
+      executableSha256: sha256File(executable),
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: sourceGeneration,
+      observedServingGeneration: servingGeneration,
+      observedCacheGeneration: cacheGeneration,
+      assertReaderWriterBarrierValid: () => {
+        barriers += 1
+        if ((mode === '--crash-before-reverse' && barriers === 1)
+          || (mode === '--crash-after-reverse' && barriers === 3)) {
+          process.kill(process.pid, 'SIGKILL')
+        }
+      },
+    })
+    throw new Error('durable_fixture_reverse_crash_not_injected')
   }
   if (!['--crash-before-swap', '--crash-after-swap'].includes(mode)) return
   let barriers = 0
@@ -455,6 +560,14 @@ async function main(): Promise<void> {
     })
     assert.equal(reconciled.journal.phase, 'GENERATION_RECONCILED')
     assert.equal(inspectInFreshProcess(script, normal.journalPath).phase, 'GENERATION_RECONCILED')
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:04.500Z',
+      observedSourceGeneration: 'normal-old-source',
+      observedServingGeneration: 'normal-old-serving',
+      observedCacheGeneration: 'normal-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_REVERSE_INTENT_PRECONDITION_INVALID/)
     assert.throws(() => commitDurableAtomicBundleActivation({
       journalPath: normal.journalPath,
       updatedAt: '2026-11-01T00:00:05.000Z',
@@ -473,6 +586,243 @@ async function main(): Promise<void> {
     })
     assert.equal(committed.journal.phase, 'COMMITTED')
     assert.equal(barrierChecks, 13)
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: normal.journalPath,
+      updatedAt: '2026-11-01T00:00:06.000Z',
+      observedSourceGeneration: 'normal-old-source',
+      observedServingGeneration: 'normal-old-serving',
+      observedCacheGeneration: 'normal-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_REVERSE_INTENT_PRECONDITION_INVALID/)
+
+    const reverse = setupActivation(root, 'reverse')
+    forwardToSwapped({ journalPath: reverse.journalPath, executablePath: executable, executableSha256 })
+    const reverseIntent = sealDurableReverseIntent({
+      journalPath: reverse.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-old-source',
+      observedServingGeneration: 'reverse-old-serving',
+      observedCacheGeneration: 'reverse-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.equal(reverseIntent.journal.phase, 'REVERSE_INTENT')
+    assert.equal(reverseIntent.position, 'NEW_ACTIVE')
+    const reversed = executeDurableAtomicBundleReverse({
+      journalPath: reverse.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:06.000Z',
+      observedSourceGeneration: 'reverse-old-source',
+      observedServingGeneration: 'reverse-old-serving',
+      observedCacheGeneration: 'reverse-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.equal(reversed.journal.phase, 'PRE_CONSUMER_REVERSED')
+    assert.equal(reversed.position, 'OLD_ACTIVE')
+    assert.equal(marker(reverse.active.path), 'reverse-old')
+    assert.throws(() => commitDurableAtomicBundleActivation({
+      journalPath: reverse.journalPath,
+      updatedAt: '2026-11-01T00:00:07.000Z',
+      observedSourceGeneration: 'reverse-old-source',
+      observedServingGeneration: 'reverse-old-serving',
+      observedCacheGeneration: 'reverse-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_COMMIT_PHASE_INVALID/)
+    assert.throws(() => executeDurableAtomicBundleReverse({
+      journalPath: reverse.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:07.000Z',
+      observedSourceGeneration: 'reverse-old-source',
+      observedServingGeneration: 'reverse-old-serving',
+      observedCacheGeneration: 'reverse-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_REVERSE_PRECONDITION_INVALID/)
+
+    const reverseInvalidTransitionTime = setupActivation(root, 'reverse-invalid-transition-time')
+    forwardToSwapped({
+      journalPath: reverseInvalidTransitionTime.journalPath, executablePath: executable, executableSha256,
+    })
+    sealDurableReverseIntent({
+      journalPath: reverseInvalidTransitionTime.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-invalid-transition-time-old-source',
+      observedServingGeneration: 'reverse-invalid-transition-time-old-serving',
+      observedCacheGeneration: 'reverse-invalid-transition-time-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.throws(() => executeDurableAtomicBundleReverse({
+      journalPath: reverseInvalidTransitionTime.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'reverse-invalid-transition-time-old-source',
+      observedServingGeneration: 'reverse-invalid-transition-time-old-serving',
+      observedCacheGeneration: 'reverse-invalid-transition-time-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_ACTIVATION_TRANSITION_INVALID/)
+    assert.equal(marker(reverseInvalidTransitionTime.active.path), 'reverse-invalid-transition-time-new')
+    assert.deepEqual(inspectInFreshProcess(script, reverseInvalidTransitionTime.journalPath), {
+      phase: 'REVERSE_INTENT',
+      position: 'NEW_ACTIVE',
+      durabilityIssues: [],
+      activeCacheGeneration: 'reverse-invalid-transition-time-new-cache',
+    })
+
+    const reverseGenerationMismatch = setupActivation(root, 'reverse-generation-mismatch')
+    forwardToSwapped({
+      journalPath: reverseGenerationMismatch.journalPath, executablePath: executable, executableSha256,
+    })
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: reverseGenerationMismatch.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'unapproved-source',
+      observedServingGeneration: 'reverse-generation-mismatch-old-serving',
+      observedCacheGeneration: 'reverse-generation-mismatch-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_REVERSE_GENERATION_CONVERGENCE_MISMATCH/)
+    assert.equal(readDurableActivationJournal(reverseGenerationMismatch.journalPath).journal.phase, 'SWAPPED')
+
+    const hashOnlyMismatch = setupActivation(root, 'hash-only-mismatch')
+    const reboundCandidateManifest = mutateBundleBytesAndRebindMetadataWithoutHash(
+      hashOnlyMismatch.candidate.path, hashOnlyMismatch.candidate.manifest,
+    )
+    fs.unlinkSync(hashOnlyMismatch.journalPath)
+    createPreparedJournal({
+      journalPath: hashOnlyMismatch.journalPath,
+      active: hashOnlyMismatch.active,
+      candidate: { path: hashOnlyMismatch.candidate.path, manifest: reboundCandidateManifest },
+    })
+    assert.throws(() => assertSqliteBundleManifest(
+      hashOnlyMismatch.candidate.path, reboundCandidateManifest,
+    ), /SQLITE_BUNDLE_MEMBER_HASH_MISMATCH/)
+    assert.throws(() => sealDurableSwapIntent({
+      journalPath: hashOnlyMismatch.journalPath,
+      updatedAt: '2026-11-01T00:00:02.000Z',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_MEMBER_HASH_MISMATCH/)
+
+    const reverseChangedOld = setupActivation(root, 'reverse-changed-old')
+    forwardToSwapped({ journalPath: reverseChangedOld.journalPath, executablePath: executable, executableSha256 })
+    fs.appendFileSync(path.join(reverseChangedOld.candidate.path, 'stockboard.db'), 'changed')
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: reverseChangedOld.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-changed-old-old-source',
+      observedServingGeneration: 'reverse-changed-old-old-serving',
+      observedCacheGeneration: 'reverse-changed-old-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_MEMBER_IDENTITY_MISMATCH/)
+
+    const reverseChangedAfterIntent = setupActivation(root, 'reverse-changed-after-intent')
+    forwardToSwapped({
+      journalPath: reverseChangedAfterIntent.journalPath, executablePath: executable, executableSha256,
+    })
+    sealDurableReverseIntent({
+      journalPath: reverseChangedAfterIntent.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-changed-after-intent-old-source',
+      observedServingGeneration: 'reverse-changed-after-intent-old-serving',
+      observedCacheGeneration: 'reverse-changed-after-intent-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    fs.appendFileSync(path.join(reverseChangedAfterIntent.candidate.path, 'stockboard.db'), 'changed-after-intent')
+    assert.throws(() => executeDurableAtomicBundleReverse({
+      journalPath: reverseChangedAfterIntent.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:06.000Z',
+      observedSourceGeneration: 'reverse-changed-after-intent-old-source',
+      observedServingGeneration: 'reverse-changed-after-intent-old-serving',
+      observedCacheGeneration: 'reverse-changed-after-intent-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_MEMBER_IDENTITY_MISMATCH/)
+
+    const reverseWal = setupActivation(root, 'reverse-wal')
+    forwardToSwapped({ journalPath: reverseWal.journalPath, executablePath: executable, executableSha256 })
+    fs.writeFileSync(path.join(reverseWal.candidate.path, 'stockboard.db-wal'), 'unexpected-wal')
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: reverseWal.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-wal-old-source',
+      observedServingGeneration: 'reverse-wal-old-serving',
+      observedCacheGeneration: 'reverse-wal-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_UNEXPECTED_ENTRY/)
+
+    const reverseShm = setupActivation(root, 'reverse-shm')
+    forwardToSwapped({ journalPath: reverseShm.journalPath, executablePath: executable, executableSha256 })
+    fs.writeFileSync(path.join(reverseShm.active.path, 'stockboard.db-shm'), 'unexpected-shm')
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: reverseShm.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-shm-old-source',
+      observedServingGeneration: 'reverse-shm-old-serving',
+      observedCacheGeneration: 'reverse-shm-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_UNEXPECTED_ENTRY/)
+
+    const serviceReconnect = setupActivation(root, 'service-reconnect')
+    const readers = ['web', 'analog', 'trigger'].map(() => new DatabaseSync(
+      path.join(serviceReconnect.active.path, 'stockboard.db'), { readOnly: true },
+    ))
+    const assertNoServiceHandles = (): void => {
+      if (readers.length > 0) throw new Error('fixture_reader_handle_present')
+    }
+    assert.throws(() => sealDurableSwapIntent({
+      journalPath: serviceReconnect.journalPath,
+      updatedAt: '2026-11-01T00:00:02.000Z',
+      assertReaderWriterBarrierValid: assertNoServiceHandles,
+    }), /fixture_reader_handle_present/)
+    while (readers.length > 0) readers.pop()?.close()
+    forwardToSwapped({ journalPath: serviceReconnect.journalPath, executablePath: executable, executableSha256 })
+    const newReaders = ['web', 'analog', 'trigger'].map(() => new DatabaseSync(
+      path.join(serviceReconnect.active.path, 'stockboard.db'), { readOnly: true },
+    ))
+    const assertNewReadersStopped = (): void => {
+      if (newReaders.length > 0) throw new Error('fixture_new_reader_handle_present')
+    }
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: serviceReconnect.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'service-reconnect-old-source',
+      observedServingGeneration: 'service-reconnect-old-serving',
+      observedCacheGeneration: 'service-reconnect-old-cache',
+      assertReaderWriterBarrierValid: assertNewReadersStopped,
+    }), /fixture_new_reader_handle_present/)
+    while (newReaders.length > 0) newReaders.pop()?.close()
+    sealDurableReverseIntent({
+      journalPath: serviceReconnect.journalPath,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'service-reconnect-old-source',
+      observedServingGeneration: 'service-reconnect-old-serving',
+      observedCacheGeneration: 'service-reconnect-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    executeDurableAtomicBundleReverse({
+      journalPath: serviceReconnect.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:06.000Z',
+      observedSourceGeneration: 'service-reconnect-old-source',
+      observedServingGeneration: 'service-reconnect-old-serving',
+      observedCacheGeneration: 'service-reconnect-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    for (const service of ['web', 'analog', 'trigger']) {
+      const reader = new DatabaseSync(path.join(serviceReconnect.active.path, 'stockboard.db'), { readOnly: true })
+      assert.equal(
+        String(reader.prepare('SELECT value FROM marker WHERE id=1').get()?.value),
+        'service-reconnect-old',
+        `${service} must reconnect to the restored old bundle`,
+      )
+      reader.close()
+    }
 
     const invalidTransitionTime = setupActivation(root, 'invalid-transition-time')
     sealDurableSwapIntent({
@@ -480,6 +830,14 @@ async function main(): Promise<void> {
       updatedAt: '2026-11-01T00:00:02.000Z',
       assertReaderWriterBarrierValid: () => {},
     })
+    assert.throws(() => sealDurableReverseIntent({
+      journalPath: invalidTransitionTime.journalPath,
+      updatedAt: '2026-11-01T00:00:02.500Z',
+      observedSourceGeneration: 'invalid-transition-time-old-source',
+      observedServingGeneration: 'invalid-transition-time-old-serving',
+      observedCacheGeneration: 'invalid-transition-time-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_REVERSE_INTENT_PRECONDITION_INVALID/)
     assert.throws(() => executeDurableAtomicBundleSwap({
       journalPath: invalidTransitionTime.journalPath,
       executablePath: executable,
@@ -624,6 +982,97 @@ async function main(): Promise<void> {
       [marker(afterCrash.active.path), marker(afterCrash.candidate.path)],
       markersBeforeRestartRecord,
     )
+
+    const reverseBeforeCrash = setupActivation(root, 'reverse-before-crash')
+    forwardToSwapped({ journalPath: reverseBeforeCrash.journalPath, executablePath: executable, executableSha256 })
+    sealDurableReverseIntent({
+      journalPath: reverseBeforeCrash.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'reverse-before-crash-old-source',
+      observedServingGeneration: 'reverse-before-crash-old-serving',
+      observedCacheGeneration: 'reverse-before-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assertKilled(spawnSync(process.execPath, [
+      '--import', 'tsx', script, '--crash-before-reverse', reverseBeforeCrash.journalPath, executable,
+      'reverse-before-crash-old-source', 'reverse-before-crash-old-serving', 'reverse-before-crash-old-cache',
+    ], { encoding: 'utf8' }))
+    const reverseBeforeRestart = inspectInFreshProcess(script, reverseBeforeCrash.journalPath)
+    assert.equal(reverseBeforeRestart.phase, 'REVERSE_INTENT')
+    assert.equal(reverseBeforeRestart.position, 'NEW_ACTIVE')
+
+    const reverseAfterCrash = setupActivation(root, 'reverse-after-crash')
+    forwardToSwapped({ journalPath: reverseAfterCrash.journalPath, executablePath: executable, executableSha256 })
+    sealDurableReverseIntent({
+      journalPath: reverseAfterCrash.journalPath,
+      updatedAt: '2026-11-01T00:00:04.000Z',
+      observedSourceGeneration: 'reverse-after-crash-old-source',
+      observedServingGeneration: 'reverse-after-crash-old-serving',
+      observedCacheGeneration: 'reverse-after-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assertKilled(spawnSync(process.execPath, [
+      '--import', 'tsx', script, '--crash-after-reverse', reverseAfterCrash.journalPath, executable,
+      'reverse-after-crash-old-source', 'reverse-after-crash-old-serving', 'reverse-after-crash-old-cache',
+    ], { encoding: 'utf8' }))
+    const reverseAfterRestart = inspectDurableAtomicBundleActivation({
+      journalPath: reverseAfterCrash.journalPath,
+      verifyByteIdentity: true,
+    })
+    assert.equal(reverseAfterRestart.journal.phase, 'REVERSE_INTENT')
+    assert.equal(reverseAfterRestart.position, 'OLD_ACTIVE')
+    assert.throws(() => executeDurableAtomicBundleReverse({
+      journalPath: reverseAfterCrash.journalPath,
+      executablePath: executable,
+      executableSha256,
+      timeoutMs: 30_000,
+      updatedAt: '2026-11-01T00:00:05.000Z',
+      observedSourceGeneration: 'reverse-after-crash-old-source',
+      observedServingGeneration: 'reverse-after-crash-old-serving',
+      observedCacheGeneration: 'reverse-after-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_DURABLE_REVERSE_PRECONDITION_INVALID/)
+    const reverseBarrierReceiptSha256 = 'e'.repeat(64)
+    const approvedReverseRestart = reverseRestartApproval({
+      observation: reverseAfterRestart,
+      barrierReceiptSha256: reverseBarrierReceiptSha256,
+    })
+    assert.throws(() => recordDurableReverseObservedAfterRestart({
+      journalPath: reverseAfterCrash.journalPath,
+      recoveryApproval: {
+        ...approvedReverseRestart.approval,
+        action: 'RECORD_OBSERVED_NEW_ACTIVE_WITHOUT_SWAP',
+      },
+      recoveryApprovalSha256: approvedReverseRestart.approvalSha256,
+      barrierReceiptSha256: reverseBarrierReceiptSha256,
+      observedSourceGeneration: 'reverse-after-crash-old-source',
+      observedServingGeneration: 'reverse-after-crash-old-serving',
+      observedCacheGeneration: 'reverse-after-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_RECOVERY_APPROVAL_MISMATCH/)
+    const recordedReverse = recordDurableReverseObservedAfterRestart({
+      journalPath: reverseAfterCrash.journalPath,
+      recoveryApproval: approvedReverseRestart.approval,
+      recoveryApprovalSha256: approvedReverseRestart.approvalSha256,
+      barrierReceiptSha256: reverseBarrierReceiptSha256,
+      observedSourceGeneration: 'reverse-after-crash-old-source',
+      observedServingGeneration: 'reverse-after-crash-old-serving',
+      observedCacheGeneration: 'reverse-after-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    })
+    assert.equal(recordedReverse.journal.phase, 'PRE_CONSUMER_REVERSED')
+    assert.equal(recordedReverse.position, 'OLD_ACTIVE')
+    assert.equal(marker(reverseAfterCrash.active.path), 'reverse-after-crash-old')
+    assert.throws(() => recordDurableReverseObservedAfterRestart({
+      journalPath: reverseAfterCrash.journalPath,
+      recoveryApproval: approvedReverseRestart.approval,
+      recoveryApprovalSha256: approvedReverseRestart.approvalSha256,
+      barrierReceiptSha256: reverseBarrierReceiptSha256,
+      observedSourceGeneration: 'reverse-after-crash-old-source',
+      observedServingGeneration: 'reverse-after-crash-old-serving',
+      observedCacheGeneration: 'reverse-after-crash-old-cache',
+      assertReaderWriterBarrierValid: () => {},
+    }), /SQLITE_BUNDLE_REVERSE_RESTART_OBSERVATION_PRECONDITION_INVALID/)
 
     const timeout = setupActivation(root, 'timeout')
     sealDurableSwapIntent({
@@ -951,6 +1400,14 @@ async function main(): Promise<void> {
       crashBeforeSwap: 'OLD_ACTIVE',
       crashAfterSwap: 'NEW_ACTIVE',
       crashAfterSwapRecovery: 'APPROVAL_HASH_BOUND_SWAPPED',
+      preConsumerReverse: 'PRE_CONSUMER_REVERSED_OLD_ACTIVE',
+      crashBeforeReverse: 'REVERSE_INTENT_NEW_ACTIVE_HOLD_FOR_EXPLICIT_DECISION',
+      crashAfterReverse: 'APPROVAL_HASH_BOUND_PRE_CONSUMER_REVERSED',
+      committedReverse: 'REJECTED',
+      reverseBarrier: 'WEB_ANALOG_TRIGGER_HANDLES_REJECTED',
+      reverseSidecars: 'WAL_SHM_REJECTED',
+      byteIdentityHashMismatch: 'REJECTED_WITH_METADATA_REBOUND',
+      serviceReconnect: 'OLD_BUNDLE_REOPENED_BY_WEB_ANALOG_TRIGGER_FIXTURE',
       ambiguous: 'FAIL_CLOSED_NO_AUTOMATIC_SWAP',
       fsyncFailure: 'PENDING_WRITE_INTENT_FAIL_CLOSED',
       recoveryApproval: 'HASH_CONTRACT_BOUND_AUTHORITY_WIRING_PENDING',
