@@ -63,6 +63,12 @@ hashes, input DB and manifest hashes, and whether tracked files were clean. Its
 timestamps and durations intentionally make each run unique. The final receipt
 remains outside Git under `.audit/phase2-atomic-candidate`.
 
+For implementation commit `8b1d837b81531e1d593cd70a65a46c413a54a02a`,
+the receipt file SHA-256 is
+`c36676b4850d0098edfb6c70c64269037b1d4e47fb5d6ae291ab637ab2e44ee3`
+and its canonical receipt SHA-256 is
+`9ea8914e25121d993a065b8d7c80513053662a9643a71e07a0350ea69dace204`.
+
 ## Guarantees and limits
 
 | Condition | Status | Evidence / limit |
