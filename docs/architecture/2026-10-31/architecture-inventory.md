@@ -50,7 +50,7 @@ Largest files include:
 | `lib/db/migrate.ts` | 2,971 | migration history and active migration mechanics are coupled |
 | `components/charts/CandlestickChart.tsx` | 2,163 | rendering, interaction, and chart-domain rules are mixed |
 | `lib/jp-ohlcv-production-repair.ts` | 1,686 | approval, journal, rollback, and lifecycle state share one module |
-| `scripts/orchestrate-jp-ohlcv-rollback-finalization.ts` | 1,452 | gateway, services, evidence, journal, and writer recovery are coupled |
+| `scripts/orchestrate-jp-ohlcv-rollback-finalization.ts` | 1,452 | Historical finding; retired with the completed incident finalization path |
 
 ## Runtime ownership findings
 
