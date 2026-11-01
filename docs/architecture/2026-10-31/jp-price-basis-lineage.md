@@ -37,6 +37,18 @@ with locally rebased neighbours.
 - All 4,061 missing tickers must be classified for corporate actions after the
   target date before assuming current provider-adjusted rows share the exact
   basis of adjacent Production rows.
+- A 2026-11-01 read-only replay of the normal updater's boundary heuristic found
+  a previous Production close for every residual ticker. All normalized
+  target-date factors were 1, but `8105` was flagged by the price boundary (135 on
+  2026-07-16 to adjusted close 99 on 2026-07-17). Existing evidence cannot
+  distinguish a Corporate Action from a genuine price move, so this ticker and
+  the complete later factor chain remain unproved. This replay is a read-only
+  session result, not a sealed all-ticker Corporate Action proof.
+
+The accepted-row capture is lossy by construction: it retains normalized OHLCV
+and target-date adjustment factor, not the provider's Raw/Adjusted field pairs
+or complete later factor chain. Target-date factor 1 must not be read as proof
+that no later split or provider revision exists.
 
 ## Required permanent contract
 

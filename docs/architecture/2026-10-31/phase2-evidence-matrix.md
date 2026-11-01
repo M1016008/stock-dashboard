@@ -6,38 +6,43 @@ the cited immutable evidence. `UNKNOWN` is never treated as PASS.
 | Blocker | Implemented | Verified evidence | Unresolved / Production status |
 | --- | --- | --- | --- |
 | Historical Repair writer hold | 16-label sealed inventory and 13-loaded/3-unloaded restore contract | Executable-plan E2E and crash recovery | Live identity must be freshly observed before any Production action. |
-| Historical Repair read hold | Four services held; six boundary probes; receipts journaled | PR J unit negatives plus full executable-plan E2E | Same-user ad-hoc admission race and current live handles remain `UNKNOWN`; Strategy A Production `HOLD`. |
+| Historical Repair read hold | Four services held; six boundary probes; receipts journaled | PR J unit negatives plus full executable-plan E2E; 2026-11-01 live `lsof` observed the same-user Trigger worker holding DB/WAL/SHM | The probes detect but do not prevent a new same-user handle. ADR reader-admission keeps in-place Strategy A Production `HOLD`. |
 | Reader/Source inventory | 94 `app/`/`lib/` source readers classified | Static inventory in `jp-source-reader-lineage-inventory.md` | Runtime SQL paths, live PIDs and every cache dependency are not yet all dynamically traced. |
 | Normal updater process contract | Source Run, Receipt, Coverage and process-level recovery implemented | PR #41/#42 process E2E and CI | Live readers still see in-place rows without Versioned Serving. |
 | Missing / conflict / publication separation | Independent Coverage and publishability contracts | Unit and normal-updater E2E | Quarantine policy is ADR-only; Production publication remains stop-all. |
 | `1447` / `2164` protection | Repair and normal-ingestion conflict preservation implemented | Existing repair/updater fixtures | Corporate Action/Price Basis adjudication unresolved; both remain HOLD. |
-| 4,061 Price Basis / Corporate Action | Provider envelope and adjusted-field source are sealed | Provider 4,442 / valid 4,218 / no-trade 224 / invalid 0 | Per-ticker current adjusted/CA proof for all 4,061 is `UNKNOWN`; Production blocker P1. |
-| Coverage bootstrap | Ledger schema/store and design exist | Isolated ledger/store tests | Latest Production coverage recapture and bootstrap package not executed; `UNKNOWN`. |
+| 4,061 Price Basis / Corporate Action | Provider envelope and adjusted-field source are sealed | Fresh capture retains the same accepted hash; all 4,061 residual rows are normalized `jquants-adjusted-ohlcv-v1`, have target-date factor 1, and are finite and internally valid. A read-only session replay found one boundary candidate, `8105` (135 -> 99). | The accepted-row capture is lossy and does not retain provider Raw/Adjusted pairs or the later factor chain; the replay is not a sealed all-ticker proof and `8105` is not adjudicated. Independent per-ticker proof remains `UNKNOWN`; Production blocker P1. |
+| Coverage bootstrap | Ledger schema/store and design exist | 2026-11-01 read-only Production recapture: 157 existing, 155 exact, 4,061 missing, conflicts only `1447`/`2164`; Source Run 8718 remains latest success | Bootstrap package and Reader adoption are not executed; `HOLD`. |
 | Source Generation / Receipt | Transactional Source Run and ingestion Receipt implemented for updater | PR #41/#42 E2E | Repair receipt is not yet the source of truth for every Reader/cache. |
 | Serving / cache lineage | Target manifest and migration map documented | Static lineage matrix | History, SMA, six-stage, Screener, Trigger, Dashboard and two-year line cache are not all pinned to one immutable manifest; P1 open. |
-| Post-write DB integrity | Independent verification contracts designed in PR #34 | Contract tests | 551GB-equivalent changed-DB proof is not yet measured; P0 open. |
-| APFS Clone rollback capacity | Candidate contract designed in PR #35 | Small isolated fixtures only | Real APFS capacity, CoW growth, SIGKILL and partial restore at scale are `UNKNOWN`; P0 open. |
-| 12-hour maintenance budget | Stage budget model exists | Budget unit tests and prior 551GB read-only timings | Full normal and failure+recovery paths at scale are not demonstrated; P0 open. |
-| Derived rebuild at Production scale | Approved sequence and aggregate timeout exist | Fixture E2E | Production-size duration and output completeness are `UNKNOWN`; P0 open. |
-| Runtime immutability | Exact Node/physical `tsx`, clean Git commit/tree, runtime manifest and physical `node_modules` are sealed | Configuration/package assertions and E2E | Live artifact identity must be recaptured; unrelated scripts using development commands are outside this package. |
+| Post-write DB integrity | Independent verification contracts designed in PR #34 | Changed 550,787,080,192-byte candidate full `quick_check=ok` in 4h55m21.346s; whole-file SHA `aa5abdb824fe948fdd6bd427f5d80c418270dcaf4316c21d44f1a02054d4d179` in 15m51.420s | Isolated integrity proof is `VERIFIED`, but the check exceeds the configured 265-minute stage cap by 30m21.346s. Current execution contract remains Production `HOLD`. |
+| APFS Clone rollback capacity | Candidate contract designed in PR #35 | Separate encrypted APFS volume: sealed DB/WAL/SHM cloned in 0.810s; candidate and restored-member hashes matched; filesystem-wide derived-run free-space delta 423,600,128 bytes; 300GB reserve remained | Free-space delta is not per-file allocation. Rollback uses two renames with a crash gap where no active bundle exists. Production partial-restore validation, scale ENOSPC and OWC-specific allocation remain unproved; P0 open. |
+| 12-hour maintenance budget | Stage budget model exists | Substituting the isolated USB check projects about 610.36m normal, 565.36m pre-activation failure and 650.36m post-activation failure versus 720m | Post-activation leaves 69.64m, below the required 90m recovery margin. USB timing is not a bound for OWC; the configured stage fails in the measured environment, and full abnormal recovery plus writer/read restore were not measured; P0 open. |
+| Derived rebuild at Production scale | Approved sequence and aggregate timeout exist | 551GB-sized isolated DB, incremental 4,061-row path: 4,061 inserts, 236,431 snapshots, six transition axes, Screener, one Trigger definition and Dashboard completed in 762.864s; `1306`/`7003` rows and SMA75 were checked | This is not a full Production-equivalent rebuild; prior budget evidence records 46m6s for the current full rebuild. SIGKILL occurred before a write/open transaction was proven and left an ambiguous `batch_runs` row. Failure/recovery and workload equivalence remain P0; run classification is P1. |
+| Runtime immutability | Exact Node/physical `tsx`, runtime manifest and per-file hashes are sealed by packages | Configuration/package assertions and E2E | The live Trigger worker still runs `node --import tsx` from `/Users/yoshio/dev/stock-dashboard-release-7df6c23` under the same user. Production runtime immutability remains P1. |
 
 ## Current gate
 
+- **Production: `HOLD` for every Strategy A path in this matrix.**
 - This PR: Draft technical gate eligible after independent review and CI.
 - Phase 2 isolated development: `GO`.
 - Strategy A Production repair: `HOLD`.
-- Production-blocking P0: post-write integrity, APFS rollback capacity, 12-hour
-  failure path, Production-scale derived rebuild.
+- Production-blocking P0: APFS atomic rollback/capacity, current verification
+  timeout contract, Production-equivalent derived rebuild, and full 12-hour
+  failure/recovery path.
 - Production-blocking P1: complete Price Basis/Corporate Action proof,
-  Reader/cache lineage and ad-hoc read admission.
+  Reader/cache lineage, ad-hoc read admission, ambiguous `batch_runs`, and
+  immutable Production runtime. The exact temporary measurement source is also
+  unavailable; recovered transformed-code caches are auditable but not
+  source-replayable.
 
 ## Next evidence order
 
-1. Use only an approved isolated volume to measure APFS clone/CoW, changed-DB
-   integrity and failure-space requirements at 551GB scale.
-2. Run the actual derived commands against a Production-scale isolated copy and
-   close the normal/failure/recovery time budget.
-3. Generate the 4,061-row Price Basis/Corporate Action report and latest
-   read-only Coverage evidence.
-4. Build the Coverage bootstrap package and complete dynamic Reader/cache
-   lineage before proposing a new Production package.
+1. Replace the two-step activation with a proven crash-safe publication
+   boundary, then exercise partial restore and ENOSPC at representative scale.
+2. Reconcile the 4h55m isolated full-check measurement with the verification
+   stage contract without weakening changed-DB integrity.
+3. Prove abnormal derived recovery and writer/read-service restoration within
+   the 12-hour contract; classify ambiguous `batch_runs` fail-closed.
+4. Complete the 4,061-row Price Basis/Corporate Action proof, Coverage bootstrap
+   and dynamic Reader/cache lineage before proposing a Production package.
