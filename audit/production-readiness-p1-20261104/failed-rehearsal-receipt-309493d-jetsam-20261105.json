@@ -1,0 +1,585 @@
+{
+  "version": 1,
+  "status": "HOLD",
+  "createdAt": "2026-11-04T17:26:33.884Z",
+  "updatedAt": "2026-11-04T19:41:39.660Z",
+  "database": "/private/tmp/stockboard-a-p1-final-20261104/stockboard.sqlite",
+  "baseDatabase": "/private/tmp/stockboard-three-store-poc-v2-20261101/bases/ae7c6c1785c63834818036d9b24b8cd35443c30966ca21437f5a9cc4d8744eb2/source.sqlite",
+  "metadataDatabase": "/Volumes/OWC Express 1M2 80G/StockBoard Development/phase2-evidence/apfs-clone-1793380144053-98117.sqlite",
+  "officialEvidence": "/Users/yoshio/Documents/ChatGPT/株サイト/phase2-p0-scale-evidence/.audit/phase2-p0/current-official-2026-07-17.json",
+  "sourceTreeSha256": "886af7bce8c93dbe5b32f02b014f4d5cbc1d977c2c01d3cd08e47cb838db1638",
+  "providerEnvelope": {
+    "provider": 4442,
+    "accepted": 4218,
+    "noTrade": 224,
+    "invalid": 0
+  },
+  "source": {
+    "approvalSha256": "3c864dccbbc3dfbff18401a691e909fa0ac89e4092053b8480e6103e2b18c6d8",
+    "approved": 4061,
+    "inserted": 4061,
+    "conflictsPreserved": 2,
+    "receiptId": 1
+  },
+  "stages": [
+    {
+      "name": "snapshots",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-snapshots.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-snapshots.ts",
+          "sha256": "f57ade04881053a795e5758ae4990b54d963864af64d8c060f53157f551e5a2b"
+        }
+      ],
+      "startedAt": "2026-11-04T17:27:51.995Z",
+      "finishedAt": "2026-11-04T17:28:54.184Z",
+      "durationMs": 62189,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 1276674048,
+      "databaseBytesBefore": 9803427840,
+      "databaseBytesAfter": 9813041152,
+      "walBytesBefore": 0,
+      "walBytesAfter": 4944032,
+      "walBytesPeak": 4944032,
+      "allocatedBytesBefore": 9811656704,
+      "allocatedBytesAfter": 9818353664,
+      "allocatedBytesPeak": 9818353664,
+      "observedRows": {
+        "daily_snapshots": 13354241
+      },
+      "stdoutTail": "TICKERS env で絞り込み: 4061 銘柄\nSnapshot 計算開始: 4061 銘柄 (CONCURRENCY=8, FORCE_REBUILD=false, RECOMPUTE_FROM=2026-07-17)\n[200/4061 4.9%] 累計 13696 snapshots / 成功 200 / 失敗 0 / 経過 0.1min\n[400/4061 9.8%] 累計 27267 snapshots / 成功 400 / 失敗 0 / 経過 0.1min\n[600/4061 14.8%] 累計 41155 snapshots / 成功 600 / 失敗 0 / 経過 0.1min\n[800/4061 19.7%] 累計 54905 snapshots / 成功 800 / 失敗 0 / 経過 0.2min\n[1000/4061 24.6%] 累計 68800 snapshots / 成功 1000 / 失敗 0 / 経過 0.3min\n[1200/4061 29.5%] 累計 82578 snapshots / 成功 1200 / 失敗 0 / 経過 0.3min\n[1400/4061 34.5%] 累計 96403 snapshots / 成功 1400 / 失敗 0 / 経過 0.4min\n[1600/4061 39.4%] 累計 110309 snapshots / 成功 1600 / 失敗 0 / 経過 0.4min\n[1800/4061 44.3%] 累計 124190 snapshots / 成功 1800 / 失敗 0 / 経過 0.5min\n[2000/4061 49.2%] 累計 138037 snapshots / 成功 2000 / 失敗 0 / 経過 0.5min\n[2200/4061 54.2%] 累計 151762 snapshots / 成功 2200 / 失敗 0 / 経過 0.5min\n[2400/4061 59.1%] 累計 165416 snapshots / 成功 2400 / 失敗 0 / 経過 0.6min\n[2600/4061 64.0%] 累計 179220 snapshots / 成功 2600 / 失敗 0 / 経過 0.6min\n[2800/4061 68.9%] 累計 193192 snapshots / 成功 2800 / 失敗 0 / 経過 0.7min\n[3000/4061 73.9%] 累計 207035 snapshots / 成功 3000 / 失敗 0 / 経過 0.7min\n[3200/4061 78.8%] 累計 220727 snapshots / 成功 3200 / 失敗 0 / 経過 0.8min\n[3400/4061 83.7%] 累計 234585 snapshots / 成功 3400 / 失敗 0 / 経過 0.8min\n[3600/4061 88.6%] 累計 248465 snapshots / 成功 3600 / 失敗 0 / 経過 0.9min\n[3800/4061 93.6%] 累計 262250 snapshots / 成功 3800 / 失敗 0 / 経過 1.0min\n[4000/4061 98.5%] 累計 275965 snapshots / 成功 4000 / 失敗 0 / 経過 1.0min\n[4061/4061 100.0%] 累計 280162 snapshots / 成功 4061 / 失敗 0 / 経過 1.0min\n完了: 4061 成功 / 0 失敗 / 計 280162 スナップショット / ステータス: success\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "features_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-features.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-features.ts",
+          "sha256": "680b46c960e8dd43eaed7cf3eec61bae467ed0aa80467b776b40fd4cb13f035e"
+        }
+      ],
+      "startedAt": "2026-11-04T17:28:56.596Z",
+      "finishedAt": "2026-11-04T17:48:58.252Z",
+      "durationMs": 1201656,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 2225422336,
+      "databaseBytesBefore": 9813041152,
+      "databaseBytesAfter": 10114863104,
+      "walBytesBefore": 4944032,
+      "walBytesAfter": 5813352,
+      "walBytesPeak": 5813352,
+      "allocatedBytesBefore": 9818353664,
+      "allocatedBytesAfter": 10121224192,
+      "allocatedBytesPeak": 10121224192,
+      "observedRows": {
+        "feature_snapshots": 798198
+      },
+      "stdoutTail": "Feature compute 開始: 4061 銘柄 (FORCE_REBUILD=false, RECOMPUTE_FROM=2026-07-17)\n[50/4061 1.2%] 1417: +210 (累計 10326, 失敗 0, 経過 0.3min)\n[100/4061 2.5%] 1497: +210 (累計 20570, 失敗 0, 経過 0.4min)\n[150/4061 3.7%] 1615: +210 (累計 30737, 失敗 0, 経過 0.7min)\n[200/4061 4.9%] 1691: +195 (累計 40958, 失敗 0, 経過 0.9min)\n[250/4061 6.2%] 181A: +156 (累計 51200, 失敗 0, 経過 1.2min)\n[300/4061 7.4%] 1942: +210 (累計 61541, 失敗 0, 経過 1.5min)\n[350/4061 8.6%] 2034: +210 (累計 71948, 失敗 0, 経過 1.8min)\n[400/4061 9.8%] 2124: +210 (累計 81167, 失敗 0, 経過 2.0min)\n[450/4061 11.1%] 2221: +210 (累計 91409, 失敗 0, 経過 2.2min)\n[500/4061 12.3%] 2317: +210 (累計 101875, 失敗 0, 経過 2.4min)\n[550/4061 13.5%] 2432: +210 (累計 112236, 失敗 0, 経過 2.7min)\n[600/4061 14.8%] 2521: +210 (累計 122393, 失敗 0, 経過 3.0min)\n[650/4061 16.0%] 2621: +210 (累計 132181, 失敗 0, 経過 3.2min)\n[700/4061 17.2%] 2689: +210 (累計 142276, 失敗 0, 経過 3.4min)\n[750/4061 18.5%] 2798: +210 (累計 151867, 失敗 0, 経過 3.6min)\n[800/4061 19.7%] 2868: +210 (累計 161663, 失敗 0, 経過 3.8min)\n[850/4061 20.9%] 2971: +210 (累計 170992, 失敗 0, 経過 4.0min)\n[900/4061 22.2%] 3063: +210 (累計 180466, 失敗 0, 経過 4.2min)\n[950/4061 23.4%] 3156: +210 (累計 190548, 失敗 0, 経過 4.6min)\n[1000/4061 24.6%] 3245: +210 (累計 200345, 失敗 0, 経過 4.8min)\n[1050/4061 25.9%] 3352: +207 (累計 209793, 失敗 0, 経過 5.1min)\n[1100/4061 27.1%] 3439: +186 (累計 219333, 失敗 0, 経過 5.4min)\n[1150/4061 28.3%] 349A: +70 (累計 228985, 失敗 0, 経過 5.5min)\n[1200/4061 29.5%] 3625: +210 (累計 238619, 失敗 0, 経過 5.8min)\n[1250/4061 30.8%] 3691: +210 (累計 248005, 失敗 0, 経過 6.0min)\n[1300/4061 32.0%] 380A: +31 (累計 257385, 失敗 0, 経過 6.3min)\n[1350/4061 33.2%] 3912: +210 (累計 266819, 失敗 0, 経過 6.6min)\n[1400/4061 34.5%] 3976: +210 (累計 276378, 失敗 0, 経過 6.8min)\n[1450/4061 35.7%] 4052: +210 (累計 286039, 失敗 0, 経過 7.0min)\n[1500/4061 36.9%] 415A: +0 (累計 294781, 失敗 0, 経過 7.3min)\n[1550/4061 38.2%] 423A: +0 (累計 304276, 失敗 0, 経過 7.5min)\n[1600/4061 39.4%] 4343: +210 (累計 313495, 失敗 0, 経過 7.7min)\n[1650/4061 40.6%] 4415: +210 (累計 323104, 失敗 0, 経過 7.9min)\n[1700/4061 41.9%] 4483: +210 (累計 332488, 失敗 0, 経過 8.0min)\n[1750/4061 43.1%] 4565: +210 (累計 341728, 失敗 0, 経過 8.3min)\n[1800/4061 44.3%] 4642: +207 (累計 350947, 失敗 0, 経過 8.5min)\n[1850/4061 45.6%] 473A: +0 (累計 359761, 失敗 0, 経過 8.7min)\n[1900/4061 46.8%] 4875: +210 (累計 368473, 失敗 0, 経過 9.0min)\n[1950/4061 48.0%] 496A: +0 (累計 377497, 失敗 0, 経過 9.1min)\n[2000/4061 49.2%] 509A: +0 (累計 386104, 失敗 0, 経過 9.3min)\n[2050/4061 50.5%] 5244: +210 (累計 394342, 失敗 0, 経過 9.5min)\n[2100/4061 51.7%] 537A: +0 (累計 402922, 失敗 0, 経過 9.7min)\n[2150/4061 52.9%] 556A: +0 (累計 409915, 失敗 0, 経過 9.9min)\n[2200/4061 54.2%] 5713: +210 (累計 418486, 失敗 0, 経過 10.1min)\n[2250/4061 55.4%] 5885: +210 (累計 426040, 失敗 0, 経過 10.2min)\n[2300/4061 56.6%] 5971: +189 (累計 435589, 失敗 0, 経過 10.5min)\n[2350/4061 57.9%] 605A: +0 (累計 445279, 失敗 0, 経過 10.7min)\n[2400/4061 59.1%] 6157: +210 (累計 455296, 失敗 0, 経過 11.0min)\n[2450/4061 60.3%] 6246: +210 (累計 465601, 失敗 0, 経過 11.1min)\n[2500/4061 61.6%] 6332: +210 (累計 476068, 失敗 0, 経過 11.5min)\n[2550/4061 62.8%] 6417: +210 (累計 486280, 失敗 0, 経過 11.8min)\n[2600/4061 64.0%] 6504: +210 (累計 496708, 失敗 0, 経過 12.1min)\n[2650/4061 65.3%] 6588: +210 (累計 507175, 失敗 0, 経過 12.3min)\n[2700/4061 66.5%] 6702: +210 (累計 517651, 失敗 0, 経過 12.5min)\n[2750/4061 67.7%] 6814: +210 (累計 528127, 失敗 0, 経過 12.9min)\n[2800/4061 68.9%] 6918: +210 (累計 538624, 失敗 0, 経過 13.2min)\n[2850/4061 70.2%] 7022: +210 (累計 549118, 失敗 0, 経過 13.5min)\n[2900/4061 71.4%] 7093: +207 (累計 559226, 失敗 0, 経過 13.6min)\n[2950/4061 72.6%] 7203: +210 (累計 569681, 失敗 0, 経過 13.8min)\n[3000/4061 73.9%] 7296: +210 (累計 580013, 失敗 0, 経過 14.1min)\n[3050/4061 75.1%] 7414: +210 (累計 590489, 失敗 0, 経過 14.2min)\n[3100/4061 76.3%] 7520: +210 (累計 600521, 失敗 0, 経過 14.5min)\n[3150/4061 77.6%] 7616: +210 (累計 610631, 失敗 0, 経過 14.8min)\n[3200/4061 78.8%] 7735: +210 (累計 620891, 失敗 0, 経過 15.1min)\n[3250/4061 80.0%] 7832: +210 (累計 631358, 失敗 0, 経過 15.3min)\n[3300/4061 81.3%] 7928: +210 (累計 641630, 失敗 0, 経過 15.6min)\n[3350/4061 82.5%] 8012: +210 (累計 651986, 失敗 0, 経過 15.9min)\n[3400/4061 83.7%] 8103: +210 (累計 662465, 失敗 0, 経過 16.3min)\n[3450/4061 85.0%] 8214: +210 (累計 672896, 失敗 0, 経過 16.6min)\n[3500/4061 86.2%] 8368: +210 (累計 682895, 失敗 0, 経過 16.9min)\n[3550/4061 87.4%] 8628: +210 (累計 693395, 失敗 0, 経過 17.3min)\n[3600/4061 88.6%] 8894: +210 (累計 703685, 失敗 0, 経過 17.6min)\n[3650/4061 89.9%] 9003: +210 (累計 714185, 失敗 0, 経過 17.9min)\n[3700/4061 91.1%] 9119: +210 (累計 724399, 失敗 0, 経過 18.2min)\n[3750/4061 92.3%] 9248: +210 (累計 734272, 失敗 0, 経過 18.3min)\n[3800/4061 93.6%] 9341: +210 (累計 744535, 失敗 0, 経過 18.5min)\n[3850/4061 94.8%] 9438: +210 (累計 754605, 失敗 0, 経過 18.7min)\n[3900/4061 96.0%] 9564: +210 (累計 764976, 失敗 0, 経過 19.0min)\n[3950/4061 97.3%] 9720: +138 (累計 775161, 失敗 0, 経過 19.3min)\n[4000/4061 98.5%] 9845: +210 (累計 785607, 失敗 0, 経過 19.6min)\n[4050/4061 99.7%] 9980: +210 (累計 795900, 失敗 0, 経過 19.9min)\n[4061/4061 100.0%] 9997: +210 (累計 798198, 失敗 0, 経過 20.0min)\n完了: 4061 成功 / 0 失敗 / 計 798198 行 / success\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "weekly_replacement",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-weekly-ohlcv.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-weekly-ohlcv.ts",
+          "sha256": "aef1d4c03ae49130644a0e499a4ac32fc95f74d6450e2304b532c0a9f03c1921"
+        }
+      ],
+      "startedAt": "2026-11-04T17:48:58.495Z",
+      "finishedAt": "2026-11-04T17:51:02.404Z",
+      "durationMs": 123909,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 3098279936,
+      "databaseBytesBefore": 10114863104,
+      "databaseBytesAfter": 10122940416,
+      "walBytesBefore": 5813352,
+      "walBytesAfter": 5813352,
+      "walBytesPeak": 5813352,
+      "allocatedBytesBefore": 10121224192,
+      "allocatedBytesAfter": 10138001408,
+      "allocatedBytesPeak": 10138001408,
+      "observedRows": {
+        "weekly_ohlcv": 3003740
+      },
+      "stdoutTail": "weekly_ohlcv build: 4061 tickers, recent_days=all, recompute_from=2026-07-17\n[100/4061] 1497: 16/479 weeks, total=1596, elapsed=0.0m\n[200/4061] 1691: 16/620 weeks, total=3190, elapsed=0.1m\n[300/4061] 1942: 16/964 weeks, total=4783, elapsed=0.1m\n[400/4061] 2124: 16/693 weeks, total=6366, elapsed=0.2m\n[500/4061] 2317: 16/964 weeks, total=7951, elapsed=0.2m\n[600/4061] 2521: 16/430 weeks, total=9551, elapsed=0.3m\n[700/4061] 2689: 16/959 weeks, total=11142, elapsed=0.3m\n[800/4061] 2868: 16/208 weeks, total=12729, elapsed=0.4m\n[900/4061] 3063: 16/964 weeks, total=14329, elapsed=0.4m\n[1000/4061] 3245: 16/962 weeks, total=15920, elapsed=0.5m\n[1100/4061] 3439: 16/691 weeks, total=17507, elapsed=0.5m\n[1200/4061] 3625: 16/693 weeks, total=19099, elapsed=0.6m\n[1300/4061] 380A: 16/71 weeks, total=20695, elapsed=0.6m\n[1400/4061] 3976: 16/508 weeks, total=22289, elapsed=0.7m\n[1500/4061] 415A: 16/57 weeks, total=23889, elapsed=0.7m\n[1600/4061] 4343: 16/964 weeks, total=25478, elapsed=0.7m\n[1700/4061] 4483: 16/359 weeks, total=27065, elapsed=0.8m\n[1800/4061] 4642: 16/959 weeks, total=28665, elapsed=0.8m\n[1900/4061] 4875: 16/693 weeks, total=30260, elapsed=0.9m\n[2000/4061] 509A: 16/34 weeks, total=31858, elapsed=0.9m\n[2100/4061] 537A: 16/33 weeks, total=33453, elapsed=1.0m\n[2200/4061] 5713: 16/964 weeks, total=35042, elapsed=1.0m\n[2300/4061] 5971: 16/684 weeks, total=36628, elapsed=1.0m\n[2400/4061] 6157: 16/693 weeks, total=38211, elapsed=1.1m\n[2500/4061] 6332: 16/964 weeks, total=39799, elapsed=1.1m\n[2600/4061] 6504: 16/964 weeks, total=41393, elapsed=1.2m\n[2700/4061] 6702: 16/964 weeks, total=42993, elapsed=1.3m\n[2800/4061] 6918: 16/693 weeks, total=44593, elapsed=1.3m\n[2900/4061] 7093: 16/345 weeks, total=46189, elapsed=1.4m\n[3000/4061] 7296: 16/964 weeks, total=47778, elapsed=1.4m\n[3100/4061] 7520: 16/964 weeks, total=49369, elapsed=1.5m\n[3200/4061] 7735: 16/964 weeks, total=50969, elapsed=1.5m\n[3300/4061] 7928: 16/693 weeks, total=52565, elapsed=1.6m\n[3400/4061] 8103: 16/964 weeks, total=54157, elapsed=1.7m\n[3500/4061] 8368: 16/964 weeks, total=55744, elapsed=1.7m\n[3600/4061] 8894: 16/693 weeks, total=57344, elapsed=1.8m\n[3700/4061] 9119: 16/964 weeks, total=58943, elapsed=1.9m\n[3800/4061] 9341: 16/202 weeks, total=60538, elapsed=1.9m\n[3900/4061] 9564: 16/210 weeks, total=62133, elapsed=1.9m\n[4000/4061] 9845: 16/963 weeks, total=63729, elapsed=2.0m\n[4061/4061] 9997: 16/964 weeks, total=64698, elapsed=2.0m\nweekly_ohlcv complete: 64698 rows\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "monthly",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-monthly-ma-monitor.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-monthly-ma-monitor.ts",
+          "sha256": "8bf8f22ff4994b89e78b9575dc12bbdd08034380d69de1d887c8f7457b55c035"
+        }
+      ],
+      "startedAt": "2026-11-04T17:51:03.253Z",
+      "finishedAt": "2026-11-04T18:03:44.005Z",
+      "durationMs": 760752,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 5257641984,
+      "databaseBytesBefore": 10122940416,
+      "databaseBytesAfter": 10756661248,
+      "walBytesBefore": 5813352,
+      "walBytesAfter": 6402512,
+      "walBytesPeak": 6402512,
+      "allocatedBytesBefore": 10138001408,
+      "allocatedBytesAfter": 10764070912,
+      "allocatedBytesPeak": 10764070912,
+      "observedRows": {
+        "monthly_ma_monitor_daily": 1635492,
+        "monthly_ma_cluster_daily": 138063
+      },
+      "stdoutTail": "Monthly MA monitor: 4061 tickers, periods=3,5,10,15,20,25, latest=2026-10-30, concurrency=2, recompute_from=2026-07-17\n[100/4061] rows=44673, failed=0\n[200/4061] rows=87523, failed=0\n[300/4061] rows=131445, failed=0\n[400/4061] rows=174704, failed=0\n[500/4061] rows=220470, failed=0\n[600/4061] rows=266596, failed=0\n[700/4061] rows=311269, failed=0\n[800/4061] rows=356578, failed=0\n[900/4061] rows=401287, failed=0\n[1000/4061] rows=446373, failed=0\n[1100/4061] rows=490611, failed=0\n[1200/4061] rows=534706, failed=0\n[1300/4061] rows=577660, failed=0\n[1400/4061] rows=620986, failed=0\n[1500/4061] rows=662555, failed=0\n[1600/4061] rows=705592, failed=0\n[1700/4061] rows=747565, failed=0\n[1800/4061] rows=789676, failed=0\n[1900/4061] rows=831238, failed=0\n[2000/4061] rows=872277, failed=0\n[2100/4061] rows=910362, failed=0\n[2200/4061] rows=946838, failed=0\n[2300/4061] rows=985481, failed=0\n[2400/4061] rows=1027977, failed=0\n[2500/4061] rows=1072268, failed=0\n[2600/4061] rows=1115980, failed=0\n[2700/4061] rows=1160328, failed=0\n[2800/4061] rows=1204831, failed=0\n[2900/4061] rows=1248708, failed=0\n[3000/4061] rows=1293818, failed=0\n[3100/4061] rows=1339149, failed=0\n[3200/4061] rows=1384992, failed=0\n[3300/4061] rows=1430930, failed=0\n[3400/4061] rows=1476741, failed=0\n[3500/4061] rows=1520978, failed=0\n[3600/4061] rows=1564802, failed=0\n[3700/4061] rows=1611141, failed=0\n[3800/4061] rows=1655333, failed=0\n[3900/4061] rows=1699821, failed=0\n[4000/4061] rows=1745177, failed=0\n[4061/4061] rows=1773555, failed=0\nMonthly MA monitor complete: 4061 tickers, 1773555 rows\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "sector_structure",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-sector-structure.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-sector-structure.ts",
+          "sha256": "c70299d1002ce8601c968925eec2ab4e864bf15a0e6c2f90c7c40b1197a0310e"
+        }
+      ],
+      "startedAt": "2026-11-04T18:03:44.232Z",
+      "finishedAt": "2026-11-04T18:04:23.635Z",
+      "durationMs": 39403,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 4202872832,
+      "databaseBytesBefore": 10756661248,
+      "databaseBytesAfter": 10986897408,
+      "walBytesBefore": 6402512,
+      "walBytesAfter": 6402512,
+      "walBytesPeak": 6402512,
+      "allocatedBytesBefore": 10764070912,
+      "allocatedBytesAfter": 10994307072,
+      "allocatedBytesPeak": 10994307072,
+      "observedRows": {
+        "sector_structure_daily": 105082
+      },
+      "stdoutTail": "[db-read] done 14609ms WITH source AS ( SELECT s.ticker, s.date, s.daily_a_stage AS dailyA, s.daily_b_stage AS dailyB, s.weekly_a_stage AS weeklyA, s.weekly_b_stage AS weeklyB, s.monthly_a_stage AS month\n業種構造集計完了: 105,082 行 / 2026-02-04 -> 2026-10-30\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "physical_momentum",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-physical-momentum.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-physical-momentum.ts",
+          "sha256": "464011ed75bfecaeaf26a6d5d59fb447cfca87b4f76fb0a8930071874fb62456"
+        }
+      ],
+      "startedAt": "2026-11-04T18:04:23.647Z",
+      "finishedAt": "2026-11-04T18:06:30.432Z",
+      "durationMs": 126785,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 3801481216,
+      "databaseBytesBefore": 10986897408,
+      "databaseBytesAfter": 11112886272,
+      "walBytesBefore": 6402512,
+      "walBytesAfter": 7403672,
+      "walBytesPeak": 7403672,
+      "allocatedBytesBefore": 10994307072,
+      "allocatedBytesAfter": 11121344512,
+      "allocatedBytesPeak": 11121344512,
+      "observedRows": {
+        "physical_momentum_metrics": 293935
+      },
+      "stdoutTail": "[JP] 4319 symbols, 70/70 dates (2026-07-17 -> 2026-10-30)\n[JP] processed 250/4319, rows=16866\n[JP] processed 500/4319, rows=33487\n[JP] processed 750/4319, rows=50729\n[JP] processed 1000/4319, rows=67782\n[JP] processed 1250/4319, rows=85079\n[JP] processed 1500/4319, rows=102248\n[JP] processed 1750/4319, rows=119543\n[JP] processed 2000/4319, rows=136961\n[JP] processed 2250/4319, rows=153925\n[JP] processed 2500/4319, rows=170823\n[JP] processed 2750/4319, rows=186504\n[JP] processed 3000/4319, rows=203375\n[JP] processed 3250/4319, rows=220561\n[JP] processed 3500/4319, rows=237546\n[JP] processed 3750/4319, rows=254828\n[JP] processed 4000/4319, rows=272077\n[JP] processed 4250/4319, rows=289196\n[JP] normalized 50/70 dates\nPhysical momentum complete: source_markets=JP, output_market=source, tickers=4319, rows=293935, failed=0\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "technical_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-technical-signals.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-technical-signals.ts",
+          "sha256": "1818affec1e79b6d48a46bc104d1997142e0d4a4ddcf9adf9bb9570ee858e8f0"
+        }
+      ],
+      "startedAt": "2026-11-04T18:06:30.444Z",
+      "finishedAt": "2026-11-04T18:41:43.263Z",
+      "durationMs": 2112819,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 5902696448,
+      "databaseBytesBefore": 11112886272,
+      "databaseBytesAfter": 14906490880,
+      "walBytesBefore": 7403672,
+      "walBytesAfter": 56402832,
+      "walBytesPeak": 56402832,
+      "allocatedBytesBefore": 11121344512,
+      "allocatedBytesAfter": 14963249152,
+      "allocatedBytesPeak": 14963249152,
+      "observedRows": {
+        "model_features": 405920,
+        "technical_signals": 7635578
+      },
+      "stdoutTail": "technical_signals/model_features build: 4061 tickers, recent_days=100\n[100/4061] 1497: signals=1491, features=100, totalSignals=167470, elapsed=0.2m, load=4.9s, compute=0.4s, write=5.9s\n[200/4061] 1691: signals=1534, features=100, totalSignals=340871, elapsed=0.5m, load=10.0s, compute=0.7s, write=17.7s\n[300/4061] 1942: signals=2524, features=100, totalSignals=544036, elapsed=0.9m, load=17.3s, compute=1.1s, write=34.6s\n[400/4061] 2124: signals=2009, features=100, totalSignals=702197, elapsed=1.3m, load=22.8s, compute=1.5s, write=55.9s\n[500/4061] 2317: signals=2397, features=100, totalSignals=876627, elapsed=1.8m, load=28.6s, compute=1.8s, write=76.0s\n[600/4061] 2521: signals=1178, features=100, totalSignals=1071062, elapsed=2.5m, load=35.1s, compute=2.2s, write=110.3s\n[700/4061] 2689: signals=2416, features=100, totalSignals=1219946, elapsed=2.9m, load=39.8s, compute=2.4s, write=130.1s\n[800/4061] 2868: signals=858, features=100, totalSignals=1384762, elapsed=3.4m, load=45.1s, compute=2.8s, write=157.3s\n[900/4061] 3063: signals=2301, features=100, totalSignals=1554569, elapsed=3.9m, load=50.8s, compute=3.1s, write=182.1s\n[1000/4061] 3245: signals=2205, features=100, totalSignals=1758032, elapsed=4.8m, load=59.1s, compute=3.4s, write=223.9s\n[1100/4061] 3439: signals=2005, features=100, totalSignals=1948617, elapsed=5.7m, load=67.5s, compute=3.8s, write=269.9s\n[1200/4061] 3625: signals=1862, features=100, totalSignals=2111501, elapsed=6.4m, load=73.2s, compute=4.1s, write=306.3s\n[1300/4061] 380A: signals=456, features=100, totalSignals=2303560, elapsed=7.0m, load=80.2s, compute=4.5s, write=336.5s\n[1400/4061] 3976: signals=1404, features=100, totalSignals=2484137, elapsed=7.9m, load=88.4s, compute=4.8s, write=379.0s\n[1500/4061] 415A: signals=353, features=100, totalSignals=2647295, elapsed=8.7m, load=95.6s, compute=5.1s, write=422.4s\n[1600/4061] 4343: signals=2253, features=100, totalSignals=2814747, elapsed=9.5m, load=102.8s, compute=5.4s, write=464.7s\n[1700/4061] 4483: signals=1047, features=100, totalSignals=2950334, elapsed=10.3m, load=108.9s, compute=5.7s, write=500.9s\n[1800/4061] 4642: signals=2689, features=100, totalSignals=3141134, elapsed=11.2m, load=117.2s, compute=6.0s, write=548.7s\n[1900/4061] 4875: signals=1905, features=100, totalSignals=3337716, elapsed=12.2m, load=126.0s, compute=6.4s, write=598.2s\n[2000/4061] 509A: signals=346, features=100, totalSignals=3480859, elapsed=12.9m, load=132.3s, compute=6.7s, write=634.6s\n[2100/4061] 537A: signals=543, features=100, totalSignals=3640716, elapsed=13.7m, load=139.2s, compute=7.0s, write=675.6s\n[2200/4061] 5713: signals=2098, features=100, totalSignals=3780727, elapsed=14.4m, load=145.0s, compute=7.2s, write=711.1s\n[2300/4061] 5971: signals=1675, features=100, totalSignals=3945583, elapsed=15.2m, load=152.2s, compute=7.6s, write=753.2s\n[2400/4061] 6157: signals=1844, features=100, totalSignals=4144767, elapsed=16.2m, load=161.0s, compute=7.9s, write=802.9s\n[2500/4061] 6332: signals=2675, features=100, totalSignals=4340141, elapsed=17.2m, load=169.9s, compute=8.3s, write=855.3s\n[2600/4061] 6504: signals=2400, features=100, totalSignals=4574843, elapsed=18.4m, load=180.5s, compute=8.7s, write=915.5s\n[2700/4061] 6702: signals=2417, features=100, totalSignals=4753166, elapsed=19.3m, load=188.6s, compute=9.1s, write=961.8s\n[2800/4061] 6918: signals=1903, features=100, totalSignals=4986229, elapsed=20.5m, load=199.5s, compute=9.5s, write=1022.8s\n[2900/4061] 7093: signals=1049, features=100, totalSignals=5161891, elapsed=21.5m, load=207.3s, compute=9.8s, write=1071.2s\n[3000/4061] 7296: signals=2583, features=100, totalSignals=5352801, elapsed=22.5m, load=216.2s, compute=10.2s, write=1123.3s\n[3100/4061] 7520: signals=2511, features=100, totalSignals=5530548, elapsed=23.5m, load=224.5s, compute=10.5s, write=1172.0s\n[3200/4061] 7735: signals=2174, features=100, totalSignals=5739719, elapsed=24.6m, load=233.9s, compute=10.9s, write=1230.8s\n[3300/4061] 7928: signals=1924, features=100, totalSignals=5943424, elapsed=25.7m, load=243.2s, compute=11.3s, write=1285.3s\n[3400/4061] 8103: signals=2662, features=100, totalSignals=6189508, elapsed=26.9m, load=253.2s, compute=11.7s, write=1347.9s\n[3500/4061] 8368: signals=2701, features=100, totalSignals=6441155, elapsed=28.3m, load=264.3s, compute=12.2s, write=1420.8s\n[3600/4061] 8894: signals=2341, features=100, totalSignals=6681679, elapsed=29.6m, load=275.2s, compute=12.6s, write=1490.9s\n[3700/4061] 9119: signals=2370, features=100, totalSignals=6924561, elapsed=31.0m, load=286.5s, compute=13.0s, write=1561.0s\n[3800/4061] 9341: signals=822, features=100, totalSignals=7055235, elapsed=31.8m, load=292.0s, compute=13.3s, write=1599.8s\n[3900/4061] 9564: signals=748, features=100, totalSignals=7256271, elapsed=32.9m, load=300.7s, compute=13.7s, write=1660.2s\n[4000/4061] 9845: signals=2234, features=100, totalSignals=7491598, elapsed=34.3m, load=311.5s, compute=14.1s, write=1729.8s\n[4061/4061] 9997: signals=2630, features=100, totalSignals=7635578, elapsed=35.0m, load=317.4s, compute=14.4s, write=1770.0s\ntechnical_signals/model_features complete: signals=7635578, features=405920\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "forward_extrema_complete",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-forward-extrema.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-forward-extrema.ts",
+          "sha256": "4fd414760114b1b0240ae0a288586ef90f4508e6e63d9aef204233b6bd184fc2"
+        }
+      ],
+      "startedAt": "2026-11-04T18:41:47.303Z",
+      "finishedAt": "2026-11-04T18:56:43.093Z",
+      "durationMs": 895790,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 1531297792,
+      "databaseBytesBefore": 14906490880,
+      "databaseBytesAfter": 17180246016,
+      "walBytesBefore": 56402832,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 14963249152,
+      "allocatedBytesAfter": 17819947008,
+      "allocatedBytesPeak": 17819947008,
+      "observedRows": {
+        "forward_extrema": 8615541,
+        "forward_extrema_date_coverage": 2180
+      },
+      "stdoutTail": "forward_extrema build: 4061 tickers, recent_days=all, start=2025-09-01, end=2026-10-30, horizons=5/10/15/20/30/40/60/90/180/200, chunk=1000, write_batch=25, incremental_upsert=on, model_labels=off, resume=on\n[100/4061] 1497: 2180 labels, total=213000, elapsed=0.1m, eta=3.5m\n[200/4061] 1691: 2060 labels, total=424874, elapsed=0.3m, eta=5.1m\n[300/4061] 1942: 2180 labels, total=639884, elapsed=0.5m, eta=6.3m\n[400/4061] 2124: 2180 labels, total=845928, elapsed=0.7m, eta=6.8m\n[500/4061] 2317: 2180 labels, total=1062598, elapsed=1.0m, eta=7.3m\n[600/4061] 2521: 2180 labels, total=1280068, elapsed=1.3m, eta=7.6m\n[700/4061] 2689: 2180 labels, total=1493226, elapsed=1.6m, eta=7.7m\n[800/4061] 2868: 2180 labels, total=1707158, elapsed=1.9m, eta=7.8m\n[900/4061] 3063: 2180 labels, total=1923455, elapsed=2.2m, eta=7.8m\n[1000/4061] 3245: 2180 labels, total=2140895, elapsed=2.5m, eta=7.7m\n[1100/4061] 3439: 2030 labels, total=2356935, elapsed=2.9m, eta=7.7m\n[1200/4061] 3625: 2180 labels, total=2572221, elapsed=3.2m, eta=7.6m\n[1300/4061] 380A: 2180 labels, total=2788420, elapsed=3.5m, eta=7.5m\n[1400/4061] 3976: 2180 labels, total=3003624, elapsed=3.9m, eta=7.3m\n[1500/4061] 415A: 1930 labels, total=3219494, elapsed=4.2m, eta=7.2m\n[1600/4061] 4343: 2180 labels, total=3434204, elapsed=4.6m, eta=7.0m\n[1700/4061] 4483: 2180 labels, total=3647044, elapsed=4.9m, eta=6.8m\n[1800/4061] 4642: 2170 labels, total=3858244, elapsed=5.2m, eta=6.6m\n[1900/4061] 4875: 2180 labels, total=4064464, elapsed=5.6m, eta=6.4m\n[2000/4061] 509A: 994 labels, total=4265786, elapsed=5.9m, eta=6.1m\n[2100/4061] 537A: 938 labels, total=4457775, elapsed=6.3m, eta=5.9m\n[2200/4061] 5713: 2180 labels, total=4640845, elapsed=6.6m, eta=5.6m\n[2300/4061] 5971: 1910 labels, total=4827808, elapsed=6.9m, eta=5.3m\n[2400/4061] 6157: 2180 labels, total=5035892, elapsed=7.3m, eta=5.1m\n[2500/4061] 6332: 2180 labels, total=5252712, elapsed=7.7m, eta=4.8m\n[2600/4061] 6504: 2180 labels, total=5467103, elapsed=8.1m, eta=4.5m\n[2700/4061] 6702: 2180 labels, total=5684653, elapsed=8.5m, eta=4.3m\n[2800/4061] 6918: 2180 labels, total=5902353, elapsed=9.0m, eta=4.0m\n[2900/4061] 7093: 2160 labels, total=6118513, elapsed=9.6m, eta=3.8m\n[3000/4061] 7296: 2180 labels, total=6335363, elapsed=10.0m, eta=3.5m\n[3100/4061] 7520: 2180 labels, total=6549193, elapsed=10.5m, eta=3.2m\n[3200/4061] 7735: 2180 labels, total=6762090, elapsed=10.9m, eta=2.9m\n[3300/4061] 7928: 2170 labels, total=6977660, elapsed=11.3m, eta=2.6m\n[3400/4061] 8103: 2180 labels, total=7194700, elapsed=11.7m, eta=2.3m\n[3500/4061] 8368: 2180 labels, total=7409571, elapsed=12.2m, eta=2.0m\n[3600/4061] 8894: 2180 labels, total=7627381, elapsed=12.7m, eta=1.6m\n[3700/4061] 9119: 2180 labels, total=7843034, elapsed=13.1m, eta=1.3m\n[3800/4061] 9341: 2180 labels, total=8054894, elapsed=13.5m, eta=0.9m\n[3900/4061] 9564: 2180 labels, total=8269251, elapsed=14.0m, eta=0.6m\n[4000/4061] 9845: 2180 labels, total=8483831, elapsed=14.5m, eta=0.2m\n[4061/4061] 9997: 2170 labels, total=8615541, elapsed=14.9m, eta=0.0m\nforward_extrema complete: 8615541 rows\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "forward_returns_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-forward-returns.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-forward-returns.ts",
+          "sha256": "0947de801fcb2612545f873f82a71941799036bb6a4c28c533b52c639deac640"
+        }
+      ],
+      "startedAt": "2026-11-04T18:56:43.695Z",
+      "finishedAt": "2026-11-04T19:13:06.548Z",
+      "durationMs": 982853,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 331579392,
+      "databaseBytesBefore": 17180246016,
+      "databaseBytesAfter": 19208163328,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 17819947008,
+      "allocatedBytesAfter": 19849990144,
+      "allocatedBytesPeak": 19849990144,
+      "observedRows": {
+        "forward_returns": 15181665
+      },
+      "stdoutTail": "0営業日 chunk 17/21: +63,285 (horizon累計 1,041,531, 経過 11.1min)\n  - 40営業日 chunk 18/21: +63,084 (horizon累計 1,104,615, 経過 11.2min)\n  - 40営業日 chunk 19/21: +62,488 (horizon累計 1,167,103, 経過 11.2min)\n  - 40営業日 chunk 20/21: +62,902 (horizon累計 1,230,005, 経過 11.3min)\n  - 40営業日 chunk 21/21: +19,307 (horizon累計 1,249,312, 経過 11.3min)\n[9/13 69.2%] 40営業日: +1,249,312 (累計 11,255,006, 失敗 0, 経過 11.3min)\n  - 60営業日 chunk 1/21: +61,907 (horizon累計 61,907, 経過 11.4min)\n  - 60営業日 chunk 2/21: +61,118 (horizon累計 123,025, 経過 11.4min)\n  - 60営業日 chunk 3/21: +63,428 (horizon累計 186,453, 経過 11.5min)\n  - 60営業日 chunk 4/21: +62,181 (horizon累計 248,634, 経過 11.6min)\n  - 60営業日 chunk 5/21: +63,384 (horizon累計 312,018, 経過 11.6min)\n  - 60営業日 chunk 6/21: +62,947 (horizon累計 374,965, 経過 11.7min)\n  - 60営業日 chunk 7/21: +61,776 (horizon累計 436,741, 経過 11.7min)\n  - 60営業日 chunk 8/21: +60,717 (horizon累計 497,458, 経過 11.8min)\n  - 60営業日 chunk 9/21: +60,260 (horizon累計 557,718, 経過 11.9min)\n  - 60営業日 chunk 10/21: +57,505 (horizon累計 615,223, 経過 11.9min)\n  - 60営業日 chunk 11/21: +52,662 (horizon累計 667,885, 経過 12.0min)\n  - 60営業日 chunk 12/21: +56,843 (horizon累計 724,728, 経過 12.0min)\n  - 60営業日 chunk 13/21: +63,021 (horizon累計 787,749, 経過 12.1min)\n  - 60営業日 chunk 14/21: +63,496 (horizon累計 851,245, 経過 12.2min)\n  - 60営業日 chunk 15/21: +63,340 (horizon累計 914,585, 経過 12.2min)\n  - 60営業日 chunk 16/21: +62,282 (horizon累計 976,867, 経過 12.3min)\n  - 60営業日 chunk 17/21: +63,229 (horizon累計 1,040,096, 経過 12.4min)\n  - 60営業日 chunk 18/21: +63,044 (horizon累計 1,103,140, 経過 12.5min)\n  - 60営業日 chunk 19/21: +62,393 (horizon累計 1,165,533, 経過 12.5min)\n  - 60営業日 chunk 20/21: +62,769 (horizon累計 1,228,302, 経過 12.6min)\n  - 60営業日 chunk 21/21: +19,279 (horizon累計 1,247,581, 経過 12.6min)\n[10/13 76.9%] 60営業日: +1,247,581 (累計 12,502,587, 失敗 0, 経過 12.6min)\n  - 90営業日 chunk 1/21: +57,663 (horizon累計 57,663, 経過 12.7min)\n  - 90営業日 chunk 2/21: +56,734 (horizon累計 114,397, 経過 12.8min)\n  - 90営業日 chunk 3/21: +59,170 (horizon累計 173,567, 経過 12.8min)\n  - 90営業日 chunk 4/21: +57,888 (horizon累計 231,455, 経過 12.9min)\n  - 90営業日 chunk 5/21: +59,124 (horizon累計 290,579, 経過 12.9min)\n  - 90営業日 chunk 6/21: +58,634 (horizon累計 349,213, 経過 13.0min)\n  - 90営業日 chunk 7/21: +57,465 (horizon累計 406,678, 経過 13.1min)\n  - 90営業日 chunk 8/21: +56,472 (horizon累計 463,150, 経過 13.1min)\n  - 90営業日 chunk 9/21: +56,009 (horizon累計 519,159, 経過 13.2min)\n  - 90営業日 chunk 10/21: +53,221 (horizon累計 572,380, 経過 13.2min)\n  - 90営業日 chunk 11/21: +48,305 (horizon累計 620,685, 経過 13.3min)\n  - 90営業日 chunk 12/21: +52,534 (horizon累計 673,219, 経過 13.3min)\n  - 90営業日 chunk 13/21: +58,703 (horizon累計 731,922, 経過 13.4min)\n  - 90営業日 chunk 14/21: +59,268 (horizon累計 791,190, 経過 13.5min)\n  - 90営業日 chunk 15/21: +59,031 (horizon累計 850,221, 経過 13.6min)\n  - 90営業日 chunk 16/21: +57,872 (horizon累計 908,093, 経過 13.6min)\n  - 90営業日 chunk 17/21: +58,943 (horizon累計 967,036, 経過 13.7min)\n  - 90営業日 chunk 18/21: +58,796 (horizon累計 1,025,832, 経過 13.8min)\n  - 90営業日 chunk 19/21: +58,026 (horizon累計 1,083,858, 経過 13.8min)\n  - 90営業日 chunk 20/21: +58,399 (horizon累計 1,142,257, 経過 13.9min)\n  - 90営業日 chunk 21/21: +17,954 (horizon累計 1,160,211, 経過 13.9min)\n[11/13 84.6%] 90営業日: +1,160,211 (累計 13,662,798, 失敗 0, 経過 13.9min)\n  - 180営業日 chunk 1/21: +39,933 (horizon累計 39,933, 経過 14.0min)\n  - 180営業日 chunk 2/21: +39,036 (horizon累計 78,969, 経過 14.1min)\n  - 180営業日 chunk 3/21: +41,170 (horizon累計 120,139, 経過 14.1min)\n  - 180営業日 chunk 4/21: +40,029 (horizon累計 160,168, 経過 14.2min)\n  - 180営業日 chunk 5/21: +41,124 (horizon累計 201,292, 経過 14.2min)\n  - 180営業日 chunk 6/21: +40,634 (horizon累計 241,926, 経過 14.3min)\n  - 180営業日 chunk 7/21: +39,526 (horizon累計 281,452, 経過 14.3min)\n  - 180営業日 chunk 8/21: +38,472 (horizon累計 319,924, 経過 14.4min)\n  - 180営業日 chunk 9/21: +38,009 (horizon累計 357,933, 経過 14.4min)\n  - 180営業日 chunk 10/21: +35,446 (horizon累計 393,379, 経過 14.5min)\n  - 180営業日 chunk 11/21: +32,038 (horizon累計 425,417, 経過 14.5min)\n  - 180営業日 chunk 12/21: +36,186 (horizon累計 461,603, 経過 14.6min)\n  - 180営業日 chunk 13/21: +40,711 (horizon累計 502,314, 経過 14.7min)\n  - 180営業日 chunk 14/21: +41,268 (horizon累計 543,582, 経過 14.7min)\n  - 180営業日 chunk 15/21: +41,031 (horizon累計 584,613, 経過 14.8min)\n  - 180営業日 chunk 16/21: +39,878 (horizon累計 624,491, 経過 14.9min)\n  - 180営業日 chunk 17/21: +40,943 (horizon累計 665,434, 経過 14.9min)\n  - 180営業日 chunk 18/21: +40,796 (horizon累計 706,230, 経過 15.0min)\n  - 180営業日 chunk 19/21: +40,057 (horizon累計 746,287, 経過 15.1min)\n  - 180営業日 chunk 20/21: +40,399 (horizon累計 786,686, 経過 15.1min)\n  - 180営業日 chunk 21/21: +12,464 (horizon累計 799,150, 経過 15.2min)\n[12/13 92.3%] 180営業日: +799,150 (累計 14,461,948, 失敗 0, 経過 15.2min)\n  - 200営業日 chunk 1/21: +36,006 (horizon累計 36,006, 経過 15.2min)\n  - 200営業日 chunk 2/21: +35,136 (horizon累計 71,142, 経過 15.3min)\n  - 200営業日 chunk 3/21: +37,170 (horizon累計 108,312, 経過 15.3min)\n  - 200営業日 chunk 4/21: +36,069 (horizon累計 144,381, 経過 15.4min)\n  - 200営業日 chunk 5/21: +37,124 (horizon累計 181,505, 経過 15.4min)\n  - 200営業日 chunk 6/21: +36,648 (horizon累計 218,153, 経過 15.5min)\n  - 200営業日 chunk 7/21: +35,547 (horizon累計 253,700, 経過 15.6min)\n  - 200営業日 chunk 8/21: +34,472 (horizon累計 288,172, 経過 15.6min)\n  - 200営業日 chunk 9/21: +34,009 (horizon累計 322,181, 経過 15.7min)\n  - 200営業日 chunk 10/21: +31,665 (horizon累計 353,846, 経過 15.7min)\n  - 200営業日 chunk 11/21: +28,878 (horizon累計 382,724, 経過 15.8min)\n  - 200営業日 chunk 12/21: +32,586 (horizon累計 415,310, 経過 15.8min)\n  - 200営業日 chunk 13/21: +36,731 (horizon累計 452,041, 経過 15.9min)\n  - 200営業日 chunk 14/21: +37,268 (horizon累計 489,309, 経過 16.0min)\n  - 200営業日 chunk 15/21: +37,031 (horizon累計 526,340, 経過 16.0min)\n  - 200営業日 chunk 16/21: +35,900 (horizon累計 562,240, 経過 16.1min)\n  - 200営業日 chunk 17/21: +36,943 (horizon累計 599,183, 経過 16.1min)\n  - 200営業日 chunk 18/21: +36,796 (horizon累計 635,979, 経過 16.2min)\n  - 200営業日 chunk 19/21: +36,095 (horizon累計 672,074, 経過 16.3min)\n  - 200営業日 chunk 20/21: +36,399 (horizon累計 708,473, 経過 16.4min)\n  - 200営業日 chunk 21/21: +11,244 (horizon累計 719,717, 経過 16.4min)\n[13/13 100.0%] 200営業日: +719,717 (累計 15,181,665, 失敗 0, 経過 16.4min)\n完了: 13 成功 / 0 失敗 / 計 15181665 行 / success\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "pattern_stats_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-pattern-stats.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-pattern-stats.ts",
+          "sha256": "9ac44a2a5a738061440832b9a687da6d0129d27cec9d193ed51c28c6fcc5f7d2"
+        }
+      ],
+      "startedAt": "2026-11-04T19:13:06.684Z",
+      "finishedAt": "2026-11-04T19:14:25.338Z",
+      "durationMs": 78654,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 281100288,
+      "databaseBytesBefore": 19208163328,
+      "databaseBytesAfter": 19221614592,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 19849990144,
+      "allocatedBytesAfter": 19866767360,
+      "allocatedBytesPeak": 19866767360,
+      "observedRows": {
+        "pattern_stats": 122695
+      },
+      "stdoutTail": "pattern_stats horizon単位の原子的再構築: horizons=2,3,4,5,10,15,20,30,40,60,90,180,200\n\n=== horizon=2d 集計開始 ===\n  集計INSERT: 9,729 パターン (8.7s)\n\n=== horizon=3d 集計開始 ===\n  集計INSERT: 9,729 パターン (8.6s)\n\n=== horizon=4d 集計開始 ===\n  集計INSERT: 9,727 パターン (9.0s)\n\n=== horizon=5d 集計開始 ===\n  集計INSERT: 9,726 パターン (9.1s)\n\n=== horizon=10d 集計開始 ===\n  集計INSERT: 9,725 パターン (5.9s)\n\n=== horizon=15d 集計開始 ===\n  集計INSERT: 9,723 パターン (5.6s)\n\n=== horizon=20d 集計開始 ===\n  集計INSERT: 9,723 パターン (5.3s)\n\n=== horizon=30d 集計開始 ===\n  集計INSERT: 9,721 パターン (5.1s)\n\n=== horizon=40d 集計開始 ===\n  集計INSERT: 9,719 パターン (5.2s)\n\n=== horizon=60d 集計開始 ===\n  集計INSERT: 9,715 パターン (5.1s)\n\n=== horizon=90d 集計開始 ===\n  集計INSERT: 9,435 パターン (4.8s)\n\n=== horizon=180d 集計開始 ===\n  集計INSERT: 8,210 パターン (3.2s)\n\n=== horizon=200d 集計開始 ===\n  集計INSERT: 7,813 パターン (2.9s)\n完了: 122,695 パターン × horizon バケット\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "signal_stats_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-signal-stats.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-signal-stats.ts",
+          "sha256": "05e94fd4027562dd69a1851bf6b925a0e783c50414d5ad158115fbd917a4da93"
+        }
+      ],
+      "startedAt": "2026-11-04T19:14:25.346Z",
+      "finishedAt": "2026-11-04T19:15:39.637Z",
+      "durationMs": 74291,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 127156224,
+      "databaseBytesBefore": 19221614592,
+      "databaseBytesAfter": 19221614592,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 19866767360,
+      "allocatedBytesAfter": 19866767360,
+      "allocatedBytesPeak": 19866767360,
+      "observedRows": {
+        "signal_stats": 231
+      },
+      "stdoutTail": "signal_stats build: min_n=40, group_limit=all, recent_days=all, date_chunk=10, by_pattern=false\nsignal_stats: native parallel aggregate concurrency=2, horizons=5,10,20,40,60,90,200, temp=/private/tmp/stockboard-a-p1-final-20261104/.signal-stats-tmp\nsignal_stats native horizon=10: rows=36, elapsed=0.5m\nsignal_stats native horizon=5: rows=36, elapsed=0.5m\nsignal_stats native horizon=40: rows=36, elapsed=0.3m\nsignal_stats native horizon=20: rows=36, elapsed=0.4m\nsignal_stats native horizon=90: rows=36, elapsed=0.2m\nsignal_stats native horizon=60: rows=36, elapsed=0.3m\nsignal_stats native horizon=200: rows=15, elapsed=0.1m\nsignal_stats complete: native parallel aggregate (231 rows)\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "signal_return_stats_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-signal-return-stats.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-signal-return-stats.ts",
+          "sha256": "d4309d98fe2f7d6c42309438c997b05230491b19a35934c10ee431e3effb726e"
+        }
+      ],
+      "startedAt": "2026-11-04T19:15:39.642Z",
+      "finishedAt": "2026-11-04T19:17:13.899Z",
+      "durationMs": 94257,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 129040384,
+      "databaseBytesBefore": 19221614592,
+      "databaseBytesAfter": 19221614592,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 19866767360,
+      "allocatedBytesAfter": 19866767360,
+      "allocatedBytesPeak": 19866767360,
+      "observedRows": {
+        "signal_return_stats": 426
+      },
+      "stdoutTail": "signal_return_stats build: horizons=2,3,4,5,10,15,20,30,40,60,90,180,200, min_n=20, recent_days=all, date_chunk=10, median_sample=1/10\nsignal_return_stats: native single-pass aggregate horizons=2,3,4,5,10,15,20,30,40,60,90,180,200, temp=/private/tmp/stockboard-a-p1-final-20261104/.signal-return-stats-tmp\nsignal_return_stats native horizons=2,3,4,5,10,15,20,30,40,60,90,180,200: rows=426, median_sample=1/10, elapsed=1.6m\nsignal_return_stats complete: native single-pass aggregate (426 rows)\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "backtest_260",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/build-serving-backtest.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/build-serving-backtest.ts",
+          "sha256": "cec78930e44c9a2a7a3db621d0207e2e747dda68304e773286a13321f9f17a04"
+        }
+      ],
+      "startedAt": "2026-11-04T19:17:13.913Z",
+      "finishedAt": "2026-11-04T19:22:22.967Z",
+      "durationMs": 309054,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 2837250048,
+      "databaseBytesBefore": 19221614592,
+      "databaseBytesAfter": 21768704000,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 19866767360,
+      "allocatedBytesAfter": 22408404992,
+      "allocatedBytesPeak": 22408404992,
+      "observedRows": {
+        "serving_backtest_dates": 216,
+        "serving_backtest_results": 2146931,
+        "serving_backtest_summaries": 1848
+      },
+      "stdoutTail": "serving build for 2026-10-30: date_limit=260, summary_date_chunk=60\nserving_latest_signals: 300 rows\nserving_signal_stats: 231 rows\n[db-read] done 8939ms SELECT mf.date, COUNT(*) AS total_tickers, SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_tickers FROM model_features mf INNER JOI\nserving_backtest_dates: 216 rows\n[db-read] done 12794ms SELECT mf.date, fe.horizon_days, COUNT(*) AS count, SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_count, SUM(fe.hit_10) AS hit_10\n[db-read] done 14897ms SELECT mf.date, fe.horizon_days, COUNT(*) AS count, SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_count, SUM(fe.hit_10) AS hit_10\n[db-read] done 6718ms SELECT mf.date, fe.horizon_days, COUNT(*) AS count, SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_count, SUM(fe.hit_10) AS hit_10\n[db-read] done 5132ms SELECT mf.date, fe.horizon_days, COUNT(*) AS count, SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_count, SUM(fe.hit_10) AS hit_10\nserving_backtest_summaries chunk 4/4 elapsed=0.7m\nserving_backtest_summaries: dates=216\nserving_backtest_results chunk 10/11 elapsed=1.3m\nserving_backtest_results chunk 11/11 elapsed=1.4m\n[db-read] done 6346ms SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength, ts.direction, ts.label, ts.score_component, ts.value_json FROM technical_signals ts INNER\n[db-read] done 4479ms SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength, ts.direction, ts.label, ts.score_component, ts.value_json FROM technical_signals ts INNER\n[db-read] done 4273ms SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength, ts.direction, ts.label, ts.score_component, ts.value_json FROM technical_signals ts INNER\n[db-read] done 5052ms SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength, ts.direction, ts.label, ts.score_component, ts.value_json FROM technical_signals ts INNER\n[db-read] done 6161ms SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength, ts.direction, ts.label, ts.score_component, ts.value_json FROM technical_signals ts INNER\nserving_signal_evidence chunk 11/11 rows=1,886,957\n[db-read] done 2308ms SELECT * FROM ( SELECT r.*, ROW_NUMBER() OVER ( PARTITION BY r.date, r.horizon_days ORDER BY COALESCE(r.max_return_pct, -999999) DESC ) AS rn FROM serving_backtest_results r WHERE \n[db-read] done 3613ms SELECT * FROM ( SELECT r.*, ROW_NUMBER() OVER ( PARTITION BY r.date, r.horizon_days ORDER BY COALESCE(r.max_return_pct, -999999) DESC ) AS rn FROM serving_backtest_results r WHERE \n[db-read] done 4368ms SELECT * FROM ( SELECT r.*, ROW_NUMBER() OVER ( PARTITION BY r.date, r.horizon_days ORDER BY COALESCE(r.max_return_pct, -999999) DESC ) AS rn FROM serving_backtest_results r WHERE \n[db-read] done 4016ms SELECT * FROM ( SELECT r.*, ROW_NUMBER() OVER ( PARTITION BY r.date, r.horizon_days ORDER BY COALESCE(r.max_return_pct, -999999) DESC ) AS rn FROM serving_backtest_results r WHERE \n[db-read] done 4302ms SELECT * FROM ( SELECT r.*, ROW_NUMBER() OVER ( PARTITION BY r.date, r.horizon_days ORDER BY COALESCE(r.max_return_pct, -999999) DESC ) AS rn FROM serving_backtest_results r WHERE \nserving_backtest_details: 20,274 rows\nserving_similar_cases: 235 rows\nserving build complete\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "stages_rebuilt",
+      "command": [
+        "/usr/local/bin/node",
+        "--import",
+        "tsx",
+        "scripts/batch-stage-transitions.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/batch-stage-transitions.ts",
+          "sha256": "aa6051afeebee577fa7bdea6313837e2c9198b072904e9aa6a62ac9f0a38e629"
+        }
+      ],
+      "startedAt": "2026-11-04T19:22:24.581Z",
+      "finishedAt": "2026-11-04T19:31:14.487Z",
+      "durationMs": 529906,
+      "status": "PASS",
+      "exitCode": 0,
+      "signal": null,
+      "rssBytesPeak": 584957952,
+      "databaseBytesBefore": 21768704000,
+      "databaseBytesAfter": 21768704000,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 22408404992,
+      "allocatedBytesAfter": 22408404992,
+      "allocatedBytesPeak": 22408404992,
+      "observedRows": {
+        "stage_transitions": 216
+      },
+      "stdoutTail": "\n=== daily_a (column: daily_a_stage) ===\n  36 セル (13,011,014 遷移)\n\n=== daily_b (column: daily_b_stage) ===\n  36 セル (12,084,138 遷移)\n\n=== weekly_a (column: weekly_a_stage) ===\n  36 セル (12,877,188 遷移)\n\n=== weekly_b (column: weekly_b_stage) ===\n  36 セル (11,460,546 遷移)\n\n=== monthly_a (column: monthly_a_stage) ===\n  36 セル (12,566,767 遷移)\n\n=== monthly_b (column: monthly_b_stage) ===\n  36 セル (11,382,304 遷移)\n\n全6軸の集計完了。既存値を原子的に置換...\n\n完了: 216 セル (6軸計, 123.3s)\n",
+      "stderrTail": ""
+    },
+    {
+      "name": "valuation",
+      "command": [
+        "/usr/local/bin/node",
+        "--expose-gc",
+        "--import",
+        "tsx",
+        "scripts/backfill-valuation-serving.ts"
+      ],
+      "sealedFiles": [
+        {
+          "path": "/Users/yoshio/Documents/ChatGPT/株サイト/market-data-split-poc/scripts/backfill-valuation-serving.ts",
+          "sha256": "05ef86b96e32baa2d93b64981ce2b37c12b89d9c4001567116387df280faa20f"
+        }
+      ],
+      "startedAt": "2026-11-04T19:31:16.167Z",
+      "finishedAt": "2026-11-04T19:41:31.268Z",
+      "durationMs": 615101,
+      "status": "FAIL",
+      "exitCode": null,
+      "signal": "SIGKILL",
+      "rssBytesPeak": 2399010816,
+      "databaseBytesBefore": 21768704000,
+      "databaseBytesAfter": 22091423744,
+      "walBytesBefore": 623347792,
+      "walBytesAfter": 623347792,
+      "walBytesPeak": 623347792,
+      "allocatedBytesBefore": 22408404992,
+      "allocatedBytesAfter": 22731124736,
+      "allocatedBytesPeak": 22731124736,
+      "observedRows": {
+        "valuation_daily_serving": 4815757,
+        "valuation_serving_checkpoints": 2445
+      },
+      "stdoutTail": ":0,\"failed\":0,\"persistedRows\":1175922,\"rowsPerSecond\":7022}\n{\"progress\":\"1100/4061\",\"completed\":1100,\"skipped\":0,\"failed\":0,\"persistedRows\":1203222,\"rowsPerSecond\":7005}\n{\"progress\":\"1125/4061\",\"completed\":1125,\"skipped\":0,\"failed\":0,\"persistedRows\":1231220,\"rowsPerSecond\":6993}\n{\"progress\":\"1150/4061\",\"completed\":1150,\"skipped\":0,\"failed\":0,\"persistedRows\":1259690,\"rowsPerSecond\":6975}\n{\"progress\":\"1175/4061\",\"completed\":1175,\"skipped\":0,\"failed\":0,\"persistedRows\":1287660,\"rowsPerSecond\":6915}\n{\"progress\":\"1200/4061\",\"completed\":1200,\"skipped\":0,\"failed\":0,\"persistedRows\":1315927,\"rowsPerSecond\":6878}\n{\"progress\":\"1225/4061\",\"completed\":1225,\"skipped\":0,\"failed\":0,\"persistedRows\":1343772,\"rowsPerSecond\":6835}\n{\"progress\":\"1250/4061\",\"completed\":1250,\"skipped\":0,\"failed\":0,\"persistedRows\":1371407,\"rowsPerSecond\":6796}\n{\"progress\":\"1275/4061\",\"completed\":1275,\"skipped\":0,\"failed\":0,\"persistedRows\":1399213,\"rowsPerSecond\":6766}\n{\"progress\":\"1300/4061\",\"completed\":1300,\"skipped\":0,\"failed\":0,\"persistedRows\":1426839,\"rowsPerSecond\":6719}\n{\"progress\":\"1325/4061\",\"completed\":1325,\"skipped\":0,\"failed\":0,\"persistedRows\":1454588,\"rowsPerSecond\":6640}\n{\"progress\":\"1350/4061\",\"completed\":1350,\"skipped\":0,\"failed\":0,\"persistedRows\":1483272,\"rowsPerSecond\":6581}\n{\"progress\":\"1375/4061\",\"completed\":1375,\"skipped\":0,\"failed\":0,\"persistedRows\":1512811,\"rowsPerSecond\":6491}\n{\"progress\":\"1400/4061\",\"completed\":1400,\"skipped\":0,\"failed\":0,\"persistedRows\":1539465,\"rowsPerSecond\":6447}\n{\"progress\":\"1425/4061\",\"completed\":1425,\"skipped\":0,\"failed\":0,\"persistedRows\":1568953,\"rowsPerSecond\":6403}\n{\"progress\":\"1450/4061\",\"completed\":1450,\"skipped\":0,\"failed\":0,\"persistedRows\":1596320,\"rowsPerSecond\":6372}\n{\"progress\":\"1475/4061\",\"completed\":1475,\"skipped\":0,\"failed\":0,\"persistedRows\":1624899,\"rowsPerSecond\":6328}\n{\"progress\":\"1500/4061\",\"completed\":1500,\"skipped\":0,\"failed\":0,\"persistedRows\":1649094,\"rowsPerSecond\":6290}\n{\"progress\":\"1525/4061\",\"completed\":1525,\"skipped\":0,\"failed\":0,\"persistedRows\":1677681,\"rowsPerSecond\":6267}\n{\"progress\":\"1550/4061\",\"completed\":1550,\"skipped\":0,\"failed\":0,\"persistedRows\":1705743,\"rowsPerSecond\":6222}\n{\"progress\":\"1575/4061\",\"completed\":1575,\"skipped\":0,\"failed\":0,\"persistedRows\":1732742,\"rowsPerSecond\":6204}\n{\"progress\":\"1600/4061\",\"completed\":1600,\"skipped\":0,\"failed\":0,\"persistedRows\":1760152,\"rowsPerSecond\":6180}\n{\"progress\":\"1625/4061\",\"completed\":1625,\"skipped\":0,\"failed\":0,\"persistedRows\":1788379,\"rowsPerSecond\":6146}\n{\"progress\":\"1650/4061\",\"completed\":1650,\"skipped\":0,\"failed\":0,\"persistedRows\":1817816,\"rowsPerSecond\":6130}\n{\"progress\":\"1675/4061\",\"completed\":1675,\"skipped\":0,\"failed\":0,\"persistedRows\":1845160,\"rowsPerSecond\":6120}\n{\"progress\":\"1700/4061\",\"completed\":1700,\"skipped\":0,\"failed\":0,\"persistedRows\":1873363,\"rowsPerSecond\":6102}\n{\"progress\":\"1725/4061\",\"completed\":1725,\"skipped\":0,\"failed\":0,\"persistedRows\":1899822,\"rowsPerSecond\":6091}\n{\"progress\":\"1750/4061\",\"completed\":1750,\"skipped\":0,\"failed\":0,\"persistedRows\":1928366,\"rowsPerSecond\":6074}\n{\"progress\":\"1775/4061\",\"completed\":1775,\"skipped\":0,\"failed\":0,\"persistedRows\":1957895,\"rowsPerSecond\":6057}\n{\"progress\":\"1800/4061\",\"completed\":1800,\"skipped\":0,\"failed\":0,\"persistedRows\":1982769,\"rowsPerSecond\":6029}\n{\"progress\":\"1825/4061\",\"completed\":1825,\"skipped\":0,\"failed\":0,\"persistedRows\":2009201,\"rowsPerSecond\":6013}\n{\"progress\":\"1850/4061\",\"completed\":1850,\"skipped\":0,\"failed\":0,\"persistedRows\":2035694,\"rowsPerSecond\":6008}\n{\"progress\":\"1875/4061\",\"completed\":1875,\"skipped\":0,\"failed\":0,\"persistedRows\":2060822,\"rowsPerSecond\":5995}\n{\"progress\":\"1900/4061\",\"completed\":1900,\"skipped\":0,\"failed\":0,\"persistedRows\":2087816,\"rowsPerSecond\":5974}\n{\"progress\":\"1925/4061\",\"completed\":1925,\"skipped\":0,\"failed\":0,\"persistedRows\":2113339,\"rowsPerSecond\":5953}\n{\"progress\":\"1950/4061\",\"completed\":1950,\"skipped\":0,\"failed\":0,\"persistedRows\":2139585,\"rowsPerSecond\":5930}\n{\"progress\":\"1975/4061\",\"completed\":1975,\"skipped\":0,\"failed\":0,\"persistedRows\":2164954,\"rowsPerSecond\":5833}\n{\"progress\":\"2000/4061\",\"completed\":2000,\"skipped\":0,\"failed\":0,\"persistedRows\":2188456,\"rowsPerSecond\":5838}\n{\"progress\":\"2025/4061\",\"completed\":2025,\"skipped\":0,\"failed\":0,\"persistedRows\":2211240,\"rowsPerSecond\":5843}\n{\"progress\":\"2050/4061\",\"completed\":2050,\"skipped\":0,\"failed\":0,\"persistedRows\":2235330,\"rowsPerSecond\":5844}\n{\"progress\":\"2075/4061\",\"completed\":2075,\"skipped\":0,\"failed\":0,\"persistedRows\":2261129,\"rowsPerSecond\":5852}\n{\"progress\":\"2100/4061\",\"completed\":2100,\"skipped\":0,\"failed\":0,\"persistedRows\":2282431,\"rowsPerSecond\":5858}\n{\"progress\":\"2125/4061\",\"completed\":2125,\"skipped\":0,\"failed\":0,\"persistedRows\":2306343,\"rowsPerSecond\":5862}\n{\"progress\":\"2150/4061\",\"completed\":2150,\"skipped\":0,\"failed\":0,\"persistedRows\":2324029,\"rowsPerSecond\":5868}\n{\"progress\":\"2175/4061\",\"completed\":2175,\"skipped\":0,\"failed\":0,\"persistedRows\":2344088,\"rowsPerSecond\":5880}\n{\"progress\":\"2200/4061\",\"completed\":2200,\"skipped\":0,\"failed\":0,\"persistedRows\":2366282,\"rowsPerSecond\":5885}\n{\"progress\":\"2225/4061\",\"completed\":2225,\"skipped\":0,\"failed\":0,\"persistedRows\":2385493,\"rowsPerSecond\":5888}\n{\"progress\":\"2250/4061\",\"completed\":2250,\"skipped\":0,\"failed\":0,\"persistedRows\":2404284,\"rowsPerSecond\":5892}\n{\"progress\":\"2275/4061\",\"completed\":2275,\"skipped\":0,\"failed\":0,\"persistedRows\":2429711,\"rowsPerSecond\":5897}\n{\"progress\":\"2300/4061\",\"completed\":2300,\"skipped\":0,\"failed\":0,\"persistedRows\":2459209,\"rowsPerSecond\":5855}\n{\"progress\":\"2325/4061\",\"completed\":2325,\"skipped\":0,\"failed\":0,\"persistedRows\":2486733,\"rowsPerSecond\":5854}\n{\"progress\":\"2350/4061\",\"completed\":2350,\"skipped\":0,\"failed\":0,\"persistedRows\":2515831,\"rowsPerSecond\":5853}\n{\"progress\":\"2375/4061\",\"completed\":2375,\"skipped\":0,\"failed\":0,\"persistedRows\":2545163,\"rowsPerSecond\":5853}\n{\"progress\":\"2400/4061\",\"completed\":2400,\"skipped\":0,\"failed\":0,\"persistedRows\":2575489,\"rowsPerSecond\":5827}\n{\"progress\":\"2425/4061\",\"completed\":2425,\"skipped\":0,\"failed\":0,\"persistedRows\":2605854,\"rowsPerSecond\":5805}\n",
+      "stderrTail": ""
+    }
+  ],
+  "sealedResearch": {
+    "ml_short_labels": {
+      "count": 4053,
+      "sha256": "a03cdd851b60e984380f910505166a33ddea6cc3a7fa30cc80154e8e68c6290a"
+    },
+    "rl_training_states_v2": {
+      "count": 11760,
+      "sha256": "0719445602a0780b37532838511d9045e3c64af126f46ef6ae9ba003899708a9"
+    },
+    "ml_rl_policy_evaluations": {
+      "count": 21,
+      "sha256": "7772ba4853f36a5aea3a7f3f73c2b47681ad503669eba3a0fe84ac31d839a9b5"
+    },
+    "ml_physics_status_evaluations": {
+      "count": 56,
+      "sha256": "afc8195eff07fab5e38789cfe8044d804d68936fbf2870385c5ca2a39a44f19a"
+    },
+    "ml_training_labels": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "rl_training_states": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "holdReason": "valuation failed: :0,\"failed\":0,\"persistedRows\":1175922,\"rowsPerSecond\":7022}\n{\"progress\":\"1100/4061\",\"completed\":1100,\"skipped\":0,\"failed\":0,\"persistedRows\":1203222,\"rowsPerSecond\":7005}\n{\"progress\":\"1125/4061\",\"completed\":1125,\"skipped\":0,\"failed\":0,\"persistedRows\":1231220,\"rowsPerSecond\":6993}\n{\"progress\":\"1150/4061\",\"completed\":1150,\"skipped\":0,\"failed\":0,\"persistedRows\":1259690,\"rowsPerSecond\":6975}\n{\"progress\":\"1175/4061\",\"completed\":1175,\"skipped\":0,\"failed\":0,\"persistedRows\":1287660,\"rowsPerSecond\":6915}\n{\"progress\":\"1200/4061\",\"completed\":1200,\"skipped\":0,\"failed\":0,\"persistedRows\":1315927,\"rowsPerSecond\":6878}\n{\"progress\":\"1225/4061\",\"completed\":1225,\"skipped\":0,\"failed\":0,\"persistedRows\":1343772,\"rowsPerSecond\":6835}\n{\"progress\":\"1250/4061\",\"completed\":1250,\"skipped\":0,\"failed\":0,\"persistedRows\":1371407,\"rowsPerSecond\":6796}\n{\"progress\":\"1275/4061\",\"completed\":1275,\"skipped\":0,\"failed\":0,\"persistedRows\":1399213,\"rowsPerSecond\":6766}\n{\"progress\":\"1300/4061\",\"completed\":1300,\"skipped\":0,\"failed\":0,\"persistedRows\":1426839,\"rowsPerSecond\":6719}\n{\"progress\":\"1325/4061\",\"completed\":1325,\"skipped\":0,\"failed\":0,\"persistedRows\":1454588,\"rowsPerSecond\":6640}\n{\"progress\":\"1350/4061\",\"completed\":1350,\"skipped\":0,\"failed\":0,\"persistedRows\":1483272,\"rowsPerSecond\":6581}\n{\"progress\":\"1375/4061\",\"completed\":1375,\"skipped\":0,\"failed\":0,\"persistedRows\":1512811,\"rowsPerSecond\":6491}\n{\"progress\":\"1400/4061\",\"completed\":1400,\"skipped\":0,\"failed\":0,\"persistedRows\":1539465,\"rowsPerSecond\":6447}\n{\"progress\":\"1425/4061\",\"completed\":1425,\"skipped\":0,\"failed\":0,\"persistedRows\":1568953,\"rowsPerSecond\":6403}\n{\"progress\":\"1450/4061\",\"completed\":1450,\"skipped\":0,\"failed\":0,\"persistedRows\":1596320,\"rowsPerSecond\":6372}\n{\"progress\":\"1475/4061\",\"completed\":1475,\"skipped\":0,\"failed\":0,\"persistedRows\":1624899,\"rowsPerSecond\":6328}\n{\"progress\":\"1500/4061\",\"completed\":1500,\"skipped\":0,\"failed\":0,\"persistedRows\":1649094,\"rowsPerSecond\":6290}\n{\"progress\":\"1525/4061\",\"completed\":1525,\"skipped\":0,\"failed\":0,\"persistedRows\":1677681,\"rowsPerSecond\":6267}\n{\"progress\":\"1550/4061\",\"completed\":1550,\"skipped\":0,\"failed\":0,\"persistedRows\":1705743,\"rowsPerSecond\":6222}\n{\"progress\":\"1575/4061\",\"completed\":1575,\"skipped\":0,\"failed\":0,\"persistedRows\":1732742,\"rowsPerSecond\":6204}\n{\"progress\":\"1600/4061\",\"completed\":1600,\"skipped\":0,\"failed\":0,\"persistedRows\":1760152,\"rowsPerSecond\":6180}\n{\"progress\":\"1625/4061\",\"completed\":1625,\"skipped\":0,\"failed\":0,\"persistedRows\":1788379,\"rowsPerSecond\":6146}\n{\"progress\":\"1650/4061\",\"completed\":1650,\"skipped\":0,\"failed\":0,\"persistedRows\":1817816,\"rowsPerSecond\":6130}\n{\"progress\":\"1675/4061\",\"completed\":1675,\"skipped\":0,\"failed\":0,\"persistedRows\":1845160,\"rowsPerSecond\":6120}\n{\"progress\":\"1700/4061\",\"completed\":1700,\"skipped\":0,\"failed\":0,\"persistedRows\":1873363,\"rowsPerSecond\":6102}\n{\"progress\":\"1725/4061\",\"completed\":1725,\"skipped\":0,\"failed\":0,\"persistedRows\":1899822,\"rowsPerSecond\":6091}\n{\"progress\":\"1750/4061\",\"completed\":1750,\"skipped\":0,\"failed\":0,\"persistedRows\":1928366,\"rowsPerSecond\":6074}\n{\"progress\":\"1775/4061\",\"completed\":1775,\"skipped\":0,\"failed\":0,\"persistedRows\":1957895,\"rowsPerSecond\":6057}\n{\"progress\":\"1800/4061\",\"completed\":1800,\"skipped\":0,\"failed\":0,\"persistedRows\":1982769,\"rowsPerSecond\":6029}\n{\"progress\":\"1825/4061\",\"completed\":1825,\"skipped\":0,\"failed\":0,\"persistedRows\":2009201,\"rowsPerSecond\":6013}\n{\"progress\":\"1850/4061\",\"completed\":1850,\"skipped\":0,\"failed\":0,\"persistedRows\":2035694,\"rowsPerSecond\":6008}\n{\"progress\":\"1875/4061\",\"completed\":1875,\"skipped\":0,\"failed\":0,\"persistedRows\":2060822,\"rowsPerSecond\":5995}\n{\"progress\":\"1900/4061\",\"completed\":1900,\"skipped\":0,\"failed\":0,\"persistedRows\":2087816,\"rowsPerSecond\":5974}\n{\"progress\":\"1925/4061\",\"completed\":1925,\"skipped\":0,\"failed\":0,\"persistedRows\":2113339,\"rowsPerSecond\":5953}\n{\"progress\":\"1950/4061\",\"completed\":1950,\"skipped\":0,\"failed\":0,\"persistedRows\":2139585,\"rowsPerSecond\":5930}\n{\"progress\":\"1975/4061\",\"completed\":1975,\"skipped\":0,\"failed\":0,\"persistedRows\":2164954,\"rowsPerSecond\":5833}\n{\"progress\":\"2000/4061\",\"completed\":2000,\"skipped\":0,\"failed\":0,\"persistedRows\":2188456,\"rowsPerSecond\":5838}\n{\"progress\":\"2025/4061\",\"completed\":2025,\"skipped\":0,\"failed\":0,\"persistedRows\":2211240,\"rowsPerSecond\":5843}\n{\"progress\":\"2050/4061\",\"completed\":2050,\"skipped\":0,\"failed\":0,\"persistedRows\":2235330,\"rowsPerSecond\":5844}\n{\"progress\":\"2075/4061\",\"completed\":2075,\"skipped\":0,\"failed\":0,\"persistedRows\":2261129,\"rowsPerSecond\":5852}\n{\"progress\":\"2100/4061\",\"completed\":2100,\"skipped\":0,\"failed\":0,\"persistedRows\":2282431,\"rowsPerSecond\":5858}\n{\"progress\":\"2125/4061\",\"completed\":2125,\"skipped\":0,\"failed\":0,\"persistedRows\":2306343,\"rowsPerSecond\":5862}\n{\"progress\":\"2150/4061\",\"completed\":2150,\"skipped\":0,\"failed\":0,\"persistedRows\":2324029,\"rowsPerSecond\":5868}\n{\"progress\":\"2175/4061\",\"completed\":2175,\"skipped\":0,\"failed\":0,\"persistedRows\":2344088,\"rowsPerSecond\":5880}\n{\"progress\":\"2200/4061\",\"completed\":2200,\"skipped\":0,\"failed\":0,\"persistedRows\":2366282,\"rowsPerSecond\":5885}\n{\"progress\":\"2225/4061\",\"completed\":2225,\"skipped\":0,\"failed\":0,\"persistedRows\":2385493,\"rowsPerSecond\":5888}\n{\"progress\":\"2250/4061\",\"completed\":2250,\"skipped\":0,\"failed\":0,\"persistedRows\":2404284,\"rowsPerSecond\":5892}\n{\"progress\":\"2275/4061\",\"completed\":2275,\"skipped\":0,\"failed\":0,\"persistedRows\":2429711,\"rowsPerSecond\":5897}\n{\"progress\":\"2300/4061\",\"completed\":2300,\"skipped\":0,\"failed\":0,\"persistedRows\":2459209,\"rowsPerSecond\":5855}\n{\"progress\":\"2325/4061\",\"completed\":2325,\"skipped\":0,\"failed\":0,\"persistedRows\":2486733,\"rowsPerSecond\":5854}\n{\"progress\":\"2350/4061\",\"completed\":2350,\"skipped\":0,\"failed\":0,\"persistedRows\":2515831,\"rowsPerSecond\":5853}\n{\"progress\":\"2375/4061\",\"completed\":2375,\"skipped\":0,\"failed\":0,\"persistedRows\":2545163,\"rowsPerSecond\":5853}\n{\"progress\":\"2400/4061\",\"completed\":2400,\"skipped\":0,\"failed\":0,\"persistedRows\":2575489,\"rowsPerSecond\":5827}\n{\"progress\":\"2425/4061\",\"completed\":2425,\"skipped\":0,\"failed\":0,\"persistedRows\":2605854,\"rowsPerSecond\":5805}\n"
+}

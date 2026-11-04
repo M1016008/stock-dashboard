@@ -411,3 +411,15 @@ export function applyJpOhlcvRepairTransaction(options: ApplyOptions): JpOhlcvRep
     throw error
   }
 }
+
+export function chunkJpOhlcvRepairTickers(
+  tickers: readonly string[],
+  size: number,
+): string[][] {
+  if (!Number.isSafeInteger(size) || size <= 0) throw new Error('ticker chunk size must be a positive integer')
+  const chunks: string[][] = []
+  for (let offset = 0; offset < tickers.length; offset += size) {
+    chunks.push(tickers.slice(offset, offset + size))
+  }
+  return chunks
+}

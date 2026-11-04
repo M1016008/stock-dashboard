@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import {
   applyJpOhlcvRepairTransaction,
+  chunkJpOhlcvRepairTickers,
   createJpOhlcvRepairPlan,
   inspectJpOhlcvRepairMlCoverage,
 } from '@/lib/jp-ohlcv-local-repair'
@@ -167,6 +168,15 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const chunked = chunkJpOhlcvRepairTickers(
+    Array.from({ length: 4_061 }, (_, index) => String(index + 1)),
+    500,
+  )
+  assert.equal(chunked.length, 9)
+  assert.equal(chunked.at(-1)?.length, 61)
+  assert.deepEqual(chunked.flat(), Array.from({ length: 4_061 }, (_, index) => String(index + 1)))
+  assert.throws(() => chunkJpOhlcvRepairTickers(['1306'], 0), /positive integer/)
+
   const mlCoverageDb = new DatabaseSync(':memory:')
   mlCoverageDb.exec(`
     CREATE TABLE ohlcv_daily(ticker TEXT NOT NULL,date TEXT NOT NULL,PRIMARY KEY(ticker,date));

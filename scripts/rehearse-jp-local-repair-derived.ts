@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import {
   applyJpOhlcvRepairTransaction,
+  chunkJpOhlcvRepairTickers,
   completeJpOhlcvRepairDerived,
   createJpOhlcvRepairPlan,
   inspectJpOhlcvRepairMlCoverage,
@@ -52,6 +53,40 @@ type StageReceipt = {
   observedRows: Record<string, number>
   stdoutTail: string
   stderrTail: string
+  chunks?: StageChunkReceipt[]
+}
+
+type StageChunkReceipt = {
+  index: number
+  tickerCount: number
+  tickersSha256: string
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  status: 'PASS' | 'FAIL'
+  exitCode: number | null
+  signal: NodeJS.Signals | null
+  rssBytesPeak: number
+  walBytesPeak: number
+  allocatedBytesPeak: number
+  stdoutTail: string
+  stderrTail: string
+}
+
+type StageDefinition = {
+  name: string
+  command: string[]
+  env?: Record<string, string>
+  chunks?: Array<{
+    env: Record<string, string>
+    tickerCount: number
+    tickersSha256: string
+  }>
+}
+
+type ValuationChunkIdentity = {
+  tickerCount: number
+  tickersSha256: string
 }
 
 type Receipt = {
@@ -100,6 +135,7 @@ type MaintenanceLockHolder = {
 
 const TARGET_DATE = '2026-07-17'
 const LATEST_DATE = '2026-10-30'
+const VALUATION_CHUNK_SIZE = 500
 const TABLES_BY_STAGE: Record<string, string[]> = {
   snapshots: ['daily_snapshots'],
   features_rebuilt: ['feature_snapshots'],
@@ -303,6 +339,37 @@ function writeReceipt(filePath: string, receipt: Receipt): void {
   fs.renameSync(temporary, filePath)
 }
 
+function valuationChunkIdentities(tickers: readonly string[]): ValuationChunkIdentity[] {
+  return chunkJpOhlcvRepairTickers(tickers, VALUATION_CHUNK_SIZE).map((chunk) => ({
+    tickerCount: chunk.length,
+    tickersSha256: jpOhlcvValueSha256(chunk),
+  }))
+}
+
+function assertCompleteStageReceipts(
+  receipt: Receipt,
+  expectedValuationChunks: ValuationChunkIdentity[],
+): void {
+  const names = receipt.stages.map((stage) => stage.name)
+  if (names.length !== 28 || new Set(names).size !== names.length
+      || receipt.stages.some((stage) => stage.status !== 'PASS')) {
+    throw new Error(`finalization requires 28 distinct passing stages; found ${names.length}`)
+  }
+  const valuation = receipt.stages.find((stage) => stage.name === 'valuation')
+  const valuationChunks = valuation?.chunks ?? []
+  const actualChunkIdentities = valuationChunks.map(({ tickerCount, tickersSha256 }) => ({
+    tickerCount,
+    tickersSha256,
+  }))
+  if (!receipt.source
+      || valuationChunks.length === 0
+      || valuationChunks.some((chunk) => chunk.status !== 'PASS' || chunk.signal !== null || chunk.exitCode !== 0)
+      || valuationChunks.reduce((total, chunk) => total + chunk.tickerCount, 0) !== receipt.source.approved
+      || JSON.stringify(actualChunkIdentities) !== JSON.stringify(expectedValuationChunks)) {
+    throw new Error('valuation chunks do not prove the complete approved ticker set')
+  }
+}
+
 function tableCount(database: string, table: string): number {
   const db = new DatabaseSync(database, { readOnly: true })
   try {
@@ -386,8 +453,43 @@ function validateFinalState(
     const affectedTickers = official.rows
       .filter((row) => !baselineByTicker.has(row.ticker))
       .map((row) => row.ticker)
+      .sort()
     if (affectedTickers.length !== 4_061) {
       throw new Error(`affected ticker count changed: ${affectedTickers.length}`)
+    }
+    const valuationStage = receipt.stages.find((stage) => stage.name === 'valuation')
+    const valuationStartedAt = Date.parse(valuationStage?.startedAt ?? '') / 1_000
+    if (!Number.isFinite(valuationStartedAt)) throw new Error('valuation stage start time is missing')
+    const placeholders = affectedTickers.map(() => '?').join(',')
+    const valuationCoverage = repaired.prepare(`
+      SELECT COUNT(*) AS count,
+        SUM(CASE WHEN checkpoint.status='completed'
+          AND checkpoint.calculated_at >= ?
+          AND checkpoint.latest_price_date=latest.latest_price_date
+          AND checkpoint.latest_valuation_date IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM valuation_daily_serving serving
+            WHERE serving.ticker=checkpoint.ticker
+              AND serving.valuation_date=checkpoint.latest_valuation_date
+          )
+          AND EXISTS (
+            SELECT 1 FROM valuation_daily_serving repaired_day
+            WHERE repaired_day.ticker=checkpoint.ticker
+              AND repaired_day.valuation_date=?
+          ) THEN 1 ELSE 0 END) AS valid
+      FROM valuation_serving_checkpoints checkpoint
+      INNER JOIN (
+        SELECT ticker,MAX(date) AS latest_price_date FROM ohlcv_daily
+        WHERE ticker IN (${placeholders}) GROUP BY ticker
+      ) latest ON latest.ticker=checkpoint.ticker
+      WHERE checkpoint.ticker IN (${placeholders})
+    `).get(Math.floor(valuationStartedAt), TARGET_DATE, ...affectedTickers, ...affectedTickers) as {
+      count: number
+      valid: number | null
+    }
+    if (Number(valuationCoverage.count) !== affectedTickers.length
+        || Number(valuationCoverage.valid ?? 0) !== affectedTickers.length) {
+      throw new Error(`valuation serving coverage is incomplete: ${JSON.stringify(valuationCoverage)}`)
     }
     const protectedTickers = new Set(['1447', '2164'])
     for (const expected of official.rows) {
@@ -571,6 +673,7 @@ function validateFinalState(
       mlClassicAffectedEligible: classicCoverage.expected,
       mlPhysicsAffectedRecomputed: physicsCoverage.actual,
       mlPhysicsAffectedEligible: physicsCoverage.expected,
+      valuationAffectedComplete: Number(valuationCoverage.valid ?? 0),
       sealedMlResearchRows: researchRows,
       sealedMlResearchSha256: researchHash.digest('hex'),
       analogRows,
@@ -1000,11 +1103,10 @@ async function main(): Promise<void> {
       throw new Error('validate-only requires the completed database, analog database, and receipt')
     }
     const receipt = readReceipt(cli.receipt)
-    if (receipt.status !== 'PASS'
-        || receipt.stages.length !== 28
-        || receipt.stages.some((stage) => stage.status !== 'PASS')) {
-      throw new Error(`validate-only requires 28 passing stages; found ${receipt.stages.length}`)
-    }
+    if (receipt.status !== 'PASS') throw new Error(`validate-only requires PASS; found ${receipt.status}`)
+    const plan = JSON.parse(fs.readFileSync(path.join(path.dirname(cli.database), 'repair-plan.json'), 'utf8')) as JpOhlcvRepairPlan
+    const plannedTickers = plan.approvedMissingKeys.map((key) => key.split(':')[0]).sort()
+    assertCompleteStageReceipts(receipt, valuationChunkIdentities(plannedTickers))
     const currentSourceTree = sourceTreeSha256()
     if (receipt.sourceTreeSha256 !== currentSourceTree) {
       throw new Error('validate-only source tree does not match the execution receipt')
@@ -1121,6 +1223,7 @@ async function main(): Promise<void> {
     const tickers = official.rows
       .filter((row) => !existingKeys.has(`${row.ticker}:${row.date}`))
       .map((row) => row.ticker)
+      .sort()
     if (tickers.length !== 4_061) throw new Error(`unexpected affected ticker count: ${tickers.length}`)
 
   const common = {
@@ -1133,7 +1236,12 @@ async function main(): Promise<void> {
     STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE: 'db_maintenance',
     STOCKBOARD_PARENT_UPDATE_LOCK_OWNER: parentLock.owner,
   }
-  const prePublicationStages: Array<{ name: string; command: string[]; env?: Record<string, string> }> = [
+  const valuationChunks = chunkJpOhlcvRepairTickers(tickers, VALUATION_CHUNK_SIZE).map((chunk) => ({
+    env: { VALUATION_SERVING_TICKERS: chunk.join(',') },
+    tickerCount: chunk.length,
+    tickersSha256: jpOhlcvValueSha256(chunk),
+  }))
+  const prePublicationStages: StageDefinition[] = [
     {
       name: 'snapshots',
       command: stageCommand('scripts/batch-snapshots.ts'),
@@ -1222,12 +1330,10 @@ async function main(): Promise<void> {
       name: 'valuation',
       command: stageCommand('scripts/backfill-valuation-serving.ts', [], ['--expose-gc']),
       env: {
-        VALUATION_SERVING_TICKERS: tickers.join(','),
         VALUATION_SERVING_YEARS: '5',
-        // A killed first pass leaves per-ticker checkpoints. Exercise the real
-        // resume contract instead of discarding completed work on the next run.
-        VALUATION_SERVING_FORCE: receipt.stages.some((stage) => stage.name === 'valuation' && stage.status === 'FAIL') ? '0' : '1',
+        VALUATION_SERVING_FORCE: '1',
       },
+      chunks: valuationChunks,
     },
     { name: 'screener_rebuilt', command: stageCommand('scripts/backfill-integrated-screener.ts', [LATEST_DATE, '--force']) },
     { name: 'serving_stock', command: stageCommand('scripts/build-serving-stock.ts') },
@@ -1287,7 +1393,7 @@ async function main(): Promise<void> {
   ]
 
   const runStages = async (
-    stages: Array<{ name: string; command: string[]; env?: Record<string, string> }>,
+    stages: StageDefinition[],
   ): Promise<void> => {
     for (const stage of stages) {
     const sealedFiles = sealedCommandFiles(stage.command)
@@ -1305,12 +1411,54 @@ async function main(): Promise<void> {
     const databaseBytesBefore = bytes(cli.database)
     const walBytesBefore = bytes(`${cli.database}-wal`)
     const allocatedBytesBefore = databaseBundleAllocatedBytes(cli.database)
-    const result = await runStageCommand({
-      command: stage.command,
-      env: { ...common, ...(stage.env ?? {}) },
-      database: cli.database,
-      barrier: parentLock,
-    })
+    const executions = stage.chunks ?? [{
+      env: {},
+      tickerCount: 0,
+      tickersSha256: '',
+    }]
+    const chunkReceipts: StageChunkReceipt[] = []
+    let exitCode: number | null = 0
+    let signal: NodeJS.Signals | null = null
+    let rssBytesPeak = 0
+    let walBytesPeak = walBytesBefore
+    let allocatedBytesPeak = allocatedBytesBefore
+    let stdoutTail = ''
+    let stderrTail = ''
+    for (const [index, execution] of executions.entries()) {
+      parentLock.assertActive()
+      const chunkStarted = Date.now()
+      const result = await runStageCommand({
+        command: stage.command,
+        env: { ...common, ...(stage.env ?? {}), ...execution.env },
+        database: cli.database,
+        barrier: parentLock,
+      })
+      const status = result.status === 0 && result.signal === null ? 'PASS' : 'FAIL'
+      chunkReceipts.push({
+        index,
+        tickerCount: execution.tickerCount,
+        tickersSha256: execution.tickersSha256,
+        startedAt: new Date(chunkStarted).toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - chunkStarted,
+        status,
+        exitCode: result.status,
+        signal: result.signal,
+        rssBytesPeak: result.rssBytesPeak,
+        walBytesPeak: result.walBytesPeak,
+        allocatedBytesPeak: result.allocatedBytesPeak,
+        stdoutTail: result.stdout,
+        stderrTail: result.stderr,
+      })
+      exitCode = result.status
+      signal = result.signal
+      rssBytesPeak = Math.max(rssBytesPeak, result.rssBytesPeak)
+      walBytesPeak = Math.max(walBytesPeak, result.walBytesPeak)
+      allocatedBytesPeak = Math.max(allocatedBytesPeak, result.allocatedBytesPeak)
+      stdoutTail = tail(`${stdoutTail}\n${result.stdout}`)
+      stderrTail = tail(`${stderrTail}\n${result.stderr}`)
+      if (status === 'FAIL') break
+    }
     const item: StageReceipt = {
       name: stage.name,
       command: stage.command,
@@ -1318,23 +1466,24 @@ async function main(): Promise<void> {
       startedAt: new Date(started).toISOString(),
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - started,
-      status: result.status === 0 && result.signal === null ? 'PASS' : 'FAIL',
-      exitCode: result.status,
-      signal: result.signal,
-      rssBytesPeak: result.rssBytesPeak,
+      status: exitCode === 0 && signal === null && chunkReceipts.length === executions.length ? 'PASS' : 'FAIL',
+      exitCode,
+      signal,
+      rssBytesPeak,
       databaseBytesBefore,
       databaseBytesAfter: bytes(cli.database),
       walBytesBefore,
       walBytesAfter: bytes(`${cli.database}-wal`),
-      walBytesPeak: result.walBytesPeak,
+      walBytesPeak,
       allocatedBytesBefore,
       allocatedBytesAfter: databaseBundleAllocatedBytes(cli.database),
-      allocatedBytesPeak: result.allocatedBytesPeak,
+      allocatedBytesPeak,
       observedRows: stage.name === 'analog'
         ? { analog_sequence_index: tableCount(cli.analog, 'analog_sequence_index') }
         : observedRows(cli.database, stage.name),
-      stdoutTail: result.stdout,
-      stderrTail: result.stderr,
+      stdoutTail,
+      stderrTail,
+      chunks: stage.chunks ? chunkReceipts : undefined,
     }
     receipt.stages = [...receipt.stages.filter((prior) => prior.name !== stage.name), item]
     receipt.status = item.status === 'PASS' ? 'DERIVED_PENDING' : 'HOLD'
@@ -1356,6 +1505,8 @@ async function main(): Promise<void> {
         },
       },
     ])
+
+    assertCompleteStageReceipts(receipt, valuationChunkIdentities(tickers))
 
     assertQuickCheck(cli.database)
     assertQuickCheck(cli.analog)
@@ -1396,6 +1547,7 @@ async function main(): Promise<void> {
         name: stage.name,
         status: stage.status,
         sealedFiles: stage.sealedFiles,
+        chunks: stage.chunks,
       })),
       databaseIdentity: databaseBundleIdentity(cli.database),
       databaseIdentityPhase: 'derived_pending_before_single_batch_run_promotion',
