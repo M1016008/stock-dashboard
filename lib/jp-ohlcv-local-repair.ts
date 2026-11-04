@@ -31,6 +31,76 @@ export type JpOhlcvRepairResult = {
   receiptId: number
 }
 
+export type JpOhlcvRepairMlCoverage = {
+  expected: number
+  actual: number
+  missing: number
+  extra: number
+}
+
+export function inspectJpOhlcvRepairMlCoverage(input: {
+  db: DatabaseSync
+  table: 'ml_feature_vectors' | 'ml_feature_vectors_v2'
+  affectedTickers: readonly string[]
+  startDate: string
+  endDate: string
+  computedAtEpoch: number
+  minHistoryDays: number
+  featureSet?: string
+}): JpOhlcvRepairMlCoverage {
+  if (input.table === 'ml_feature_vectors_v2' && !input.featureSet) {
+    throw new Error('physics ML coverage requires a feature set')
+  }
+  const totals: JpOhlcvRepairMlCoverage = { expected: 0, actual: 0, missing: 0, extra: 0 }
+  for (let offset = 0; offset < input.affectedTickers.length; offset += 300) {
+    const chunk = input.affectedTickers.slice(offset, offset + 300)
+    const placeholders = chunk.map(() => '?').join(',')
+    const row = input.db.prepare(`
+      WITH prior AS (
+        SELECT ticker,COUNT(*) AS history_count FROM ohlcv_daily
+        WHERE date < ? AND ticker IN (${placeholders})
+        GROUP BY ticker
+      ), scoped AS (
+        SELECT current.ticker,current.date,
+          COALESCE(prior.history_count,0)
+            + ROW_NUMBER() OVER (PARTITION BY current.ticker ORDER BY current.date) AS history_count
+        FROM ohlcv_daily current
+        LEFT JOIN prior ON prior.ticker=current.ticker
+        WHERE current.date BETWEEN ? AND ? AND current.ticker IN (${placeholders})
+      ), expected AS (
+        SELECT ticker,date FROM scoped WHERE history_count >= ?
+      ), actual AS (
+        SELECT ticker,date FROM ${input.table}
+        WHERE date BETWEEN ? AND ? AND computed_at>=?
+          ${input.featureSet ? 'AND feature_set=?' : ''}
+          AND ticker IN (${placeholders})
+      )
+      SELECT
+        (SELECT COUNT(*) FROM expected) AS expected,
+        (SELECT COUNT(*) FROM actual) AS actual,
+        (SELECT COUNT(*) FROM (SELECT ticker,date FROM expected EXCEPT SELECT ticker,date FROM actual)) AS missing,
+        (SELECT COUNT(*) FROM (SELECT ticker,date FROM actual EXCEPT SELECT ticker,date FROM expected)) AS extra
+    `).get(
+      input.startDate,
+      ...chunk,
+      input.startDate,
+      input.endDate,
+      ...chunk,
+      input.minHistoryDays,
+      input.startDate,
+      input.endDate,
+      input.computedAtEpoch,
+      ...(input.featureSet ? [input.featureSet] : []),
+      ...chunk,
+    ) as JpOhlcvRepairMlCoverage
+    totals.expected += Number(row.expected)
+    totals.actual += Number(row.actual)
+    totals.missing += Number(row.missing)
+    totals.extra += Number(row.extra)
+  }
+  return totals
+}
+
 export function completeJpOhlcvRepairDerived(input: {
   db: DatabaseSync
   receiptId: number

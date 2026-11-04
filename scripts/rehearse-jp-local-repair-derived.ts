@@ -10,6 +10,7 @@ import {
   applyJpOhlcvRepairTransaction,
   completeJpOhlcvRepairDerived,
   createJpOhlcvRepairPlan,
+  inspectJpOhlcvRepairMlCoverage,
   jpOhlcvValueSha256,
   type JpOhlcvOfficialRow,
   type JpOhlcvRepairPlan,
@@ -483,51 +484,32 @@ function validateFinalState(
       counts[label] = value
     }
     const createdAtEpoch = Math.floor(Date.parse(receipt.createdAt) / 1_000)
-    const countAffectedRows = (table: 'ml_feature_vectors' | 'ml_feature_vectors_v2', physics: boolean): number => {
-      let count = 0
-      for (let offset = 0; offset < affectedTickers.length; offset += 400) {
-        const chunk = affectedTickers.slice(offset, offset + 400)
-        const placeholders = chunk.map(() => '?').join(',')
-        const row = repaired.prepare(`
-          SELECT COUNT(*) AS count FROM ${table}
-          WHERE date BETWEEN ? AND ? AND computed_at>=?
-            ${physics ? 'AND feature_set=?' : ''}
-            AND ticker IN (${placeholders})
-        `).get(
-          TARGET_DATE,
-          LATEST_DATE,
-          createdAtEpoch,
-          ...(physics ? [ML_PHYSICS_FEATURE_SET] : []),
-          ...chunk,
-        ) as { count: number }
-        count += Number(row.count ?? 0)
-      }
-      return count
-    }
-    const countEligibleAffected = (physics: boolean): number => {
-      let count = 0
-      for (let offset = 0; offset < affectedTickers.length; offset += 400) {
-        const chunk = affectedTickers.slice(offset, offset + 400)
-        const placeholders = chunk.map(() => '?').join(',')
-        const sourceTable = physics ? 'daily_snapshots' : 'ohlcv_daily'
-        const row = repaired.prepare(`
-          SELECT COUNT(*) AS count FROM ${sourceTable} current
-          WHERE current.date BETWEEN ? AND ? AND current.ticker IN (${placeholders})
-            AND (SELECT COUNT(*) FROM ohlcv_daily history
-                 WHERE history.ticker=current.ticker AND history.date<=current.date) >= 220
-        `).get(TARGET_DATE, LATEST_DATE, ...chunk) as { count: number }
-        count += Number(row.count ?? 0)
-      }
-      return count
-    }
-    const classicRecomputed = countAffectedRows('ml_feature_vectors', false)
-    const physicsRecomputed = countAffectedRows('ml_feature_vectors_v2', true)
-    const classicEligible = countEligibleAffected(false)
-    const physicsEligible = countEligibleAffected(true)
-    if (classicRecomputed !== classicEligible || physicsRecomputed !== physicsEligible) {
+    const classicCoverage = inspectJpOhlcvRepairMlCoverage({
+      db: repaired,
+      table: 'ml_feature_vectors',
+      affectedTickers,
+      startDate: TARGET_DATE,
+      endDate: LATEST_DATE,
+      computedAtEpoch: createdAtEpoch,
+      minHistoryDays: 220,
+    })
+    const physicsCoverage = inspectJpOhlcvRepairMlCoverage({
+      db: repaired,
+      table: 'ml_feature_vectors_v2',
+      affectedTickers,
+      startDate: TARGET_DATE,
+      endDate: LATEST_DATE,
+      computedAtEpoch: createdAtEpoch,
+      minHistoryDays: 220,
+      featureSet: ML_PHYSICS_FEATURE_SET,
+    })
+    if (classicCoverage.expected !== classicCoverage.actual
+        || classicCoverage.missing !== 0 || classicCoverage.extra !== 0
+        || physicsCoverage.expected !== physicsCoverage.actual
+        || physicsCoverage.missing !== 0 || physicsCoverage.extra !== 0) {
       throw new Error(
         `current ML features were not rebuilt for the repair scope: `
-        + `classic=${classicRecomputed}/${classicEligible}, physics=${physicsRecomputed}/${physicsEligible}`,
+        + `classic=${JSON.stringify(classicCoverage)}, physics=${JSON.stringify(physicsCoverage)}`,
       )
     }
     if (!receipt.sealedResearch) throw new Error('sealed research baseline fingerprint is missing')
@@ -585,10 +567,10 @@ function validateFinalState(
       openMissing: issueCounts.get('MISSING') ?? 0,
       openProtectedConflicts: issueCounts.get('PROTECTED_CONFLICT') ?? 0,
       sma7003_20261028: expectedSma75,
-      mlClassicAffectedRecomputed: classicRecomputed,
-      mlClassicAffectedEligible: classicEligible,
-      mlPhysicsAffectedRecomputed: physicsRecomputed,
-      mlPhysicsAffectedEligible: physicsEligible,
+      mlClassicAffectedRecomputed: classicCoverage.actual,
+      mlClassicAffectedEligible: classicCoverage.expected,
+      mlPhysicsAffectedRecomputed: physicsCoverage.actual,
+      mlPhysicsAffectedEligible: physicsCoverage.expected,
       sealedMlResearchRows: researchRows,
       sealedMlResearchSha256: researchHash.digest('hex'),
       analogRows,
@@ -701,6 +683,10 @@ function assertForwardReturnReceipt(filePath: string): { path: string; sha256: s
 }
 
 function startMaintenanceLockHolder(database: string): Promise<MaintenanceLockHolder> {
+  const startupTimeoutMs = Number(process.env.STOCKBOARD_MAINTENANCE_HOLDER_STARTUP_TIMEOUT_MS ?? 600_000)
+  if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 30_000) {
+    throw new Error('STOCKBOARD_MAINTENANCE_HOLDER_STARTUP_TIMEOUT_MS must be an integer of at least 30000')
+  }
   const child = spawn(process.execPath, [
     '--import', process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx', 'scripts/hold-update-lock.ts',
   ], {
@@ -722,7 +708,7 @@ function startMaintenanceLockHolder(database: string): Promise<MaintenanceLockHo
     const timeout = setTimeout(() => {
       child.kill('SIGKILL')
       reject(new Error(`maintenance lock holder timed out: ${stderr || stdout}`))
-    }, 30_000)
+    }, startupTimeoutMs)
     const fail = (error: unknown): void => {
       clearTimeout(timeout)
       reject(error)
@@ -989,8 +975,8 @@ async function initialize(cli: Cli, official: OfficialEvidence, sourceTree: stri
   }
 }
 
-function stageCommand(script: string, args: string[] = []): string[] {
-  return [process.execPath, '--import', process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx', script, ...args]
+function stageCommand(script: string, args: string[] = [], nodeArgs: string[] = []): string[] {
+  return [process.execPath, ...nodeArgs, '--import', process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx', script, ...args]
 }
 
 async function main(): Promise<void> {
@@ -1234,7 +1220,7 @@ async function main(): Promise<void> {
     { name: 'stages_rebuilt', command: stageCommand('scripts/batch-stage-transitions.ts'), env: { STAGE_TRANSITIONS_LOCK_WAIT_HOURS: '1' } },
     {
       name: 'valuation',
-      command: stageCommand('scripts/backfill-valuation-serving.ts'),
+      command: stageCommand('scripts/backfill-valuation-serving.ts', [], ['--expose-gc']),
       env: {
         VALUATION_SERVING_TICKERS: tickers.join(','),
         VALUATION_SERVING_YEARS: '5',

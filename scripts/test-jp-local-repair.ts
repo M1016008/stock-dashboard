@@ -5,7 +5,11 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
-import { applyJpOhlcvRepairTransaction, createJpOhlcvRepairPlan } from '@/lib/jp-ohlcv-local-repair'
+import {
+  applyJpOhlcvRepairTransaction,
+  createJpOhlcvRepairPlan,
+  inspectJpOhlcvRepairMlCoverage,
+} from '@/lib/jp-ohlcv-local-repair'
 import { isJpOhlcvProtectedConflictKey } from '@/lib/jp-ohlcv-repair-policy'
 
 type Row = {
@@ -163,6 +167,69 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const mlCoverageDb = new DatabaseSync(':memory:')
+  mlCoverageDb.exec(`
+    CREATE TABLE ohlcv_daily(ticker TEXT NOT NULL,date TEXT NOT NULL,PRIMARY KEY(ticker,date));
+    CREATE TABLE ml_feature_vectors(ticker TEXT NOT NULL,date TEXT NOT NULL,computed_at INTEGER NOT NULL);
+    CREATE TABLE ml_feature_vectors_v2(
+      ticker TEXT NOT NULL,date TEXT NOT NULL,computed_at INTEGER NOT NULL,feature_set TEXT NOT NULL
+    );
+  `)
+  const insertHistory = mlCoverageDb.prepare('INSERT INTO ohlcv_daily VALUES(?,?)')
+  for (let day = 0; day < 220; day += 1) {
+    insertHistory.run('2068', new Date(Date.UTC(2026, 0, 1 + day)).toISOString().slice(0, 10))
+  }
+  insertHistory.run('SHORT', '2026-08-08')
+  mlCoverageDb.prepare('INSERT INTO ml_feature_vectors_v2 VALUES(?,?,?,?)')
+    .run('2068', '2026-08-08', 100, 'ma_physics_v4')
+  mlCoverageDb.prepare('INSERT INTO ml_feature_vectors_v2 VALUES(?,?,?,?)')
+    .run('SHORT', '2026-08-08', 100, 'ma_physics_v4')
+  assert.deepEqual(inspectJpOhlcvRepairMlCoverage({
+    db: mlCoverageDb,
+    table: 'ml_feature_vectors_v2',
+    affectedTickers: ['2068', 'SHORT'],
+    startDate: '2026-08-08',
+    endDate: '2026-08-08',
+    computedAtEpoch: 100,
+    minHistoryDays: 220,
+    featureSet: 'ma_physics_v4',
+  }), { expected: 1, actual: 2, missing: 0, extra: 1 })
+  mlCoverageDb.prepare("DELETE FROM ml_feature_vectors_v2 WHERE ticker='SHORT'").run()
+  assert.deepEqual(inspectJpOhlcvRepairMlCoverage({
+    db: mlCoverageDb,
+    table: 'ml_feature_vectors_v2',
+    affectedTickers: ['2068'],
+    startDate: '2026-08-08',
+    endDate: '2026-08-08',
+    computedAtEpoch: 100,
+    minHistoryDays: 220,
+    featureSet: 'ma_physics_v4',
+  }), { expected: 1, actual: 1, missing: 0, extra: 0 })
+  mlCoverageDb.prepare('INSERT INTO ml_feature_vectors_v2 VALUES(?,?,?,?)')
+    .run('2068', '2026-08-08', 100, 'ma_physics_v4')
+  assert.deepEqual(inspectJpOhlcvRepairMlCoverage({
+    db: mlCoverageDb,
+    table: 'ml_feature_vectors_v2',
+    affectedTickers: ['2068'],
+    startDate: '2026-08-08',
+    endDate: '2026-08-08',
+    computedAtEpoch: 100,
+    minHistoryDays: 220,
+    featureSet: 'ma_physics_v4',
+  }), { expected: 1, actual: 2, missing: 0, extra: 0 })
+  mlCoverageDb.prepare("DELETE FROM ml_feature_vectors_v2 WHERE ticker='2068'").run()
+  assert.deepEqual(inspectJpOhlcvRepairMlCoverage({
+    db: mlCoverageDb,
+    table: 'ml_feature_vectors_v2',
+    affectedTickers: ['2068'],
+    startDate: '2026-08-08',
+    endDate: '2026-08-08',
+    computedAtEpoch: 100,
+    minHistoryDays: 220,
+    featureSet: 'ma_physics_v4',
+  }), { expected: 1, actual: 0, missing: 1, extra: 0 })
+  mlCoverageDb.close()
+
   createBase()
   const validationDb = new DatabaseSync(basePath)
   assert.throws(() => createJpOhlcvRepairPlan({
