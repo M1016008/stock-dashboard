@@ -205,19 +205,15 @@ function fileSha256(filePath: string): string {
 }
 
 function sourceTreeSha256(): string {
-  const hash = createHash('sha256')
-  const files = execFileSync('git', [
-    'ls-files', '-z', '--', 'app', 'components', 'lib', 'scripts', 'package.json', 'package-lock.json',
-  ], { encoding: 'buffer' })
-    .toString('utf8')
-    .split('\0')
-    .filter((file) => /\.(?:ts|tsx|js|mjs|cjs|json)$/.test(file) && fs.existsSync(file))
-  for (const file of files.sort()) {
-    hash.update(`${file}\0`)
-    hash.update(fs.readFileSync(file))
-    hash.update('\0')
+  const roots = ['app', 'components', 'lib', 'scripts', 'package.json', 'package-lock.json']
+  try {
+    execFileSync('git', ['diff', '--quiet', '--', ...roots])
+    execFileSync('git', ['diff', '--cached', '--quiet', '--', ...roots])
+  } catch {
+    throw new Error('rehearsal source files must exactly match the committed Git revision')
   }
-  return hash.digest('hex')
+  const manifest = execFileSync('git', ['ls-files', '-s', '-z', '--', ...roots])
+  return createHash('sha256').update(manifest).digest('hex')
 }
 
 function sealedCommandFiles(command: readonly string[]): Array<{ path: string; sha256: string }> {
