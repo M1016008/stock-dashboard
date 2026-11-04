@@ -171,6 +171,17 @@ async function main(): Promise<void> {
   assert.match(jpBuild.cacheKey, /^two-year-line-serving%3Av1:JP:/)
   assert.match(usBuild.cacheKey, /^two-year-line-serving%3Av1:US:/)
   assert.equal(usBuild.result.entries.size, usServingTickers.length)
+
+  await execRun(
+    `INSERT INTO market_data_runs (market, job_type, status, started_at, finished_at)
+     VALUES ('US', 'tiingo_ohlcv', 'partial', ?, ?)`,
+    [Date.now(), Date.now()],
+  )
+  clearTwoYearLineSearchCachesForQa()
+  const partialUsBuild = await buildTwoYearLineServingCache({
+    market: 'US', tickers: usServingTickers, asOfDate: '2027-12-30',
+  })
+  assert.equal(partialUsBuild.result.entries.size, usServingTickers.length, 'US partial runs remain publishable')
   clearTwoYearLineSearchCachesForQa()
 
   for (const market of ['JP', 'US'] as const) {
@@ -284,20 +295,55 @@ async function main(): Promise<void> {
     await buildTwoYearLineServingCache({ market: 'JP', tickers: jpServingTickers, asOfDate: '2027-12-30' })
   }
 
+  for (const errorSummary of [
+    null,
+    '[]',
+    '["provider_warning"]',
+    'legacy plain-text error',
+    JSON.stringify({ phase: 'derived_complete' }),
+  ]) {
+    await execRun(
+      `INSERT INTO batch_runs (job_type, started_at, finished_at, status, error_summary)
+       VALUES ('ohlcv_fetch:jquants', ?, ?, 'partial', ?)`,
+      [Date.now(), Date.now(), errorSummary],
+    )
+    clearTwoYearLineSearchCachesForQa()
+    await buildTwoYearLineServingCache({ market: 'JP', tickers: jpServingTickers, asOfDate: '2027-12-30' })
+  }
   await execRun(
-    `INSERT INTO batch_runs (job_type, started_at, finished_at, status)
-     VALUES ('ohlcv_fetch:jquants', ?, ?, 'partial')`,
-    [Date.now(), Date.now()],
+    `INSERT INTO batch_runs (job_type, started_at, finished_at, status, error_summary)
+     VALUES ('ohlcv_fetch:jquants', ?, ?, 'partial', ?)`,
+    [Date.now(), Date.now(), JSON.stringify({ phase: 'derived_pending' })],
+  )
+  clearTwoYearLineSearchCachesForQa()
+  await assert.rejects(
+    buildTwoYearLineServingCache({ market: 'JP', tickers: jpServingTickers, asOfDate: '2027-12-30' }),
+    TwoYearLineServingUnavailableError,
+    'a repair generation with pending derived work must not be published',
+  )
+  const pendingRun = await execGet<{ id: number }>('SELECT MAX(id) AS id FROM batch_runs')
+  assert(pendingRun?.id)
+  process.env.STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE = 'db_maintenance'
+  process.env.STOCKBOARD_PARENT_UPDATE_LOCK_OWNER = 'two-year-test-owner'
+  await buildTwoYearLineServingCache({
+    market: 'JP',
+    tickers: jpServingTickers,
+    asOfDate: '2027-12-30',
+    pendingSourceRunId: pendingRun.id,
+  })
+  delete process.env.STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE
+  delete process.env.STOCKBOARD_PARENT_UPDATE_LOCK_OWNER
+  clearTwoYearLineSearchCachesForQa()
+  await assert.rejects(
+    loadTwoYearLineSearchEntries({ market: 'JP', tickers: ['JP-LINE'], asOfDate: '2027-12-30' }),
+    TwoYearLineServingUnavailableError,
+    'a cache built for a pending source must remain unavailable to readers before promotion',
+  )
+  await execRun(
+    "UPDATE batch_runs SET status = 'success', finished_at = ? WHERE id = (SELECT MAX(id) FROM batch_runs)",
+    [Date.now()],
   )
   await buildTwoYearLineServingCache({ market: 'JP', tickers: jpServingTickers, asOfDate: '2027-12-30' })
-  clearTwoYearLineSearchCachesForQa()
-  assert.equal(
-    (await loadTwoYearLineSearchEntries({
-      market: 'JP', tickers: ['JP-LINE'], asOfDate: '2027-12-30',
-    })).entries.size,
-    1,
-    'a terminal partial source generation may be published after the update pipeline quality gate',
-  )
 
   await execRun(
     `INSERT INTO batch_runs (job_type, started_at, status)

@@ -25,6 +25,8 @@ on:
       - 'lib/storage/**'
       - 'lib/timeframes.ts'
       - 'lib/large-holders/release-preflight.ts'
+      - 'lib/jp-ohlcv-*.ts'
+      - 'lib/server/update-lock.ts'
       - 'proxy.ts'
       - 'scripts/install-*.ts'
       - 'scripts/lib/launchagent-*.ts'
@@ -37,6 +39,11 @@ on:
       - 'scripts/audit-us-jp-parity.ts'
       - 'scripts/build-us-jp-parity-board.ts'
       - 'scripts/test-us-automation-foundation.ts'
+      - 'scripts/batch-ohlcv.ts'
+      - 'scripts/batch-sector-structure.ts'
+      - 'scripts/batch-stage-transitions.ts'
+      - 'scripts/test-jp-local-repair*.ts'
+      - 'scripts/test-jp-ohlcv-coverage.ts'
       - 'docs/us-stockboard-parity-*'
       - 'types/stock.ts'
       - 'package.json'
@@ -93,6 +100,9 @@ jobs:
 
       - name: US and JP parity contracts
         run: npm run test:us-parity:targeted
+
+      - name: JP OHLCV local repair contracts
+        run: npx tsx scripts/test-jp-local-repair.ts && npx tsx scripts/test-jp-ohlcv-coverage.ts && npx tsx scripts/test-jp-local-repair-maintenance-boundary.ts
 
       - name: TypeScript
         run: npx tsc --noEmit

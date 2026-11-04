@@ -3,7 +3,7 @@
 // 日次 OHLCV から週足ローソクを生成する。週末日付は、その週の最終取引日。
 // ML/RL 用の特徴量や週足 MA シグナルの前提テーブル。
 
-import { execAll, execBatch } from '@/lib/db/client'
+import { client, execAll } from '@/lib/db/client'
 
 type DailyBar = {
   date: string
@@ -35,6 +35,10 @@ const MA_WINDOWS = [5, 13, 25, 50, 100] as const
 const CHUNK = 400
 const PROGRESS_EVERY = 100
 const RECENT_DAYS = Number(process.env.BACKTEST_RECENT_DAYS ?? 0)
+const RECOMPUTE_FROM_DATE = process.env.WEEKLY_RECOMPUTE_FROM_DATE?.trim() || null
+if (RECOMPUTE_FROM_DATE && !/^\d{4}-\d{2}-\d{2}$/.test(RECOMPUTE_FROM_DATE)) {
+  throw new Error(`invalid WEEKLY_RECOMPUTE_FROM_DATE: ${RECOMPUTE_FROM_DATE}`)
+}
 
 function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10)
@@ -104,31 +108,46 @@ async function tickers(): Promise<string[]> {
   return rows.map((row) => row.ticker)
 }
 
-async function insertWeekly(rows: WeeklyBar[]): Promise<void> {
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    await execBatch(rows.slice(i, i + CHUNK).map((row) => ({
-      sql: `
-        INSERT OR REPLACE INTO weekly_ohlcv
-          (ticker, date, week_start_date, week_end_date, open, high, low, close, volume, ma_5, ma_13, ma_25, ma_50, ma_100, computed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-      `,
-      args: [
-        row.ticker,
-        row.date,
-        row.week_start_date,
-        row.week_end_date,
-        row.open,
-        row.high,
-        row.low,
-        row.close,
-        row.volume,
-        row.ma_5,
-        row.ma_13,
-        row.ma_25,
-        row.ma_50,
-        row.ma_100,
-      ],
-    })))
+async function replaceWeekly(rows: WeeklyBar[]): Promise<void> {
+  if (rows.length === 0) return
+  const ticker = rows[0].ticker
+  const weekStarts = rows.map((row) => row.week_start_date).sort()
+  const transaction = await client.transaction('write')
+  try {
+    await transaction.execute({
+      sql: `DELETE FROM weekly_ohlcv
+            WHERE ticker = ? AND week_start_date BETWEEN ? AND ?`,
+      args: [ticker, weekStarts[0], weekStarts[weekStarts.length - 1]],
+    })
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      await transaction.batch(rows.slice(i, i + CHUNK).map((row) => ({
+        sql: `
+          INSERT OR REPLACE INTO weekly_ohlcv
+            (ticker, date, week_start_date, week_end_date, open, high, low, close, volume, ma_5, ma_13, ma_25, ma_50, ma_100, computed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+        `,
+        args: [
+          row.ticker,
+          row.date,
+          row.week_start_date,
+          row.week_end_date,
+          row.open,
+          row.high,
+          row.low,
+          row.close,
+          row.volume,
+          row.ma_5,
+          row.ma_13,
+          row.ma_25,
+          row.ma_50,
+          row.ma_100,
+        ],
+      })))
+    }
+    await transaction.commit()
+  } catch (error) {
+    try { await transaction.rollback() } catch { /* preserve the original error */ }
+    throw error
   }
 }
 
@@ -136,7 +155,10 @@ async function main() {
   const codes = await tickers()
   let total = 0
   const started = Date.now()
-  console.log(`weekly_ohlcv build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}`)
+  console.log(
+    `weekly_ohlcv build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}, `
+    + `recompute_from=${RECOMPUTE_FROM_DATE ?? 'none'}`,
+  )
 
   for (const [index, ticker] of codes.entries()) {
     const daily = await execAll<DailyBar>(
@@ -147,8 +169,10 @@ async function main() {
       ? daily[daily.length - RECENT_DAYS].date
       : null
     const weekly = buildWeekly(ticker, daily)
-    const targetWeeks = cutoffDate ? weekly.filter((row) => row.date >= cutoffDate) : weekly
-    await insertWeekly(targetWeeks)
+    const targetWeeks = RECOMPUTE_FROM_DATE
+      ? weekly.filter((row) => row.date >= RECOMPUTE_FROM_DATE)
+      : cutoffDate ? weekly.filter((row) => row.date >= cutoffDate) : weekly
+    await replaceWeekly(targetWeeks)
     total += targetWeeks.length
 
     if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {

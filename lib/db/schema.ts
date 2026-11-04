@@ -573,6 +573,23 @@ export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
   importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const jquantsDailyCoverageIssues = sqliteTable(
+  'jquants_daily_coverage_issues',
+  {
+    date:       text('date').notNull(),
+    ticker:     text('ticker').notNull(),
+    kind:       text('kind').notNull(),
+    status:     text('status').notNull(),
+    detail:     text('detail'),
+    observedAt: integer('observed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.date, t.ticker, t.kind] }),
+    openIdx: index('jquants_daily_coverage_issues_open_idx').on(t.status, t.date, t.kind),
+  }),
+)
+
 export const updateLocks = sqliteTable('update_locks', {
   jobType:        text('job_type').primaryKey(),
   status:         text('status').notNull(),

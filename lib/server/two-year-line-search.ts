@@ -62,6 +62,8 @@ interface SourceGenerationState {
   latestRunId: number
   latestPublishableRunId: number
   runningCount: number
+  latestStatus: string
+  latestPhase: string
 }
 
 interface PersistedServingPayload {
@@ -274,18 +276,19 @@ export async function buildTwoYearLineServingCache(options: Readonly<{
   market: TwoYearMarket
   tickers: readonly string[]
   asOfDate: string
+  pendingSourceRunId?: number
   beforePersistForQa?: () => Promise<void>
 }>): Promise<TwoYearLineServingBuildResult> {
   const startedAt = Date.now()
   const sourceBefore = await readSourceGeneration(options.market)
-  assertSafeSourceGeneration(options.market, sourceBefore)
+  assertSafeSourceGeneration(options.market, sourceBefore, options.pendingSourceRunId)
   const result = await computeTwoYearLineSearchEntries({
     ...options,
     sourceGeneration: sourceBefore.latestRunId,
   })
   await options.beforePersistForQa?.()
   const sourceAfter = await readSourceGeneration(options.market)
-  assertSafeSourceGeneration(options.market, sourceAfter)
+  assertSafeSourceGeneration(options.market, sourceAfter, options.pendingSourceRunId)
   if (sourceBefore.latestRunId !== sourceAfter.latestRunId) {
     throw new TwoYearLineServingUnavailableError(
       `${options.market} source generation changed during 24-month serving build`,
@@ -401,7 +404,7 @@ async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenera
   const row = market === 'JP'
     ? await execGet<Record<string, unknown>>(
         `WITH relevant AS (
-           SELECT id, status
+           SELECT id, status, error_summary
            FROM batch_runs
            WHERE job_type = 'ohlcv_fetch:jquants'
          ), latest AS (
@@ -409,7 +412,24 @@ async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenera
          )
          SELECT
            COALESCE((SELECT id FROM latest), 0) AS latestRunId,
-           COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+           COALESCE((SELECT status FROM latest), '') AS latestStatus,
+           COALESCE((SELECT CASE WHEN json_valid(error_summary)
+             THEN json_extract(error_summary, '$.phase') END
+             FROM relevant WHERE id=(SELECT id FROM latest)), '') AS latestPhase,
+           COALESCE((
+             SELECT MAX(id)
+             FROM relevant
+             WHERE status = 'success'
+                OR (
+                  status = 'partial'
+                  AND COALESCE(
+                    CASE WHEN json_valid(error_summary)
+                      THEN json_extract(error_summary, '$.phase')
+                    END,
+                    ''
+                  ) <> 'derived_pending'
+                )
+           ), 0) AS latestPublishableRunId,
            CASE WHEN (SELECT status FROM latest) = 'running' THEN 1 ELSE 0 END AS runningCount`,
       )
     : await execGet<Record<string, unknown>>(
@@ -422,6 +442,8 @@ async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenera
          )
          SELECT
            COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+           COALESCE((SELECT status FROM latest), '') AS latestStatus,
+           '' AS latestPhase,
            COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
            CASE WHEN (SELECT status FROM latest) = 'running' THEN 1 ELSE 0 END AS runningCount`,
       )
@@ -429,10 +451,31 @@ async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenera
     latestRunId: numberValue(row?.latestRunId),
     latestPublishableRunId: numberValue(row?.latestPublishableRunId),
     runningCount: numberValue(row?.runningCount),
+    latestStatus: String(row?.latestStatus ?? ''),
+    latestPhase: String(row?.latestPhase ?? ''),
   }
 }
 
-function assertSafeSourceGeneration(market: TwoYearMarket, source: SourceGenerationState): void {
+function assertSafeSourceGeneration(
+  market: TwoYearMarket,
+  source: SourceGenerationState,
+  pendingSourceRunId?: number,
+): void {
+  if (pendingSourceRunId != null) {
+    const inheritedMaintenanceLease = process.env.STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE === 'db_maintenance'
+      && Boolean(process.env.STOCKBOARD_PARENT_UPDATE_LOCK_OWNER?.trim())
+    if (market === 'JP'
+        && Number.isInteger(pendingSourceRunId)
+        && pendingSourceRunId > 0
+        && source.latestRunId === pendingSourceRunId
+        && source.latestStatus === 'partial'
+        && source.latestPhase === 'derived_pending'
+        && source.runningCount === 0
+        && inheritedMaintenanceLease) return
+    throw new TwoYearLineServingUnavailableError(
+      `${market} 24-month pending source build contract is not satisfied`,
+    )
+  }
   if (
     source.latestRunId <= 0
     || source.latestPublishableRunId !== source.latestRunId

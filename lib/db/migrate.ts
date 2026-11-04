@@ -459,6 +459,18 @@ const STATEMENTS = [
     expected_rows INTEGER NOT NULL,
     imported_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE TABLE IF NOT EXISTS jquants_daily_coverage_issues (
+    date TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('FETCH_FAILED','MISSING','PROTECTED_CONFLICT')),
+    status TEXT NOT NULL CHECK(status IN ('open','resolved')),
+    detail TEXT,
+    observed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    resolved_at INTEGER,
+    PRIMARY KEY(date,ticker,kind)
+  )`,
+  `CREATE INDEX IF NOT EXISTS jquants_daily_coverage_issues_open_idx
+   ON jquants_daily_coverage_issues(status,date,kind)`,
   `CREATE TABLE IF NOT EXISTS update_locks (
     job_type TEXT PRIMARY KEY,
     status TEXT NOT NULL,
