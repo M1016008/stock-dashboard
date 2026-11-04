@@ -994,7 +994,7 @@ async function initialize(cli: Cli, official: OfficialEvidence, sourceTree: stri
 }
 
 function stageCommand(script: string, args: string[] = []): string[] {
-  return [process.execPath, '--import', 'tsx', script, ...args]
+  return [process.execPath, '--import', process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx', script, ...args]
 }
 
 async function main(): Promise<void> {
