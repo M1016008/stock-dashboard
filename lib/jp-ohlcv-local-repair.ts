@@ -72,7 +72,7 @@ export function identifyJpOhlcvDatabaseContent(database: string): JpOhlcvDatabas
   if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
     throw new Error('database changed while computing its content identity')
   }
-  const walPath = `${database}-wal`
+  const walPath = `${realpath}-wal`
   const walBytes = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0
   if (walBytes !== 0) throw new Error(`database content identity requires an empty WAL; found ${walBytes} bytes`)
   return {
