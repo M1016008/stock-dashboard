@@ -3,7 +3,7 @@
 // Dashboard Server Components が巨大テーブルを毎回集計しないよう、最新日用の
 // 表示データを 1 JSON payload として dashboard_cache に保存する。
 
-import { db, ensureReady } from '@/lib/db/client'
+import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { buildDashboardCache } from '@/lib/queries/dashboard-cache'
 import { getDashboardEarningsAlertsCached } from '@/lib/queries/dashboard-earnings-alerts-cache'
@@ -13,7 +13,6 @@ import { eq } from 'drizzle-orm'
 const SCENARIO_INTERVALS = ['D', '2D', 'W', '2W', 'M', '2M'] as const
 
 async function main() {
-  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({

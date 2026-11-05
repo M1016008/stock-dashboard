@@ -10,19 +10,7 @@ const mode = process.argv[2] ?? 'parent'
 const dbPath = process.env.STOCKBOARD_DB_PATH ?? ''
 const tsxImport = process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx'
 
-function verifyMaintenanceStageInitialization(): void {
-  for (const script of [
-    'scripts/batch-snapshots.ts',
-    'scripts/batch-features.ts',
-    'scripts/batch-monthly-ma-monitor.ts',
-    'scripts/batch-forward-returns.ts',
-    'scripts/batch-pattern-stats.ts',
-    'scripts/build-dashboard-cache.ts',
-  ]) {
-    const source = fs.readFileSync(path.resolve(script), 'utf8')
-    assert.match(source, /import[^\n]+ensureReady[^\n]+from '@\/lib\/db\/client'/, `${script} must import ensureReady`)
-    assert.match(source, /async function main[^\{]*\{\s*await ensureReady\(\)/, `${script} must initialize SQLite before writing`)
-  }
+function verifyDirectSqliteInitialization(): void {
   const cachePurge = fs.readFileSync(path.resolve('scripts/rehearse-jp-repair-cache-purge.ts'), 'utf8')
   assert.match(cachePurge, /db\.exec\('PRAGMA busy_timeout=60000'\)/)
 }
@@ -74,6 +62,8 @@ async function transactionPragmas(): Promise<void> {
   await ensureReady()
   for (let index = 0; index < 2; index += 1) {
     const transaction = await client.transaction('write')
+    const transactionTimeout = await transaction.execute('PRAGMA busy_timeout')
+    assert.equal(Number(Object.values(transactionTimeout.rows[0] ?? {})[0]), 60_000)
     await transaction.execute('UPDATE maintenance_boundary_probe SET value=value WHERE 0')
     await transaction.commit()
     const result = await client.execute('PRAGMA busy_timeout')
@@ -118,7 +108,7 @@ function runChild(childMode: string, environment: NodeJS.ProcessEnv): Promise<st
 }
 
 async function parent(): Promise<void> {
-  verifyMaintenanceStageInitialization()
+  verifyDirectSqliteInitialization()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-maintenance-boundary-'))
   const database = path.join(directory, 'fixture.sqlite')
   const fixture = new DatabaseSync(database)

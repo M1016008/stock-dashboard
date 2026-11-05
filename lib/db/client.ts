@@ -171,6 +171,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     if (typeof member !== 'function') return member
     return (...args: unknown[]) => {
       const invoke = () => {
+        if (!cfg.isCloud && !globalForDb.sqlitePragmasReady) return ensureLocalSqlitePragmas().then(invoke)
         const current = realClient()
         const currentMember = Reflect.get(current, property)
         const guard = storageGuard()
@@ -181,10 +182,8 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
         try {
           const result = guardedResult(Reflect.apply(currentMember, current, args), guard)
           if (property === 'transaction') {
-            return (result as Promise<object>).then((transaction) => {
-              delete globalForDb.sqlitePragmasReady
-              return guardedTransaction(transaction, guard)
-            })
+            delete globalForDb.sqlitePragmasReady
+            return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
           }
           return recordSuccessfulMutation(result, operationMayMutate(property, args))
         } catch (error) {
