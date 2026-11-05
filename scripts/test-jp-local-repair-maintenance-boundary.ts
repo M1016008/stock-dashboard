@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +10,65 @@ import { DatabaseSync } from 'node:sqlite'
 const mode = process.argv[2] ?? 'parent'
 const dbPath = process.env.STOCKBOARD_DB_PATH ?? ''
 const tsxImport = process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx'
+
+function fileSha256(file: string): string {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+}
+
+function syncDirectory(directory: string): void {
+  const descriptor = fs.openSync(directory, 'r')
+  try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
+}
+
+function assertNoDatabaseHandles(database: string): void {
+  const result = spawnSync('/usr/sbin/lsof', ['-nP', database, `${database}-wal`, `${database}-shm`], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  })
+  assert.equal(result.error, undefined)
+  assert.ok(result.status === 1 || (result.status === 0 && !result.stdout.trim()), result.stdout)
+}
+
+function restoreQuarantinedDatabase(original: string, quarantined: string): void {
+  fs.linkSync(quarantined, original)
+  syncDirectory(path.dirname(original))
+  fs.unlinkSync(quarantined)
+  syncDirectory(path.dirname(original))
+}
+
+async function verifyQuarantineBoundary(directory: string): Promise<void> {
+  const original = path.join(directory, 'quarantine.sqlite')
+  const quarantined = path.join(directory, '.quarantine.sqlite.maintenance-test')
+  const fixture = new DatabaseSync(original)
+  fixture.exec('PRAGMA journal_mode=WAL; CREATE TABLE protected(value TEXT NOT NULL); INSERT INTO protected VALUES(\'sealed\');')
+  fixture.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  fixture.close()
+  assertNoDatabaseHandles(original)
+  assert.equal(fs.existsSync(`${original}-wal`), false)
+  assert.equal(fs.existsSync(`${original}-shm`), false)
+  const before = fileSha256(original)
+
+  fs.renameSync(original, quarantined)
+  syncDirectory(directory)
+  assert.equal(fs.existsSync(original), false)
+  assert.equal(fileSha256(quarantined), before)
+
+  const accidental = new DatabaseSync(original)
+  accidental.close()
+  assert.throws(() => restoreQuarantinedDatabase(original, quarantined), /EEXIST/)
+  assert.equal(fileSha256(quarantined), before)
+  fs.unlinkSync(original)
+  restoreQuarantinedDatabase(original, quarantined)
+  assert.equal(fileSha256(original), before)
+
+  fs.renameSync(original, quarantined)
+  fs.linkSync(quarantined, original)
+  syncDirectory(directory)
+  assert.equal(fs.statSync(original).ino, fs.statSync(quarantined).ino, 'link-before-unlink is crash-recoverable')
+  fs.unlinkSync(quarantined)
+  syncDirectory(directory)
+  assert.equal(fileSha256(original), before)
+}
 
 function verifyDirectSqliteInitialization(): void {
   const cachePurge = fs.readFileSync(path.resolve('scripts/rehearse-jp-repair-cache-purge.ts'), 'utf8')
@@ -117,6 +177,7 @@ function runChild(childMode: string, environment: NodeJS.ProcessEnv): Promise<st
 async function parent(): Promise<void> {
   verifyDirectSqliteInitialization()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-maintenance-boundary-'))
+  await verifyQuarantineBoundary(directory)
   const database = path.join(directory, 'fixture.sqlite')
   const fixture = new DatabaseSync(database)
   fixture.exec(`
@@ -219,7 +280,7 @@ async function parent(): Promise<void> {
       unrelatedWriter.kill('SIGTERM')
     }
     console.log('JP local repair maintenance boundary: PASS')
-    console.log('db_maintenance blocks cooperative locks but not an unguarded SQLite process; hard service hold remains mandatory')
+    console.log('cooperative lease requires a service hold; quarantine rename blocks normal-path access and restores without clobbering')
   } finally {
     lockHolder.stdin?.end()
     if (lockHolder.exitCode === null && lockHolder.signalCode === null) {
