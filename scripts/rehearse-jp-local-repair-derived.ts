@@ -11,6 +11,7 @@ import {
   chunkJpOhlcvRepairTickers,
   completeJpOhlcvRepairDerived,
   createJpOhlcvRepairPlan,
+  identifyJpOhlcvDatabaseContent,
   inspectJpOhlcvRepairMlCoverage,
   jpOhlcvValueSha256,
   type JpOhlcvOfficialRow,
@@ -1135,24 +1136,31 @@ async function main(): Promise<void> {
         || validation.stageCount !== receipt.stages.length) {
       throw new Error('validate-only final validation receipt does not bind the completed execution')
     }
+    const databaseIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.database)
+    const analogIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.analog)
+    if (JSON.stringify(validation.databaseIdentity) !== JSON.stringify(databaseIdentityBeforeValidation)
+        || JSON.stringify(validation.analogIdentity) !== JSON.stringify(analogIdentityBeforeValidation)) {
+      throw new Error('validate-only database identity changed after final validation')
+    }
     assertQuickCheck(cli.database)
     assertQuickCheck(cli.analog)
-    if (JSON.stringify(validation.databaseIdentity) !== JSON.stringify(databaseBundleIdentity(cli.database))
-        || JSON.stringify(validation.analogIdentity) !== JSON.stringify(databaseBundleIdentity(cli.analog))) {
-      throw new Error('validate-only database identity changed after final validation')
+    const finalChecks = validateFinalState(
+      cli,
+      official,
+      receipt,
+      'derived_complete',
+      receipt.approvalPackageSha256,
+    )
+    if (JSON.stringify(databaseIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
+        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+      throw new Error('validate-only database content changed during final validation')
     }
     console.log(JSON.stringify({
       status: 'PASS',
       sourceReceiptSha256: fileSha256(cli.receipt),
       approvalPackageSha256: receipt.approvalPackageSha256,
       stageCount: receipt.stages.length,
-      finalChecks: validateFinalState(
-        cli,
-        official,
-        receipt,
-        'derived_complete',
-        receipt.approvalPackageSha256,
-      ),
+      finalChecks,
     }, null, 2))
     return
   }
@@ -1568,7 +1576,13 @@ async function main(): Promise<void> {
     } finally {
       completed.close()
     }
+    await parentLock.release()
     checkpointWalHandoff(cli.database)
+    checkpointWalHandoff(cli.analog)
+    const databaseIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.database)
+    const analogIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.analog)
+    assertQuickCheck(cli.database)
+    assertQuickCheck(cli.analog)
     const finalChecks = validateFinalState(
       cli,
       official,
@@ -1576,6 +1590,10 @@ async function main(): Promise<void> {
       'derived_complete',
       approvalPackageSha256,
     )
+    if (JSON.stringify(databaseIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
+        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+      throw new Error('database content changed during final validation')
+    }
     receipt.finalChecks = finalChecks
     receipt.status = 'PASS'
     receipt.approvalPackageSha256 = approvalPackageSha256
@@ -1592,8 +1610,8 @@ async function main(): Promise<void> {
       source: receipt.source,
       stageCount: receipt.stages.length,
       sourcePhase: 'derived_complete',
-      databaseIdentity: databaseBundleIdentity(cli.database),
-      analogIdentity: databaseBundleIdentity(cli.analog),
+      databaseIdentity: databaseIdentityBeforeValidation,
+      analogIdentity: analogIdentityBeforeValidation,
       finalChecks,
     })
   } catch (error) {

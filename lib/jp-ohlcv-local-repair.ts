@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
 import {
@@ -36,6 +37,53 @@ export type JpOhlcvRepairMlCoverage = {
   actual: number
   missing: number
   extra: number
+}
+
+export type JpOhlcvDatabaseContentIdentity = {
+  database: {
+    realpath: string
+    inode: number
+    size: number
+    sha256: string
+  }
+  walBytes: 0
+}
+
+export function identifyJpOhlcvDatabaseContent(database: string): JpOhlcvDatabaseContentIdentity {
+  const realpath = fs.realpathSync(database)
+  const descriptor = fs.openSync(realpath, 'r')
+  const hash = createHash('sha256')
+  const buffer = Buffer.allocUnsafe(8 * 1024 * 1024)
+  let offset = 0
+  let before: fs.Stats
+  let after: fs.Stats
+  try {
+    before = fs.fstatSync(descriptor)
+    while (offset < before.size) {
+      const bytesRead = fs.readSync(descriptor, buffer, 0, Math.min(buffer.length, before.size - offset), offset)
+      if (bytesRead === 0) throw new Error(`database ended while hashing at byte ${offset}`)
+      hash.update(buffer.subarray(0, bytesRead))
+      offset += bytesRead
+    }
+    after = fs.fstatSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
+    throw new Error('database changed while computing its content identity')
+  }
+  const walPath = `${database}-wal`
+  const walBytes = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0
+  if (walBytes !== 0) throw new Error(`database content identity requires an empty WAL; found ${walBytes} bytes`)
+  return {
+    database: {
+      realpath,
+      inode: Number(before.ino),
+      size: before.size,
+      sha256: hash.digest('hex'),
+    },
+    walBytes: 0,
+  }
 }
 
 export function inspectJpOhlcvRepairMlCoverage(input: {

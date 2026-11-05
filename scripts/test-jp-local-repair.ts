@@ -9,6 +9,7 @@ import {
   applyJpOhlcvRepairTransaction,
   chunkJpOhlcvRepairTickers,
   createJpOhlcvRepairPlan,
+  identifyJpOhlcvDatabaseContent,
   inspectJpOhlcvRepairMlCoverage,
 } from '@/lib/jp-ohlcv-local-repair'
 import { isJpOhlcvProtectedConflictKey } from '@/lib/jp-ohlcv-repair-policy'
@@ -168,6 +169,23 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const identityDbPath = path.join(root, 'content-identity.sqlite')
+  const identityDb = new DatabaseSync(identityDbPath)
+  identityDb.exec('PRAGMA journal_mode=WAL; CREATE TABLE identity_probe(id INTEGER PRIMARY KEY,value INTEGER NOT NULL); INSERT INTO identity_probe VALUES(1,1); PRAGMA wal_checkpoint(TRUNCATE);')
+  identityDb.close()
+  const identityBefore = identifyJpOhlcvDatabaseContent(identityDbPath)
+  const identityRead = new DatabaseSync(identityDbPath, { readOnly: true })
+  assert.equal((identityRead.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check, 'ok')
+  identityRead.close()
+  if (fs.existsSync(`${identityDbPath}-wal`)) fs.rmSync(`${identityDbPath}-wal`)
+  fs.writeFileSync(`${identityDbPath}-wal`, '')
+  assert.deepEqual(identifyJpOhlcvDatabaseContent(identityDbPath), identityBefore)
+  fs.rmSync(`${identityDbPath}-wal`)
+  const identityWrite = new DatabaseSync(identityDbPath)
+  identityWrite.exec('UPDATE identity_probe SET value=2; PRAGMA wal_checkpoint(TRUNCATE);')
+  identityWrite.close()
+  assert.notDeepEqual(identifyJpOhlcvDatabaseContent(identityDbPath), identityBefore)
+
   const chunked = chunkJpOhlcvRepairTickers(
     Array.from({ length: 4_061 }, (_, index) => String(index + 1)),
     500,
