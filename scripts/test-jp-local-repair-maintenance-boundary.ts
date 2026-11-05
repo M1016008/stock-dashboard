@@ -69,6 +69,13 @@ async function transactionPragmas(): Promise<void> {
     const result = await client.execute('PRAGMA busy_timeout')
     assert.equal(Number(Object.values(result.rows[0] ?? {})[0]), 60_000)
   }
+  const [transaction, ...timeouts] = await Promise.all([
+    client.transaction('write'),
+    client.execute('PRAGMA busy_timeout'),
+    client.execute('PRAGMA busy_timeout'),
+  ])
+  await transaction.rollback()
+  assert.deepEqual(timeouts.map((result) => Number(Object.values(result.rows[0] ?? {})[0])), [60_000, 60_000])
   process.stdout.write('TRANSACTION_PRAGMAS_VERIFIED\n')
 }
 

@@ -50,6 +50,7 @@ const globalForDb = global as unknown as {
   libsql?: Client
   schemaReady?: Promise<void>
   sqlitePragmasReady?: Promise<void>
+  sqlitePragmasInitialized?: boolean
   mutationVersion?: number
   readQueue?: {
     active: number
@@ -170,8 +171,11 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     const member = Reflect.get(actual, property)
     if (typeof member !== 'function') return member
     return (...args: unknown[]) => {
+      const requiresPragmas = !cfg.isCloud
+        && ['execute', 'batch', 'transaction', 'migrate', 'executeMultiple'].includes(String(property))
       const invoke = () => {
-        if (!cfg.isCloud && !globalForDb.sqlitePragmasReady) return ensureLocalSqlitePragmas().then(invoke)
+        if (requiresPragmas && !globalForDb.sqlitePragmasInitialized)
+          return ensureLocalSqlitePragmas().then(invoke)
         const current = realClient()
         const currentMember = Reflect.get(current, property)
         const guard = storageGuard()
@@ -183,6 +187,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
           const result = guardedResult(Reflect.apply(currentMember, current, args), guard)
           if (property === 'transaction') {
             delete globalForDb.sqlitePragmasReady
+            delete globalForDb.sqlitePragmasInitialized
             return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
           }
           return recordSuccessfulMutation(result, operationMayMutate(property, args))
@@ -191,9 +196,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
           throw error
         }
       }
-      if (!cfg.isCloud && ['execute', 'batch', 'transaction', 'migrate', 'executeMultiple'].includes(String(property))) {
-        return ensureLocalSqlitePragmas().then(invoke)
-      }
+      if (requiresPragmas) return ensureLocalSqlitePragmas().then(invoke)
       return invoke()
     }
   },
@@ -208,6 +211,7 @@ export async function closeLocalClientBeforeExternalWriter(): Promise<void> {
   globalForDb.libsql?.close()
   delete globalForDb.libsql
   delete globalForDb.sqlitePragmasReady
+  delete globalForDb.sqlitePragmasInitialized
   delete globalForDb.schemaReady
 }
 
@@ -220,6 +224,7 @@ function boundedIntegerEnv(name: string, fallback: number, min: number, max: num
 async function ensureLocalSqlitePragmas(): Promise<void> {
   if (cfg.isCloud) return
   if (!globalForDb.sqlitePragmasReady) {
+    globalForDb.sqlitePragmasInitialized = false
     globalForDb.sqlitePragmasReady = Promise.resolve()
       .then(async () => {
         const actual = realClient()
@@ -239,9 +244,11 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
           ?? '',
         ).toLowerCase()
         if (mode !== 'wal') await execute('PRAGMA journal_mode=WAL')
+        globalForDb.sqlitePragmasInitialized = true
       })
       .catch((e) => {
         delete globalForDb.sqlitePragmasReady
+        delete globalForDb.sqlitePragmasInitialized
         throw e
       })
   }
