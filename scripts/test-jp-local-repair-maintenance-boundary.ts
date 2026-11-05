@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
+import { assertNoUnauthorizedDatabaseHandles } from '@/lib/storage/launchd-writer-hold-driver'
 
 const mode = process.argv[2] ?? 'parent'
 const dbPath = process.env.STOCKBOARD_DB_PATH ?? ''
@@ -21,15 +22,11 @@ function syncDirectory(directory: string): void {
 }
 
 function assertNoDatabaseHandles(database: string): void {
-  const files = [database, `${database}-wal`, `${database}-shm`].filter((file) => fs.existsSync(file))
-  assert.ok(files.length > 0, 'database bundle is missing')
-  const result = spawnSync('/usr/sbin/lsof', ['-nP', ...files], {
-    encoding: 'utf8',
-    timeout: 10_000,
+  assertNoUnauthorizedDatabaseHandles({
+    databasePath: database,
+    approvedReaders: [],
+    timeoutMs: 10_000,
   })
-  assert.equal(result.error, undefined)
-  assert.ok(result.status === 0 || result.status === 1, result.stderr)
-  if (result.status === 0 && result.stdout.trim()) throw new Error(`active database handles: ${result.stdout}`)
 }
 
 function restoreQuarantinedDatabase(original: string, quarantined: string): void {
@@ -57,7 +54,7 @@ async function verifyQuarantineBoundary(directory: string): Promise<void> {
   })
   await waitForLine(activeHandle, 'QUARANTINE_HANDLE_OPEN')
   try {
-    assert.throws(() => assertNoDatabaseHandles(original), /active database handles/)
+    assert.throws(() => assertNoDatabaseHandles(original), /UNAUTHORIZED_DATABASE_HANDLE/)
   } finally {
     activeHandle.kill('SIGTERM')
     await new Promise<void>((resolve) => activeHandle.once('exit', () => resolve()))
