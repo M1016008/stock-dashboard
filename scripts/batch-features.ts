@@ -14,7 +14,7 @@
 //   - ローリング状態 (MA 系列、拡散履歴、ステージ滞在トラッカー) を保持
 //   - チャンク 200 行で INSERT (libSQL の SQL 長制限対策)、onConflictDoNothing で冪等
 
-import { db, execAll, execGet } from '@/lib/db/client'
+import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { featureSnapshots, batchRuns, computeState } from '@/lib/db/schema'
 import * as F from '@/lib/features'
 import { NativePeriodFeatureSampler } from '@/lib/feature-native-period-sampler'
@@ -333,6 +333,7 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
 }
 
 async function main() {
+  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'feature_compute', startedAt: new Date(), status: 'running' })

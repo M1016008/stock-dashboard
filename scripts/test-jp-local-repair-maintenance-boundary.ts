@@ -10,6 +10,23 @@ const mode = process.argv[2] ?? 'parent'
 const dbPath = process.env.STOCKBOARD_DB_PATH ?? ''
 const tsxImport = process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx'
 
+function verifyMaintenanceStageInitialization(): void {
+  for (const script of [
+    'scripts/batch-snapshots.ts',
+    'scripts/batch-features.ts',
+    'scripts/batch-monthly-ma-monitor.ts',
+    'scripts/batch-forward-returns.ts',
+    'scripts/batch-pattern-stats.ts',
+    'scripts/build-dashboard-cache.ts',
+  ]) {
+    const source = fs.readFileSync(path.resolve(script), 'utf8')
+    assert.match(source, /import[^\n]+ensureReady[^\n]+from '@\/lib\/db\/client'/, `${script} must import ensureReady`)
+    assert.match(source, /async function main[^\{]*\{\s*await ensureReady\(\)/, `${script} must initialize SQLite before writing`)
+  }
+  const cachePurge = fs.readFileSync(path.resolve('scripts/rehearse-jp-repair-cache-purge.ts'), 'utf8')
+  assert.match(cachePurge, /db\.exec\('PRAGMA busy_timeout=60000'\)/)
+}
+
 async function cooperativeWriter(): Promise<void> {
   const { acquireJpStockboardUpdateLock } = await import('@/lib/server/update-lock')
   const lock = await acquireJpStockboardUpdateLock('update_latest', 60)
@@ -88,6 +105,7 @@ function runChild(childMode: string, environment: NodeJS.ProcessEnv): Promise<st
 }
 
 async function parent(): Promise<void> {
+  verifyMaintenanceStageInitialization()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-maintenance-boundary-'))
   const database = path.join(directory, 'fixture.sqlite')
   const fixture = new DatabaseSync(database)

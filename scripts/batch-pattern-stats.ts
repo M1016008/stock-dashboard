@@ -7,7 +7,7 @@
 //   USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-pattern-stats.ts
 //   PATTERN_STAT_HORIZONS=2,3,4,5,10,15 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-pattern-stats.ts
 
-import { db, client } from '@/lib/db/client'
+import { db, client, ensureReady } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
 
@@ -116,6 +116,7 @@ async function aggregate(): Promise<number> {
 }
 
 async function main() {
+  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'pattern_stats', startedAt: new Date(), status: 'running' })

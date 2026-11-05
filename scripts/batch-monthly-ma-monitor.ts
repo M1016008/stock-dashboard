@@ -1,7 +1,7 @@
 // 3/5/10/15/20/25か月線を同一ロジックで監視し、連続MAクラスターも保存する。
 
 import { eq, sql } from 'drizzle-orm'
-import { db, execAll, execGet, execRun } from '@/lib/db/client'
+import { db, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
 import {
   batchRuns,
   computeState,
@@ -318,6 +318,7 @@ async function writeTicker(ticker: string, latestSourceDate: string, retentionCu
 }
 
 async function main(): Promise<void> {
+  await ensureReady()
   const [run] = await db.insert(batchRuns).values({
     jobType: 'monthly_ma_monitor', startedAt: new Date(), status: 'running',
   }).returning({ id: batchRuns.id })

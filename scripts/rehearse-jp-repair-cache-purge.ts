@@ -48,6 +48,7 @@ function main(): void {
     throw new Error('cache mutation is restricted to an explicitly isolated rehearsal')
   }
   const db = new DatabaseSync(databasePath, { readOnly: !apply })
+  db.exec('PRAGMA busy_timeout=60000')
   try {
     const dashboardRows = db.prepare(`
       SELECT date || '|' || payload_json AS value

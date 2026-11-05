@@ -17,7 +17,7 @@
 // パフォーマンス注:
 //   銘柄ごとに O(n) で計算し、書き込みはチャンク化する。
 
-import { db, execAll, execGet, execRun } from '@/lib/db/client'
+import { db, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
 import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'
 import { buildSnapshotCalculations, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 import type { OHLCV } from '@/types/stock'
@@ -210,6 +210,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
 }
 
 async function main() {
+  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({

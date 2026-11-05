@@ -7,7 +7,7 @@
 //   FORWARD_RETURN_HORIZONS=2,3,4,5,10,15 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-forward-returns.ts
 //   TICKERS=7203 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-forward-returns.ts
 
-import { db, client } from '@/lib/db/client'
+import { db, client, ensureReady } from '@/lib/db/client'
 import { tickerUniverse, batchRuns } from '@/lib/db/schema'
 import { forwardReturnsProjectionSql } from '@/lib/backtest/forward-returns'
 import { eq } from 'drizzle-orm'
@@ -113,6 +113,7 @@ async function computeForwardReturnsForHorizon(horizon: number, tickers: string[
 }
 
 async function main() {
+  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'forward_returns', startedAt: new Date(), status: 'running' })
