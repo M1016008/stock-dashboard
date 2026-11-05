@@ -170,21 +170,32 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     const member = Reflect.get(actual, property)
     if (typeof member !== 'function') return member
     return (...args: unknown[]) => {
-      const guard = storageGuard()
-      guard?.assertWritable()
-      if (property === 'execute' || property === 'batch')
-        (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
-          .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
-      try {
-        const result = guardedResult(Reflect.apply(member, actual, args), guard)
-        if (property === 'transaction') {
-          return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
+      const invoke = () => {
+        const current = realClient()
+        const currentMember = Reflect.get(current, property)
+        const guard = storageGuard()
+        guard?.assertWritable()
+        if (property === 'execute' || property === 'batch')
+          (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
+            .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
+        try {
+          const result = guardedResult(Reflect.apply(currentMember, current, args), guard)
+          if (property === 'transaction') {
+            return (result as Promise<object>).then((transaction) => {
+              delete globalForDb.sqlitePragmasReady
+              return guardedTransaction(transaction, guard)
+            })
+          }
+          return recordSuccessfulMutation(result, operationMayMutate(property, args))
+        } catch (error) {
+          if (guard && isStorageIoError(error)) guard.classify(error)
+          throw error
         }
-        return recordSuccessfulMutation(result, operationMayMutate(property, args))
-      } catch (error) {
-        if (guard && isStorageIoError(error)) guard.classify(error)
-        throw error
       }
+      if (!cfg.isCloud && ['execute', 'batch', 'transaction', 'migrate', 'executeMultiple'].includes(String(property))) {
+        return ensureLocalSqlitePragmas().then(invoke)
+      }
+      return invoke()
     }
   },
 })
@@ -212,20 +223,23 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
   if (!globalForDb.sqlitePragmasReady) {
     globalForDb.sqlitePragmasReady = Promise.resolve()
       .then(async () => {
+        const actual = realClient()
+        const guard = storageGuard()
         const busyTimeoutMs = boundedIntegerEnv('SQLITE_BUSY_TIMEOUT_MS', 60_000, 1_000, 300_000)
         const cacheMb = boundedIntegerEnv('STOCKBOARD_DB_CACHE_MB', 32, 8, 256)
         const mmapMb = boundedIntegerEnv('STOCKBOARD_DB_MMAP_MB', 256, 0, 1_024)
-        await client.execute('PRAGMA synchronous=NORMAL')
-        await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
-        await client.execute(`PRAGMA cache_size=-${cacheMb * 1_024}`)
-        await client.execute(`PRAGMA mmap_size=${mmapMb * 1_024 * 1_024}`)
-        const journalMode = await client.execute('PRAGMA journal_mode')
+        const execute = (sql: string) => guardedResult(actual.execute(sql), guard)
+        await execute('PRAGMA synchronous=NORMAL')
+        await execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
+        await execute(`PRAGMA cache_size=-${cacheMb * 1_024}`)
+        await execute(`PRAGMA mmap_size=${mmapMb * 1_024 * 1_024}`)
+        const journalMode = await execute('PRAGMA journal_mode')
         const mode = String(
           journalMode.rows[0]?.journal_mode
           ?? journalMode.rows[0]?.['journal_mode']
           ?? '',
         ).toLowerCase()
-        if (mode !== 'wal') await client.execute('PRAGMA journal_mode=WAL')
+        if (mode !== 'wal') await execute('PRAGMA journal_mode=WAL')
       })
       .catch((e) => {
         delete globalForDb.sqlitePragmasReady

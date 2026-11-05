@@ -69,6 +69,19 @@ async function cleanupOrphan(): Promise<void> {
   process.stdout.write(`ORPHAN_CLEANED=${cleaned}\n`)
 }
 
+async function transactionPragmas(): Promise<void> {
+  const { client, ensureReady } = await import('@/lib/db/client')
+  await ensureReady()
+  for (let index = 0; index < 2; index += 1) {
+    const transaction = await client.transaction('write')
+    await transaction.execute('UPDATE maintenance_boundary_probe SET value=value WHERE 0')
+    await transaction.commit()
+    const result = await client.execute('PRAGMA busy_timeout')
+    assert.equal(Number(Object.values(result.rows[0] ?? {})[0]), 60_000)
+  }
+  process.stdout.write('TRANSACTION_PRAGMAS_VERIFIED\n')
+}
+
 function waitForLine(child: ReturnType<typeof spawn>, expected: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let output = ''
@@ -126,6 +139,8 @@ async function parent(): Promise<void> {
     STOCKBOARD_LOCK_HOLDER_LEASE_SECONDS: '60',
     STOCKBOARD_LOCK_HOLDER_HEARTBEAT_MS: '1000',
   }
+  const transactionPragmaResult = await runChild('transaction-pragmas', environment)
+  assert.match(transactionPragmaResult, /TRANSACTION_PRAGMAS_VERIFIED/)
   const lockHolder = spawn(process.execPath, ['--import', tsxImport, 'scripts/hold-update-lock.ts'], {
     cwd: process.cwd(), env: environment, stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -231,6 +246,7 @@ async function main(): Promise<void> {
   else if (mode === 'raw-writer') rawWriter()
   else if (mode === 'inherited-lease') await inheritedLease()
   else if (mode === 'cleanup-orphan') await cleanupOrphan()
+  else if (mode === 'transaction-pragmas') await transactionPragmas()
   else await parent()
 }
 
