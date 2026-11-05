@@ -21,12 +21,15 @@ function syncDirectory(directory: string): void {
 }
 
 function assertNoDatabaseHandles(database: string): void {
-  const result = spawnSync('/usr/sbin/lsof', ['-nP', database, `${database}-wal`, `${database}-shm`], {
+  const files = [database, `${database}-wal`, `${database}-shm`].filter((file) => fs.existsSync(file))
+  assert.ok(files.length > 0, 'database bundle is missing')
+  const result = spawnSync('/usr/sbin/lsof', ['-nP', ...files], {
     encoding: 'utf8',
     timeout: 10_000,
   })
   assert.equal(result.error, undefined)
-  assert.ok(result.status === 1 || (result.status === 0 && !result.stdout.trim()), result.stdout)
+  assert.ok(result.status === 0 || result.status === 1, result.stderr)
+  if (result.status === 0 && result.stdout.trim()) throw new Error(`active database handles: ${result.stdout}`)
 }
 
 function restoreQuarantinedDatabase(original: string, quarantined: string): void {
@@ -43,14 +46,33 @@ async function verifyQuarantineBoundary(directory: string): Promise<void> {
   fixture.exec('PRAGMA journal_mode=WAL; CREATE TABLE protected(value TEXT NOT NULL); INSERT INTO protected VALUES(\'sealed\');')
   fixture.exec('PRAGMA wal_checkpoint(TRUNCATE)')
   fixture.close()
+  const activeHandle = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite')
+    const db = new DatabaseSync(process.env.STOCKBOARD_DB_PATH, { readOnly: true })
+    process.stdout.write('QUARANTINE_HANDLE_OPEN\\n')
+    setTimeout(() => { db.close(); process.exit(0) }, 60000)
+  `], {
+    env: { ...process.env, STOCKBOARD_DB_PATH: original },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  await waitForLine(activeHandle, 'QUARANTINE_HANDLE_OPEN')
+  try {
+    assert.throws(() => assertNoDatabaseHandles(original), /active database handles/)
+  } finally {
+    activeHandle.kill('SIGTERM')
+    await new Promise<void>((resolve) => activeHandle.once('exit', () => resolve()))
+  }
   assertNoDatabaseHandles(original)
   assert.equal(fs.existsSync(`${original}-wal`), false)
   assert.equal(fs.existsSync(`${original}-shm`), false)
   const before = fileSha256(original)
 
+  const originalStat = fs.statSync(original)
+  assert.equal(originalStat.dev, fs.statSync(directory).dev)
   fs.renameSync(original, quarantined)
   syncDirectory(directory)
   assert.equal(fs.existsSync(original), false)
+  assert.equal(fs.statSync(quarantined).ino, originalStat.ino)
   assert.equal(fileSha256(quarantined), before)
 
   const accidental = new DatabaseSync(original)
