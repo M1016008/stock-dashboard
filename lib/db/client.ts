@@ -173,7 +173,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     return (...args: unknown[]) => {
       const requiresPragmas = !cfg.isCloud
         && ['execute', 'batch', 'transaction', 'migrate', 'executeMultiple'].includes(String(property))
-      const invoke = () => {
+      const invoke = (): unknown => {
         if (requiresPragmas && !globalForDb.sqlitePragmasInitialized)
           return ensureLocalSqlitePragmas().then(invoke)
         const current = realClient()
