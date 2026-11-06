@@ -610,7 +610,7 @@ async function testContractBindings(): Promise<void> {
     inspectRuntime: () => { calls.push('runtime'); throw new Error('read') },
     inspectDatabase: () => { calls.push('database'); throw new Error('read') },
   })), ['APPROVAL_TAMPERED'])
-  assert.deepEqual(calls, [])
+  assert.equal(calls.length, 0)
   writeApproval(fixture, fixture.approval)
 
   // A hash-matching file that is not a JSON object is never an approval.
@@ -626,7 +626,7 @@ async function testContractBindings(): Promise<void> {
     assert.deepEqual(result.holdReasons.map((reason) => reason.split(':')[0]), ['APPROVAL_INVALID'], JSON.stringify(text))
     assert.equal(result.approval, null)
   }
-  assert.deepEqual(calls, [])
+  assert.equal(calls.length, 0)
   writeApproval(fixture, fixture.approval)
 
   // The loaded launchd job itself must be the approved plist, program, and
