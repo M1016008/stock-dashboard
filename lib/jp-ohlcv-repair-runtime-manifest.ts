@@ -54,9 +54,14 @@ export function jpRepairRuntimeSourceTreeSha256(cwd = process.cwd()): string {
 
 // Provenance of a compiled web build. next build also compiles app/ and
 // components/, so the whole tracked tree (not only the runtime pathspecs) must
-// equal HEAD, no untracked executable source may exist anywhere, and no
-// ignored executable source may exist under the source roots.
+// equal HEAD and no untracked executable source may exist anywhere. Under the
+// Next build roots any file (JSON, CSS, assets, public/ files) can change the
+// build output, so every untracked or ignored file there fails closed except
+// Finder's .DS_Store; under scripts/ only executable source does.
 export type StockboardBuildProvenance = { gitCommitSha: string; runtimeSourceTreeSha256: string }
+
+const NEXT_BUILD_ROOTS = ['app', 'components', 'lib', 'types', 'public'] as const
+const INERT_BUILD_FILE = /(^|\/)\.DS_Store$/
 
 export function stockboardBuildProvenance(cwd: string): StockboardBuildProvenance {
   const git = (...args: string[]) => execFileSync('/usr/bin/git', args, { cwd, encoding: 'utf8' })
@@ -71,11 +76,18 @@ export function stockboardBuildProvenance(cwd: string): StockboardBuildProvenanc
   if (untracked.length > 0) {
     throw new Error(`build input has untracked executable source: ${untracked.slice(0, 5).join(',')}`)
   }
-  // Ignored files under source roots are still compiled by next build or run
-  // by scripts, so they fail closed too (node_modules/.next are not scanned).
-  const roots = ['app', 'components', 'lib', 'scripts', 'types'].filter((root) => fs.existsSync(path.join(cwd, root)))
-  const ignored = roots.length === 0 ? [] : git('ls-files', '--others', '--ignored', '--exclude-standard', '-z',
-    '--', ...roots).split('\0').filter((file) => EXECUTABLE_SOURCE.test(file))
+  // node_modules/.next are not scanned.
+  const others = (roots: readonly string[], ...flags: string[]) => {
+    const present = roots.filter((root) => fs.existsSync(path.join(cwd, root)))
+    return present.length === 0 ? []
+      : git('ls-files', '--others', ...flags, '--exclude-standard', '-z', '--', ...present).split('\0').filter(Boolean)
+  }
+  const buildInputs = [...others(NEXT_BUILD_ROOTS), ...others(NEXT_BUILD_ROOTS, '--ignored')]
+    .filter((file) => !INERT_BUILD_FILE.test(file))
+  if (buildInputs.length > 0) {
+    throw new Error(`build input has untracked or ignored files: ${buildInputs.slice(0, 5).join(',')}`)
+  }
+  const ignored = others(['scripts'], '--ignored').filter((file) => EXECUTABLE_SOURCE.test(file))
   if (ignored.length > 0) {
     throw new Error(`build input has ignored executable source: ${ignored.slice(0, 5).join(',')}`)
   }
@@ -139,7 +151,7 @@ export function jpRepairCompiledTreeSha256(root: string): string {
     const stat = fs.lstatSync(absolute, { bigint: true })
     seen.push([absolute, stat])
     if (stat.dev !== rootDev) throw new Error(`${absolute} is on another device`)
-    const mode = Number(stat.mode & 0o7777n)
+    const mode = Number(stat.mode & BigInt(0o7777))
     if (stat.isDirectory()) {
       lines.push(JSON.stringify(['D', mode, relative]))
       const names = fs.readdirSync(absolute).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
@@ -147,7 +159,7 @@ export function jpRepairCompiledTreeSha256(root: string): string {
       return
     }
     if (!stat.isFile()) throw new Error(`${absolute} is not a regular file or directory`)
-    if (stat.nlink !== 1n) throw new Error(`${absolute} has ${stat.nlink} hard links`)
+    if (stat.nlink !== BigInt(1)) throw new Error(`${absolute} has ${stat.nlink} hard links`)
     const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
     try {
       if (fs.fstatSync(fd, { bigint: true }).ino !== stat.ino) throw new Error(`${absolute} was replaced`)

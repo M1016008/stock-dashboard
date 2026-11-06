@@ -254,18 +254,32 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
   const loaded: { sha256: string | null; approval: JpRepairProductionApproval | null } = {
     sha256: null, approval: null,
   }
+  const bytes: { value: Buffer | null } = { value: null }
   await check('APPROVAL_UNREADABLE', () => {
-    const bytes = fs.readFileSync(input.approvalPath)
-    loaded.sha256 = sha256(bytes)
+    bytes.value = fs.readFileSync(input.approvalPath)
+    loaded.sha256 = sha256(bytes.value)
     if (!SHA256.test(input.expectedApprovalSha256) || loaded.sha256 !== input.expectedApprovalSha256) {
       holdReasons.push('APPROVAL_TAMPERED:approval file hash differs from the operator-supplied hash')
-      return
+      bytes.value = null
     }
-    loaded.approval = JSON.parse(bytes.toString('utf8')) as JpRepairProductionApproval
   })
+  // A hash-verified file can still hold null, a primitive, or an array; only
+  // a plain JSON object is an approval.
+  if (bytes.value) {
+    await check('APPROVAL_INVALID', () => {
+      const parsed: unknown = JSON.parse(bytes.value!.toString('utf8'))
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('approval is not a JSON object')
+      }
+      loaded.approval = parsed as JpRepairProductionApproval
+    })
+  }
   const approvalSha256 = loaded.sha256
   const approved = loaded.approval
-  if (!approved || !approvalSha256) return result(approvalSha256, null, null, [])
+  if (!approved || !approvalSha256) {
+    if (holdReasons.length === 0) holdReasons.push('APPROVAL_INVALID:approval was not loaded')
+    return result(approvalSha256, null, null, [])
+  }
   await check('APPROVAL_INVALID', () => {
     if (approved.version !== 3) throw new Error('unsupported approval version')
     if (approved.action !== JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION) throw new Error('unknown approval action')
@@ -410,22 +424,25 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
   })
   await check('REHEARSAL_RECEIPT_MISMATCH', () => verifyRehearsalReceipts(input, approved))
 
+  // Non-array lists hold as SERVICE_SET_MISMATCH / RUNTIME_SET_MISMATCH.
+  const approvedServices = Array.isArray(approved.services) ? approved.services : []
+  const approvedRuntimes = Array.isArray(approved.runtimes) ? approved.runtimes : []
   const services: JpRepairServiceState[] = []
   await check('SERVICE_SET_MISMATCH', () => {
-    const labels = (approved.services ?? []).map((service) => service.label)
+    const labels = approvedServices.map((service) => service?.label)
     if (JSON.stringify(labels) !== JSON.stringify(JP_REPAIR_SERVICE_LABELS)) {
       throw new Error(`approval must list exactly the ${JP_REPAIR_SERVICE_LABELS.length} services in stop order`)
     }
   })
   await check('UNKNOWN_LOADED_SERVICE', () => {
-    const stopped = new Set((approved.services ?? []).map((service) => service.label))
+    const stopped = new Set(approvedServices.map((service) => service?.label))
     const unknown = input.listLoadedServiceLabels()
       .filter((label) => label.startsWith(JP_REPAIR_SERVICE_LABEL_PREFIX) && !stopped.has(label))
     if (unknown.length > 0) throw new Error(unknown.join(','))
   })
   const verified = new Map<string, LaunchdRuntimeIdentity>()
-  const observer = input.createServiceObserver(approved.services ?? [])
-  for (const service of approved.services ?? []) {
+  const observer = input.createServiceObserver(approvedServices)
+  for (const service of approvedServices) {
     await check('SERVICE_IDENTITY_MISMATCH', async () => {
       const observed = await observer.observe(service.label)
       if (observed.definitionSha256 !== service.definitionSha256 || observed.program !== service.program) {
@@ -439,12 +456,12 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
     })
   }
   await check('RUNTIME_SET_MISMATCH', () => {
-    const labels = (approved.runtimes ?? []).map((runtime) => runtime.label)
+    const labels = approvedRuntimes.map((runtime) => runtime?.label)
     if (JSON.stringify(labels) !== JSON.stringify(JP_REPAIR_TRIGGER_RUNTIME_LABELS)) {
       throw new Error(`approval must bind exactly the runtimes of ${JP_REPAIR_TRIGGER_RUNTIME_LABELS.join(',')}`)
     }
   })
-  for (const runtime of approved.runtimes ?? []) {
+  for (const runtime of approvedRuntimes) {
     await check('RUNTIME_IDENTITY_MISMATCH', () => {
       const service = verified.get(runtime.label)
       if (!service) throw new Error(`${runtime.label}: plist identity is not verified`)
@@ -589,7 +606,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
   assertContentIdentity(validation.value.analogIdentity, 'validation analog')
   const rehearsed = validation.value.databaseIdentity!.database!
   const packaged = approvalPackage.value.databaseIdentity?.database
-  if (packaged?.realpath !== rehearsed.realpath || packaged.inode !== rehearsed.inode) {
+  if (!packaged || packaged.realpath !== rehearsed.realpath || packaged.inode !== rehearsed.inode) {
     throw new Error('rehearsal receipts disagree on the rehearsal database identity')
   }
   if (rehearsed.realpath === fs.realpathSync(input.databasePath)) {

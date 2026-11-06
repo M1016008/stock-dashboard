@@ -135,7 +135,27 @@ function testRuntimeManifest(): void {
   // Deploy-side build provenance: next build compiles UI too, so the whole
   // tracked tree must be clean, unlike the runtime source hash above.
   const head = git(repo, 'rev-parse', 'HEAD').trim()
+  // Non-executable files under Next build roots still change the build.
+  assert.throws(() => stockboardBuildProvenance(repo), /untracked or ignored files: lib\/generated\/cache\.json/,
+    'ignored JSON under lib/ can be imported by the build')
+  fs.rmSync(path.join(repo, 'lib/generated'), { recursive: true })
+  for (const file of ['app/strings.json', 'components/theme.css', 'types/generated/data.json', 'public/robots.txt',
+    'public/generated/logo.svg']) {
+    fs.mkdirSync(path.join(repo, path.dirname(file)), { recursive: true })
+    fs.writeFileSync(path.join(repo, file), 'build input\n')
+    assert.throws(() => stockboardBuildProvenance(repo), /untracked or ignored files/, file)
+    fs.rmSync(path.join(repo, file))
+  }
+  // Finder metadata and non-executable data under scripts/ are not build input.
+  for (const file of ['app/.DS_Store', 'public/.DS_Store', 'scripts/generated/output.json']) {
+    fs.mkdirSync(path.join(repo, path.dirname(file)), { recursive: true })
+    fs.writeFileSync(path.join(repo, file), 'inert\n')
+  }
   assert.deepEqual(stockboardBuildProvenance(repo), { gitCommitSha: head, runtimeSourceTreeSha256: previous })
+  fs.writeFileSync(path.join(repo, 'scripts/stage.local.py'), 'shadow\n')
+  assert.throws(() => stockboardBuildProvenance(repo), /ignored executable source: scripts\/stage\.local\.py/)
+  fs.rmSync(path.join(repo, 'scripts/stage.local.py'))
+  for (const file of ['app/.DS_Store', 'public/.DS_Store', 'scripts/generated/output.json']) fs.rmSync(path.join(repo, file))
   fs.writeFileSync(path.join(repo, 'app/page.tsx'), 'uncommitted ui\n')
   assert.throws(() => stockboardBuildProvenance(repo), /tracked worktree or index is dirty/, 'dirty UI source')
   git(repo, 'add', 'app/page.tsx')
@@ -146,7 +166,7 @@ function testRuntimeManifest(): void {
   fs.rmSync(path.join(repo, 'components/new.tsx'))
   fs.mkdirSync(path.join(repo, 'components/generated'))
   fs.writeFileSync(path.join(repo, 'components/generated/shadow.tsx'), 'ignored ui\n')
-  assert.throws(() => stockboardBuildProvenance(repo), /ignored executable source: components\/generated\/shadow\.tsx/,
+  assert.throws(() => stockboardBuildProvenance(repo), /untracked or ignored files: components\/generated\/shadow\.tsx/,
     'ignored UI source is still compiled by next build')
   fs.rmSync(path.join(repo, 'components/generated'), { recursive: true })
   const build = path.join(repo, '.next-live-next')
@@ -185,9 +205,14 @@ type Fixture = {
   services: LaunchdRuntimeIdentity[]
   run: CommandRunner
   loaded: Set<string>
+  // What `launchctl print` reports for a loaded job, when it is not the
+  // approved plist/program/WorkingDirectory.
+  jobs: Map<string, LoadedJobOverride>
   heads: Map<string, { gitHead: string; sourceTreeSha256: string }>
   rehearsalReceipt: string
 }
+
+type LoadedJobOverride = { path?: string; program?: string; workingDirectory?: string | null; extra?: string[] }
 
 type RehearsalDocument = Record<string, unknown>
 type RehearsalMutation = Partial<Record<'execution' | 'validation' | 'package', (document: RehearsalDocument) => void>>
@@ -309,6 +334,7 @@ function createFixture(name: string): Fixture {
       artifacts: [{ type: 'TREE', path: tree, sha256: jpRepairCompiledTreeSha256(tree) }] }
   })
   const loaded = new Set(JP_REPAIR_SERVICE_LABELS.filter((label) => label !== 'com.stockboard.us-ml-weekly'))
+  const jobs = new Map<string, LoadedJobOverride>()
   const run: CommandRunner = (file, args) => {
     if (file === '/usr/bin/plutil') {
       const lines = fs.readFileSync(args.at(-1)!, 'utf8').split('\n')
@@ -323,9 +349,14 @@ function createFixture(name: string): Fixture {
     }
     if (file === '/bin/launchctl' && args[0] === 'print') {
       const label = args[1].split('/').at(-1)!
-      return loaded.has(label)
-        ? { status: 0, signal: null, stdout: 'state = waiting\n', stderr: '' }
-        : { status: 113, signal: null, stdout: '', stderr: 'Could not find service' }
+      if (!loaded.has(label)) return { status: 113, signal: null, stdout: '', stderr: 'Could not find service' }
+      const service = services.find((item) => item.label === label)!
+      const actual = { path: service.plistPath, program: service.program,
+        workingDirectory: path.join(directory, 'runtime', label), ...jobs.get(label) }
+      const lines = [`${args[1]} = {`, '\tstate = waiting', `\tpath = ${actual.path}`, `\tprogram = ${actual.program}`,
+        ...(actual.workingDirectory === null ? [] : [`\tworking directory = ${actual.workingDirectory}`]),
+        ...(actual.extra ?? []), '}']
+      return { status: 0, signal: null, stdout: `${lines.join('\n')}\n`, stderr: '' }
     }
     throw new Error(`unexpected command ${file} ${args.join(' ')}`)
   }
@@ -364,7 +395,7 @@ function createFixture(name: string): Fixture {
   const approvalPath = path.join(directory, 'approval.json')
   fs.writeFileSync(approvalPath, JSON.stringify(approval, null, 2))
   return {
-    database, official, priceBasis, approvalPath, approval, services, run, loaded, heads,
+    database, official, priceBasis, approvalPath, approval, services, run, loaded, jobs, heads,
     rehearsalReceipt: path.join(directory, 'rehearsal', 'rehearsal-receipt.json'),
   }
 }
@@ -405,10 +436,12 @@ function preflightInput(fixture: Fixture, overrides: Partial<JpRepairPreflightIn
     runtimeSourceTreeSha256: () => fixture.approval.runtimeSourceTreeSha256,
     inspectStorageVolumeUuid: () => 'volume-uuid',
     inspectDatabase: () => inspect(fixture.database),
-    createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, { run: fixture.run, uid: 501 }),
+    createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, {
+      run: fixture.run, uid: 501, verifyLoadedJob: true,
+    }),
     listLoadedServiceLabels: () => listLoadedLaunchdLabels(JP_REPAIR_SERVICE_LABEL_PREFIX, { run: fixture.run, uid: 501 }),
     inspectRuntime: (service) => {
-      const workingDirectory = readLaunchdWorkingDirectory(service, { run: fixture.run })
+      const workingDirectory = readLaunchdWorkingDirectory(service, { run: fixture.run, uid: 501 })
       const git = workingDirectory ? fixture.heads.get(workingDirectory) : undefined
       return { workingDirectory, gitHead: git?.gitHead ?? null, sourceTreeSha256: git?.sourceTreeSha256 ?? null }
     },
@@ -579,6 +612,61 @@ async function testContractBindings(): Promise<void> {
   })), ['APPROVAL_TAMPERED'])
   assert.deepEqual(calls, [])
   writeApproval(fixture, fixture.approval)
+
+  // A hash-matching file that is not a JSON object is never an approval.
+  for (const text of ['null', 'false', '0', '""', '[]', '"approval"', '{"version":3', '']) {
+    fs.writeFileSync(fixture.approvalPath, text)
+    const result = await preflightJpRepairProduction(preflightInput(fixture, {
+      createServiceObserver: () => { calls.push('observer'); throw new Error('built') },
+      listLoadedServiceLabels: () => { calls.push('list'); return [] },
+      inspectRuntime: () => { calls.push('runtime'); throw new Error('read') },
+      inspectDatabase: () => { calls.push('database'); throw new Error('read') },
+    }))
+    assert.equal(result.verdict, 'HOLD', JSON.stringify(text))
+    assert.deepEqual(result.holdReasons.map((reason) => reason.split(':')[0]), ['APPROVAL_INVALID'], JSON.stringify(text))
+    assert.equal(result.approval, null)
+  }
+  assert.deepEqual(calls, [])
+  writeApproval(fixture, fixture.approval)
+
+  // The loaded launchd job itself must be the approved plist, program, and
+  // WorkingDirectory; a verified plist file on disk is not enough.
+  const analog = fixture.services.find((service) => service.label === 'com.stockboard.analog-search')!
+  const loadedJob = async (label: string, job: LoadedJobOverride, codes: string[], note: string) => {
+    fixture.jobs.set(label, job)
+    await expect(undefined, codes, note)
+    fixture.jobs.delete(label)
+  }
+  await loadedJob(analog.label, { path: path.join(root, 'shadow', `${analog.label}.plist`) },
+    ['SERVICE_IDENTITY_MISMATCH'], 'a job loaded from another plist')
+  await loadedJob(analog.label, { program: '/tmp/shadow-node' }, ['SERVICE_IDENTITY_MISMATCH'],
+    'a job running another program')
+  await loadedJob(analog.label, { extra: [`\tprogram = ${analog.program}`] }, ['SERVICE_IDENTITY_MISMATCH'],
+    'a repeated program key is ambiguous')
+  await loadedJob(analog.label, { path: '' }, ['SERVICE_IDENTITY_MISMATCH'], 'an empty path is ambiguous')
+  await loadedJob(analog.label, { extra: ['\tsockets = {', `\t\tpath = /tmp/elsewhere`, `\t\tprogram = /tmp/x`, '\t}'] },
+    [], 'nested keys are not the job identity')
+  await loadedJob('com.stockboard.web', { program: '/tmp/shadow-node' },
+    ['SERVICE_IDENTITY_MISMATCH', 'RUNTIME_IDENTITY_MISMATCH'], 'an unverified runtime is never inspected')
+  await loadedJob('com.stockboard.update-latest', { workingDirectory: path.join(root, 'other-worktree') },
+    ['RUNTIME_IDENTITY_MISMATCH'], 'the actual job runs in another WorkingDirectory')
+  await loadedJob('com.stockboard.update-latest', { workingDirectory: null },
+    ['RUNTIME_IDENTITY_MISMATCH'], 'the actual job has no WorkingDirectory')
+  // A path-less print for a loaded job (unparseable identity) holds.
+  const pathless = (file: string, args: readonly string[], timeoutMs: number) => {
+    const result = fixture.run(file, args, timeoutMs)
+    return file === '/bin/launchctl' && args[0] === 'print' && args[1]!.endsWith('/com.stockboard.data-freshness-guard')
+      ? { ...result, stdout: result.stdout.replace(/^\tpath = .*\n/m, '') } : result
+  }
+  assert.deepEqual(await holdReasons(preflightInput(fixture, {
+    createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, { run: pathless, uid: 501, verifyLoadedJob: true }),
+    inspectRuntime: (service) => {
+      const workingDirectory = readLaunchdWorkingDirectory(service, { run: pathless, uid: 501 })
+      const git = workingDirectory ? fixture.heads.get(workingDirectory) : undefined
+      return { workingDirectory, gitHead: git?.gitHead ?? null, sourceTreeSha256: git?.sourceTreeSha256 ?? null }
+    },
+  })), ['SERVICE_IDENTITY_MISMATCH', 'RUNTIME_IDENTITY_MISMATCH'], 'a loaded job without a path holds')
+  await expect(undefined, [], 'the approved loaded jobs pass')
 
   // Loaded launchd labels: any unknown com.stockboard.* label holds.
   fixture.loaded.add('com.stockboard.new-db-writer')

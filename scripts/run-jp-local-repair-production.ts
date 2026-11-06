@@ -63,7 +63,7 @@ async function main(): Promise<void> {
     priceBasisEvidencePath,
     rehearsalReceiptPath: absolute('--rehearsal-receipt'),
     now: Date.now(),
-    gitCommitSha: () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    gitCommitSha: () => execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     runtimeSourceTreeSha256: () => jpRepairRuntimeSourceTreeSha256(),
     inspectStorageVolumeUuid: () => {
       const config = configForDatabase(databasePath, 'db_maintenance')
@@ -87,10 +87,12 @@ async function main(): Promise<void> {
         db.close()
       }
     },
-    // Used only for observe(); bootout/bootstrap are never called here.
-    createServiceObserver: (services) => createLaunchdWriterHoldDriver(services),
+    // Used only for observe(); bootout/bootstrap are never called here. A
+    // loaded job must also have been loaded from the approved plist/program.
+    createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, { verifyLoadedJob: true }),
     listLoadedServiceLabels: () => listLoadedLaunchdLabels(JP_REPAIR_SERVICE_LABEL_PREFIX),
     inspectRuntime: (service) => {
+      // The loaded job's actual working directory, checked against the plist.
       const configured = readLaunchdWorkingDirectory(service)
       const workingDirectory = configured ? fs.realpathSync(configured) : null
       const head = workingDirectory

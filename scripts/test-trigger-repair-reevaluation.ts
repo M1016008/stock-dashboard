@@ -286,12 +286,13 @@ async function main(): Promise<void> {
       const suppressed = await composeTriggerNotificationsForBatch({ batchId: repaired.batch!.id })
       assert.equal(suppressed.createdCount, 0)
       assert.deepEqual(suppressed.notifications, [])
-      const runs = await execAll<{ status: string; error_category: string }>(
+      type CompositionRun = { status: string; error_category: string }
+      const runs: CompositionRun[] = await execAll<CompositionRun>(
         'SELECT status, error_category FROM trigger_notification_composition_runs WHERE batch_id=?',
         [repaired.batch!.id],
       )
       assert.equal(runs.length, attempt)
-      assert.ok(runs.every((run) => run.status === 'SUPPRESSED'
+      assert.ok(runs.every((run: CompositionRun) => run.status === 'SUPPRESSED'
         && run.error_category === 'repair_reevaluation_suppressed'))
     }
     const repairOutbox = await execGet<{ count: number }>(
