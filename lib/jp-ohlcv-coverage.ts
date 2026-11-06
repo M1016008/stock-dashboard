@@ -1,4 +1,5 @@
 import type { Client, Transaction } from '@libsql/client'
+import { isJpOhlcvProtectedConflictKey } from '@/lib/jp-ohlcv-repair-policy'
 
 export type JpOhlcvCoverageIssueKind = 'FETCH_FAILED' | 'MISSING' | 'PROTECTED_CONFLICT'
 
@@ -141,21 +142,45 @@ export async function recordJpOhlcvCoverageFailure(client: Client, input: {
   }
 }
 
-export async function loadOpenJpOhlcvCoverageIssueCounts(client: Client): Promise<{
+export type JpOhlcvOpenCoverageIssueCounts = {
   fetchFailed: number
   missing: number
+  // Only the adjudication-pending keys in JP_OHLCV_PROTECTED_CONFLICT_KEYS.
   protectedConflicts: number
-}> {
+  // A PROTECTED_CONFLICT outside the approved key set is a new problem.
+  unexpectedProtectedConflicts: number
+  // Everything except the known protected conflicts; must not be hidden by them.
+  newIssues: number
+}
+
+export function summarizeOpenJpOhlcvCoverageIssues(
+  rows: ReadonlyArray<{ date: string; ticker: string; kind: string; count: number }>,
+): JpOhlcvOpenCoverageIssueCounts {
+  const counts: JpOhlcvOpenCoverageIssueCounts = {
+    fetchFailed: 0, missing: 0, protectedConflicts: 0, unexpectedProtectedConflicts: 0, newIssues: 0,
+  }
+  for (const row of rows) {
+    const count = Number(row.count)
+    if (row.kind === 'PROTECTED_CONFLICT' && isJpOhlcvProtectedConflictKey(row)) {
+      counts.protectedConflicts += count
+      continue
+    }
+    if (row.kind === 'FETCH_FAILED') counts.fetchFailed += count
+    else if (row.kind === 'MISSING') counts.missing += count
+    else counts.unexpectedProtectedConflicts += count
+    counts.newIssues += count
+  }
+  return counts
+}
+
+export async function loadOpenJpOhlcvCoverageIssueCounts(client: Client): Promise<JpOhlcvOpenCoverageIssueCounts> {
   const result = await client.execute(`
-    SELECT kind, COUNT(*) AS count
+    SELECT date, ticker, kind, COUNT(*) AS count
     FROM jquants_daily_coverage_issues
     WHERE status = 'open'
-    GROUP BY kind
+    GROUP BY date, ticker, kind
   `)
-  const counts = new Map(result.rows.map((row) => [String(row.kind), Number(row.count)]))
-  return {
-    fetchFailed: counts.get('FETCH_FAILED') ?? 0,
-    missing: counts.get('MISSING') ?? 0,
-    protectedConflicts: counts.get('PROTECTED_CONFLICT') ?? 0,
-  }
+  return summarizeOpenJpOhlcvCoverageIssues(result.rows.map((row) => ({
+    date: String(row.date), ticker: String(row.ticker), kind: String(row.kind), count: Number(row.count),
+  })))
 }

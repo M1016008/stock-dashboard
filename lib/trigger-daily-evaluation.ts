@@ -1,4 +1,7 @@
 export const TRIGGER_DAILY_EVALUATION_SOURCE = 'DAILY'
+// Same-day re-evaluation after an approved data repair. It never composes
+// notifications; its evaluations supersede the original DAILY evaluations.
+export const TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE = 'DAILY_REPAIR'
 
 export type TriggerEvaluationBatchStatus =
   | 'RUNNING'
@@ -17,7 +20,9 @@ export type TriggerEvaluationBatchItemStatus =
 
 export interface TriggerEvaluationBatchSummary {
   id: string
-  source: typeof TRIGGER_DAILY_EVALUATION_SOURCE
+  source: typeof TRIGGER_DAILY_EVALUATION_SOURCE | typeof TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE
+  repairKey: string | null
+  supersedesBatchId: string | null
   requestedAsOf: string
   resolvedAsOf: string
   startedAt: string

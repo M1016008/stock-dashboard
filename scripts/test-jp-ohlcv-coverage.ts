@@ -59,14 +59,14 @@ async function main(): Promise<void> {
       satisfiedTickers: ['1306'],
     })
     assert.deepEqual(await loadOpenJpOhlcvCoverageIssueCounts(client), {
-      fetchFailed: 0, missing: 1, protectedConflicts: 2,
+      fetchFailed: 0, missing: 1, protectedConflicts: 2, unexpectedProtectedConflicts: 0, newIssues: 1,
     })
 
     await recordJpOhlcvCoverageFailure(client, {
       date: '2026-07-17', detail: 'retry started; completion evidence pending',
     })
     assert.deepEqual(await loadOpenJpOhlcvCoverageIssueCounts(client), {
-      fetchFailed: 1, missing: 1, protectedConflicts: 2,
+      fetchFailed: 1, missing: 1, protectedConflicts: 2, unexpectedProtectedConflicts: 0, newIssues: 2,
     }, 'a retry attempt must not hide unresolved rows or protected conflicts')
 
     await recordJpOhlcvCoverageSuccess(client, {
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
       satisfiedTickers: [],
     })
     assert.deepEqual(await loadOpenJpOhlcvCoverageIssueCounts(client), {
-      fetchFailed: 0, missing: 1, protectedConflicts: 2,
+      fetchFailed: 0, missing: 1, protectedConflicts: 2, unexpectedProtectedConflicts: 0, newIssues: 1,
     }, 'a missing row absent from the provider envelope must remain unresolved')
 
     await recordJpOhlcvCoverageSuccess(client, {
@@ -84,8 +84,23 @@ async function main(): Promise<void> {
       satisfiedTickers: ['7003'],
     })
     assert.deepEqual(await loadOpenJpOhlcvCoverageIssueCounts(client), {
-      fetchFailed: 0, missing: 0, protectedConflicts: 2,
+      fetchFailed: 0, missing: 0, protectedConflicts: 2, unexpectedProtectedConflicts: 0, newIssues: 0,
     })
+    // A new missing row or a conflict outside the approved 1447/2164 keys must
+    // surface as a new issue instead of disappearing inside the known two.
+    await recordJpOhlcvCoverageSuccess(client, {
+      date: '2026-11-05', expectedRows: 4_200,
+      missingTickers: ['9999'], protectedConflictTickers: ['1447'], satisfiedTickers: [],
+    })
+    assert.deepEqual(await loadOpenJpOhlcvCoverageIssueCounts(client), {
+      fetchFailed: 0, missing: 1, protectedConflicts: 2, unexpectedProtectedConflicts: 1, newIssues: 2,
+    })
+    const protectedRows = await client.execute({
+      sql: `SELECT ticker,status FROM jquants_daily_coverage_issues
+            WHERE date='2026-07-17' AND kind='PROTECTED_CONFLICT' ORDER BY ticker`,
+      args: [],
+    })
+    assert.deepEqual(protectedRows.rows.map((row) => `${row.ticker}:${row.status}`), ['1447:open', '2164:open'])
     const coverage = await client.execute({
       sql: 'SELECT expected_rows FROM jquants_daily_coverage WHERE date=?',
       args: ['2026-07-17'],

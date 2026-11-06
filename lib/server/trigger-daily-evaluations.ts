@@ -8,6 +8,7 @@ import {
 } from '@/lib/server/saved-trigger-definitions'
 import {
   TriggerEvaluationDefinitionChangedError,
+  assertTriggerRepairKey,
   evaluateSavedTriggerDefinition,
   type TriggerEvaluationDefinitionIdentity,
 } from '@/lib/server/trigger-evaluations'
@@ -15,6 +16,7 @@ import type { SavedTriggerDefinition, SavedTriggerViewConfig } from '@/lib/trigg
 import type { TriggerEvaluationRunResponse } from '@/lib/trigger-evaluation'
 import {
   TRIGGER_DAILY_EVALUATION_SOURCE,
+  TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE,
   type TriggerDailyEvaluationResult,
   type TriggerEvaluationBatchItem,
   type TriggerEvaluationBatchItemStatus,
@@ -25,9 +27,13 @@ import {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const DEFAULT_STALE_BATCH_SECONDS = 6 * 60 * 60
 
+type BatchSource = typeof TRIGGER_DAILY_EVALUATION_SOURCE | typeof TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE
+
 type BatchRow = {
   id: string
-  source: typeof TRIGGER_DAILY_EVALUATION_SOURCE
+  source: BatchSource
+  repair_key?: string | null
+  supersedes_batch_id?: string | null
   requested_as_of: string
   resolved_as_of: string
   started_at: number
@@ -86,6 +92,7 @@ export interface TriggerDailyEvaluationDependencies {
     definitionId: string,
     requestedAsOf: string,
     expectedIdentity: TriggerEvaluationDefinitionIdentity,
+    repairKey?: string,
   ) => Promise<TriggerEvaluationRunResponse>
   beforeDefinition?: (snapshot: DefinitionIdentitySnapshot, index: number) => Promise<void> | void
 }
@@ -94,6 +101,9 @@ export interface RunDailyTriggerEvaluationsInput {
   requestedAsOf?: string
   resolvedAsOf?: string
   dryRun?: boolean
+  // Re-evaluate an already completed date after an approved data repair. The
+  // result is a separate DAILY_REPAIR batch whose notifications are suppressed.
+  repairKey?: string
 }
 
 function nowSeconds(now: () => number): number {
@@ -115,6 +125,8 @@ function batchSummary(row: BatchRow): TriggerEvaluationBatchSummary {
   return {
     id: row.id,
     source: row.source,
+    repairKey: row.repair_key ?? null,
+    supersedesBatchId: row.supersedes_batch_id ?? null,
     requestedAsOf: row.requested_as_of,
     resolvedAsOf: row.resolved_as_of,
     startedAt: isoDateTime(row.started_at)!,
@@ -202,10 +214,14 @@ async function txBatch(tx: Transaction, id: string): Promise<BatchRow | undefine
   return result.rows[0] ? ({ ...result.rows[0] } as unknown as BatchRow) : undefined
 }
 
-async function txBatchByDate(tx: Transaction, resolvedAsOf: string): Promise<BatchRow | undefined> {
+async function txBatchByDate(
+  tx: Transaction,
+  resolvedAsOf: string,
+  source: BatchSource = TRIGGER_DAILY_EVALUATION_SOURCE,
+): Promise<BatchRow | undefined> {
   const result = await tx.execute({
     sql: 'SELECT * FROM trigger_evaluation_batches WHERE source=? AND resolved_as_of=?',
-    args: [TRIGGER_DAILY_EVALUATION_SOURCE, resolvedAsOf],
+    args: [source, resolvedAsOf],
   })
   return result.rows[0] ? ({ ...result.rows[0] } as unknown as BatchRow) : undefined
 }
@@ -234,24 +250,63 @@ async function claimBatch(input: {
   definitions: DefinitionSnapshot[]
   ownerToken: string
   now: () => number
+  repairKey?: string
 }): Promise<{ row: BatchRow; reused: boolean }> {
   await ensureReady()
   const startedAt = nowSeconds(input.now)
   const staleSeconds = Math.max(60, Number(process.env.TRIGGER_DAILY_BATCH_STALE_SECONDS) || DEFAULT_STALE_BATCH_SECONDS)
   const batchId = randomUUID()
+  const source: BatchSource = input.repairKey === undefined
+    ? TRIGGER_DAILY_EVALUATION_SOURCE
+    : TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE
   const tx = await client.transaction('write')
   try {
-    await tx.execute({
-      sql: `INSERT OR IGNORE INTO trigger_evaluation_batches (
-        id, source, requested_as_of, resolved_as_of, started_at, status,
-        owner_token, heartbeat_at, definition_count, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?)`,
-      args: [batchId, TRIGGER_DAILY_EVALUATION_SOURCE, input.requestedAsOf,
-        input.resolvedAsOf, startedAt, input.ownerToken, startedAt,
-        input.definitions.length, startedAt],
-    })
-    let row = await txBatchByDate(tx, input.resolvedAsOf)
+    if (input.repairKey === undefined) {
+      // Once a same-date repair exists, the original batch must never be
+      // reclaimed or re-run; a normal run resolves to the repair batch.
+      const repair = await txBatchByDate(tx, input.resolvedAsOf, TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE)
+      if (repair) {
+        await tx.commit()
+        if (repair.status === 'COMPLETED' || repair.status === 'COMPLETED_WITH_ERRORS') {
+          return { row: repair, reused: true }
+        }
+        if (repair.status === 'RUNNING') throw new TriggerDailyEvaluationInProgressError(input.resolvedAsOf)
+        throw new Error('trigger_repair_batch_not_completed')
+      }
+      await tx.execute({
+        sql: `INSERT OR IGNORE INTO trigger_evaluation_batches (
+          id, source, requested_as_of, resolved_as_of, started_at, status,
+          owner_token, heartbeat_at, definition_count, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?)`,
+        args: [batchId, source, input.requestedAsOf,
+          input.resolvedAsOf, startedAt, input.ownerToken, startedAt,
+          input.definitions.length, startedAt],
+      })
+    } else {
+      // The original DAILY batch, its evaluations, and its outbox stay intact;
+      // the repair batch records which batch it supersedes for audit.
+      const original = await txBatchByDate(tx, input.resolvedAsOf)
+      if (!original || (original.status !== 'COMPLETED' && original.status !== 'COMPLETED_WITH_ERRORS')) {
+        throw new Error('trigger_repair_original_batch_not_terminal')
+      }
+      await tx.execute({
+        sql: `INSERT OR IGNORE INTO trigger_evaluation_batches (
+          id, source, requested_as_of, resolved_as_of, started_at, status,
+          owner_token, heartbeat_at, definition_count, created_at,
+          repair_key, supersedes_batch_id
+        ) VALUES (?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?, ?, ?, ?)`,
+        args: [batchId, source, input.requestedAsOf,
+          input.resolvedAsOf, startedAt, input.ownerToken, startedAt,
+          input.definitions.length, startedAt, input.repairKey, original.id],
+      })
+    }
+    let row = await txBatchByDate(tx, input.resolvedAsOf, source)
     if (!row) throw new Error('trigger_daily_batch_claim_failed')
+    if (input.repairKey !== undefined && row.repair_key !== input.repairKey) {
+      // One repair batch per date: a different repair must not be merged into
+      // or hidden behind an earlier repair's evaluations.
+      throw new Error('trigger_repair_batch_conflict')
+    }
 
     if (row.id === batchId) {
       await insertBatchItems(tx, row.id, input.definitions)
@@ -426,6 +481,7 @@ export async function runDailyTriggerEvaluations(
   const now = dependencies.now ?? Date.now
   if (input.requestedAsOf) assertDate(input.requestedAsOf, 'requested_as_of')
   if (input.resolvedAsOf) assertDate(input.resolvedAsOf, 'resolved_as_of')
+  if (input.repairKey !== undefined) assertTriggerRepairKey(input.repairKey)
   const resolvedAsOf = input.resolvedAsOf
     ?? await (dependencies.resolveDataDate ?? resolveDataDate)(input.requestedAsOf)
   if (!resolvedAsOf) throw new Error('trigger_daily_data_date_unavailable')
@@ -460,7 +516,9 @@ export async function runDailyTriggerEvaluations(
   const ownerToken = randomUUID()
   let batchId: string | null = null
   try {
-    const claimed = await claimBatch({ requestedAsOf, resolvedAsOf, definitions: snapshots, ownerToken, now })
+    const claimed = await claimBatch({
+      requestedAsOf, resolvedAsOf, definitions: snapshots, ownerToken, now, repairKey: input.repairKey,
+    })
     batchId = claimed.row.id
     if (claimed.reused) {
       return {
@@ -475,8 +533,8 @@ export async function runDailyTriggerEvaluations(
 
     const storedItems = await loadBatchItems(batchId)
     const getDefinition = dependencies.getDefinitionForHistory ?? getSavedTriggerDefinitionForHistory
-    const evaluate = dependencies.evaluateDefinition ?? ((definitionId, asOf, expectedIdentity) => (
-      evaluateSavedTriggerDefinition(definitionId, asOf, { expectedDefinitionIdentity: expectedIdentity })
+    const evaluate = dependencies.evaluateDefinition ?? ((definitionId, asOf, expectedIdentity, repairKey) => (
+      evaluateSavedTriggerDefinition(definitionId, asOf, { expectedDefinitionIdentity: expectedIdentity, repairKey })
     ))
     for (const [index, item] of storedItems.entries()) {
       const expected: DefinitionIdentitySnapshot = {
@@ -504,7 +562,7 @@ export async function runDailyTriggerEvaluations(
           )
           continue
         }
-        const result = await evaluate(item.definitionId, requestedAsOf, expected)
+        const result = await evaluate(item.definitionId, requestedAsOf, expected, input.repairKey)
         if (result.evaluation.resolvedAsOf !== resolvedAsOf
           || result.evaluation.evaluationVersion !== expected.evaluationVersion
           || result.evaluation.evaluationConfigSignature !== expected.evaluationConfigSignature

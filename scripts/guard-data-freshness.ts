@@ -798,16 +798,23 @@ async function main(): Promise<void> {
 
   const actions: Action[] = []
   const jpCoverageIssues = await loadOpenJpOhlcvCoverageIssueCounts(client)
-  const jpCoverageIssueTotal = jpCoverageIssues.fetchFailed
-    + jpCoverageIssues.missing
-    + jpCoverageIssues.protectedConflicts
+  // Known protected conflicts are reported separately so they can never mask
+  // a newly missing row, fetch failure, or unapproved conflict.
   actions.push({
     key: 'jp-historical-coverage',
     label: 'JP historical OHLCV coverage',
-    state: jpCoverageIssueTotal === 0 ? 'fresh' : 'deferred',
-    reason: jpCoverageIssueTotal === 0
-      ? 'no unresolved historical coverage issue'
-      : `fetchFailed=${jpCoverageIssues.fetchFailed}, missing=${jpCoverageIssues.missing}, protectedConflicts=${jpCoverageIssues.protectedConflicts}; manual repair/adjudication required`,
+    state: jpCoverageIssues.newIssues === 0 ? 'fresh' : 'deferred',
+    reason: jpCoverageIssues.newIssues === 0
+      ? 'no unresolved historical coverage issue outside known protected conflicts'
+      : `fetchFailed=${jpCoverageIssues.fetchFailed}, missing=${jpCoverageIssues.missing}, unexpectedProtectedConflicts=${jpCoverageIssues.unexpectedProtectedConflicts}; manual repair required`,
+  })
+  actions.push({
+    key: 'jp-protected-conflicts',
+    label: 'JP protected OHLCV conflicts',
+    state: jpCoverageIssues.protectedConflicts === 0 ? 'fresh' : 'deferred',
+    reason: jpCoverageIssues.protectedConflicts === 0
+      ? 'no protected conflict awaiting adjudication'
+      : `protectedConflicts=${jpCoverageIssues.protectedConflicts}; existing rows preserved, separate adjudication required`,
   })
   const writerReservations = [
     ...activeLocks,

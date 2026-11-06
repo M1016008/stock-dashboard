@@ -125,6 +125,32 @@ export function launchdJobPid(label: string, options: {
   return match ? Number(match[1]) : null
 }
 
+// Read-only: every loaded label in the gui/<uid> domain with the prefix.
+export function listLoadedLaunchdLabels(prefix: string, options: {
+  run?: CommandRunner
+  uid?: number
+} = {}): string[] {
+  const run = options.run ?? systemCommandRunner
+  const uid = options.uid ?? process.getuid?.()
+  if (!Number.isInteger(uid)) throw new Error('LAUNCHD_UID_UNAVAILABLE')
+  const result = run('/bin/launchctl', ['print', `gui/${uid}`], 5_000)
+  if (result.status !== 0) commandFailure('LAUNCHCTL_PRINT_DOMAIN', result)
+  const block = result.stdout.match(/^\s*services = \{\n([\s\S]*?)^\s*\}/m)
+  if (!block) throw new Error('LAUNCHCTL_PRINT_DOMAIN_AMBIGUOUS:no services block')
+  return block[1]!.split('\n').map((line) => line.trim().split(/\s+/).at(-1) ?? '')
+    .filter((label) => label.startsWith(prefix))
+}
+
+// Read-only: the plist's WorkingDirectory, after its definition is verified.
+export function readLaunchdWorkingDirectory(identity: LaunchdRuntimeIdentity, options: {
+  run?: CommandRunner
+} = {}): string | null {
+  const run = options.run ?? systemCommandRunner
+  assertDefinition(identity, run)
+  const result = run('/usr/bin/plutil', ['-extract', 'WorkingDirectory', 'raw', '-o', '-', identity.plistPath], 5_000)
+  return result.status === 0 ? result.stdout.trim() : null
+}
+
 export function createLaunchdWriterHoldDriver(
   approved: readonly LaunchdRuntimeIdentity[],
   options: {

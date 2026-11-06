@@ -28,6 +28,7 @@ import {
 import {
   deriveAndPersistTriggerLifecycle,
   getPreviousEvaluationMemberTickers,
+  triggerEvaluationSupersessionAvailable,
 } from '@/lib/server/trigger-lifecycle'
 import { createUsTriggerDiscoveryDataSource } from '@/lib/server/us-trigger-discovery'
 import {
@@ -155,6 +156,15 @@ export interface TriggerEvaluationDependencies {
   now?: () => number
   market?: MarketCode
   expectedDefinitionIdentity?: TriggerEvaluationDefinitionIdentity
+  // Approved data-repair identity. A repair run is a distinct evaluation that
+  // supersedes, without modifying the content of, the same-day evaluation.
+  repairKey?: string
+}
+
+const REPAIR_KEY_PATTERN = /^[0-9a-f]{64}$/
+
+export function assertTriggerRepairKey(value: string): void {
+  if (!REPAIR_KEY_PATTERN.test(value)) throw new Error('trigger_repair_key_must_be_sha256_hex')
 }
 
 function matchesExpectedDefinitionIdentity(
@@ -278,7 +288,8 @@ function member(row: MemberRow): TriggerEvaluationMember {
   }
 }
 
-function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string): string {
+function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string, repairKey?: string): string {
+  // repairKey is omitted from JSON when undefined, so normal signatures are unchanged.
   return createHash('sha256').update(JSON.stringify({
     definitionId: definition.id,
     evaluationVersion: definition.evaluationVersion,
@@ -286,7 +297,27 @@ function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string):
     scoreVersion: definition.scoreVersion,
     evaluationConfigSignature: definition.evaluationSignature,
     resolvedAsOf,
+    repairKey,
   })).digest('hex')
+}
+
+async function currentSupersedingEvaluation(row: EvaluationRow): Promise<EvaluationRow> {
+  if (!await triggerEvaluationSupersessionAvailable()) return row
+  let current = row
+  for (let hop = 0; hop < 16; hop += 1) {
+    const next = await execGet<{ id: string | null }>(
+      'SELECT superseded_by_evaluation_id AS id FROM trigger_evaluations WHERE id=?',
+      [current.id],
+    )
+    if (!next?.id) return current
+    const superseding = await execGet<EvaluationRow>(
+      `SELECT ${EVALUATION_COLUMNS} FROM trigger_evaluations WHERE id=? AND status='COMPLETED'`,
+      [next.id],
+    )
+    if (!superseding) throw new Error('superseding_evaluation_missing')
+    current = superseding
+  }
+  throw new Error('superseding_evaluation_chain_too_long')
 }
 
 async function defaultResolveAsOf(requestedAsOf: string, market: MarketCode): Promise<string | null> {
@@ -383,6 +414,7 @@ async function persistCompletedEvaluation(input: {
   totalStartedAt: number
   discoveryMs: number
   snapshotTransformMs: number
+  supersede?: { definition: SavedTriggerDefinition; resolvedAsOf: string }
 }): Promise<void> {
   await ensureReady()
   const persistenceStartedAt = performance.now()
@@ -447,6 +479,22 @@ async function persistCompletedEvaluation(input: {
         input.evaluationId,
       ],
     })
+    if (input.supersede) {
+      // Same transaction as completion: the repaired evaluation becomes the
+      // lifecycle baseline atomically, while prior rows keep their content.
+      const { definition, resolvedAsOf } = input.supersede
+      await tx.execute({
+        sql: `UPDATE trigger_evaluations SET superseded_by_evaluation_id=?
+          WHERE definition_id=? AND market=? AND evaluation_version=? AND engine_version=?
+            AND score_version=? AND evaluation_config_signature=? AND resolved_as_of=?
+            AND status='COMPLETED' AND id<>? AND superseded_by_evaluation_id IS NULL`,
+        args: [
+          input.evaluationId, definition.id, definition.market, definition.evaluationVersion,
+          definition.engineVersion, definition.scoreVersion, definition.evaluationSignature,
+          resolvedAsOf, input.evaluationId,
+        ],
+      })
+    }
     await tx.commit()
   } catch (error) {
     await tx.rollback().catch(() => undefined)
@@ -472,14 +520,21 @@ export async function evaluateSavedTriggerDefinition(
     ? await dependencies.resolveAsOf(requestedAsOf)
     : await defaultResolveAsOf(requestedAsOf, market)
   if (!resolvedAsOf) throw new TriggerDiscoveryInputError('requestedAsOf has no available market session')
-  const signature = runSignature(definition, resolvedAsOf)
+  const repairKey = dependencies.repairKey
+  if (repairKey !== undefined) {
+    assertTriggerRepairKey(repairKey)
+    if (!await triggerEvaluationSupersessionAvailable()) throw new Error('trigger_repair_schema_missing')
+  }
+  const signature = runSignature(definition, resolvedAsOf, repairKey)
   const existing = await evaluationByRunSignature(signature)
   if (existing?.status === 'COMPLETED') {
+    // A normal request for a repaired date resolves to the repaired evaluation.
+    const effective = repairKey === undefined ? await currentSupersedingEvaluation(existing) : existing
     return {
       contractVersion: TRIGGER_EVALUATION_CONTRACT_VERSION,
-      evaluation: summary(existing),
+      evaluation: summary(effective),
       reused: true,
-      lifecycle: await deriveAndPersistTriggerLifecycle(existing.id),
+      lifecycle: await deriveAndPersistTriggerLifecycle(effective.id),
     }
   }
   if (existing?.status === 'RUNNING') throw new TriggerEvaluationInProgressError()
@@ -507,11 +562,12 @@ export async function evaluateSavedTriggerDefinition(
     if (!claimed) throw new Error('evaluation_claim_failed')
     if (claimed.id !== evaluationId) {
       if (claimed.status === 'COMPLETED') {
+        const effective = repairKey === undefined ? await currentSupersedingEvaluation(claimed) : claimed
         return {
           contractVersion: TRIGGER_EVALUATION_CONTRACT_VERSION,
-          evaluation: summary(claimed),
+          evaluation: summary(effective),
           reused: true,
-          lifecycle: await deriveAndPersistTriggerLifecycle(claimed.id),
+          lifecycle: await deriveAndPersistTriggerLifecycle(effective.id),
         }
       }
       throw new TriggerEvaluationInProgressError()
@@ -547,6 +603,7 @@ export async function evaluateSavedTriggerDefinition(
       totalStartedAt,
       discoveryMs,
       snapshotTransformMs,
+      supersede: repairKey === undefined ? undefined : { definition, resolvedAsOf },
     })
     const completed = await evaluationById(evaluationId, market)
     return {

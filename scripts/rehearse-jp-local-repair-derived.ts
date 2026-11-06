@@ -17,7 +17,9 @@ import {
   type JpOhlcvOfficialRow,
   type JpOhlcvRepairPlan,
 } from '@/lib/jp-ohlcv-local-repair'
+import { summarizeOpenJpOhlcvCoverageIssues } from '@/lib/jp-ohlcv-coverage'
 import { sameJpOhlcvRow } from '@/lib/jp-ohlcv-repair-policy'
+import { jpRepairRuntimeSourceTreeSha256 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
 
 type OfficialEvidence = {
   date: string
@@ -243,15 +245,7 @@ function fileSha256(filePath: string): string {
 }
 
 function sourceTreeSha256(): string {
-  const roots = ['app', 'components', 'lib', 'scripts', 'package.json', 'package-lock.json']
-  try {
-    execFileSync('git', ['diff', '--quiet', '--', ...roots])
-    execFileSync('git', ['diff', '--cached', '--quiet', '--', ...roots])
-  } catch {
-    throw new Error('rehearsal source files must exactly match the committed Git revision')
-  }
-  const manifest = execFileSync('git', ['ls-files', '-s', '-z', '--', ...roots])
-  return createHash('sha256').update(manifest).digest('hex')
+  return jpRepairRuntimeSourceTreeSha256()
 }
 
 function sealedCommandFiles(command: readonly string[]): Array<{ path: string; sha256: string }> {
@@ -524,14 +518,12 @@ function validateFinalState(
       throw new Error(`source receipt is not the sealed ${expectedPhase} receipt`)
     }
 
-    const issues = repaired.prepare(`
-      SELECT kind,COUNT(*) AS count FROM jquants_daily_coverage_issues
-      WHERE status='open' GROUP BY kind
-    `).all() as Array<{ kind: string; count: number }>
-    const issueCounts = new Map(issues.map((row) => [row.kind, Number(row.count)]))
-    if ((issueCounts.get('FETCH_FAILED') ?? 0) !== 0 || (issueCounts.get('MISSING') ?? 0) !== 0
-        || (issueCounts.get('PROTECTED_CONFLICT') ?? 0) !== 2) {
-      throw new Error(`unexpected final coverage issues: ${JSON.stringify(Object.fromEntries(issueCounts))}`)
+    const issueCounts = summarizeOpenJpOhlcvCoverageIssues(repaired.prepare(`
+      SELECT date,ticker,kind,COUNT(*) AS count FROM jquants_daily_coverage_issues
+      WHERE status='open' GROUP BY date,ticker,kind
+    `).all() as Array<{ date: string; ticker: string; kind: string; count: number }>)
+    if (issueCounts.newIssues !== 0 || issueCounts.protectedConflicts !== 2) {
+      throw new Error(`unexpected final coverage issues: ${JSON.stringify(issueCounts)}`)
     }
 
     const smaRows = repaired.prepare(`
@@ -667,8 +659,9 @@ function validateFinalState(
     if (analogRows <= 0) throw new Error('analog index is empty')
     return {
       targetDateRows: rows.length,
-      openMissing: issueCounts.get('MISSING') ?? 0,
-      openProtectedConflicts: issueCounts.get('PROTECTED_CONFLICT') ?? 0,
+      openMissing: issueCounts.missing,
+      openProtectedConflicts: issueCounts.protectedConflicts,
+      openNewCoverageIssues: issueCounts.newIssues,
       sma7003_20261028: expectedSma75,
       mlClassicAffectedRecomputed: classicCoverage.actual,
       mlClassicAffectedEligible: classicCoverage.expected,
@@ -1364,6 +1357,7 @@ async function main(): Promise<void> {
       command: stageCommand('scripts/rehearse-jp-repair-trigger-delta.ts', [
         '--baseline', cli.metadata,
         '--as-of', LATEST_DATE,
+        '--repair-key', receipt.source!.approvalSha256,
         '--output', path.join(path.dirname(cli.database), 'trigger-delta-receipt.json'),
       ]),
     },

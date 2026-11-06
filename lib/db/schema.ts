@@ -1943,6 +1943,7 @@ export const triggerEvaluations = sqliteTable(
     attemptCount: integer('attempt_count').notNull().default(1),
     errorCategory: text('error_category'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    supersededByEvaluationId: text('superseded_by_evaluation_id'),
   },
   (t) => ({
     runSignatureIdx: uniqueIndex('trigger_evaluations_run_signature_idx').on(t.runSignature),
@@ -2094,6 +2095,8 @@ export const triggerEvaluationBatches = sqliteTable(
     durationMs: real('duration_ms').notNull().default(0),
     errorCategory: text('error_category'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    repairKey: text('repair_key'),
+    supersedesBatchId: text('supersedes_batch_id'),
   },
   (t) => ({
     sourceDateIdx: uniqueIndex('trigger_evaluation_batches_source_date_idx')

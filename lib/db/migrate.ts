@@ -2870,6 +2870,9 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE trigger_evaluation_batch_items ADD COLUMN view_config_json TEXT NOT NULL DEFAULT '{"sort":null,"pageSize":50}'`,
   `ALTER TABLE trigger_definitions ADD COLUMN market TEXT NOT NULL DEFAULT 'JP'`,
   `ALTER TABLE trigger_evaluations ADD COLUMN market TEXT NOT NULL DEFAULT 'JP'`,
+  `ALTER TABLE trigger_evaluations ADD COLUMN superseded_by_evaluation_id TEXT`,
+  `ALTER TABLE trigger_evaluation_batches ADD COLUMN repair_key TEXT`,
+  `ALTER TABLE trigger_evaluation_batches ADD COLUMN supersedes_batch_id TEXT`,
   `CREATE INDEX IF NOT EXISTS trigger_definitions_market_active_idx
     ON trigger_definitions(market, archived_at, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS trigger_evaluations_market_definition_date_idx

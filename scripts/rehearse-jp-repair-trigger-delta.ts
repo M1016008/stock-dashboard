@@ -3,8 +3,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
-import { execAll } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import { runDailyTriggerEvaluations } from '@/lib/server/trigger-daily-evaluations'
+import { composeTriggerNotificationsForBatch } from '@/lib/server/trigger-notification-composition'
+import { TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE } from '@/lib/trigger-daily-evaluation'
 
 type Row = Record<string, unknown>
 
@@ -37,10 +39,27 @@ async function main(): Promise<void> {
   const baselinePath = path.resolve(argument('--baseline'))
   const outputPath = path.resolve(argument('--output'))
   const requestedAsOf = argument('--as-of')
+  const repairKey = argument('--repair-key')
   const startedAt = Date.now()
-  const result = await runDailyTriggerEvaluations({ requestedAsOf })
-  if (!result.batch || result.batch.status !== 'COMPLETED') {
-    throw new Error(`isolated trigger evaluation did not complete: ${result.batch?.status ?? 'missing'}`)
+  const result = await runDailyTriggerEvaluations({ requestedAsOf, repairKey })
+  if (!result.batch || result.batch.status !== 'COMPLETED'
+      || result.batch.source !== TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE
+      || result.batch.repairKey !== repairKey) {
+    throw new Error(`isolated trigger repair evaluation did not complete: ${result.batch?.status ?? 'missing'}`)
+  }
+  const notifications = await composeTriggerNotificationsForBatch({ batchId: result.batch.id })
+  const outbox = await execGet<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM notification_outbox WHERE batch_id=?',
+    [result.batch.id],
+  )
+  const suppressed = await execGet<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM trigger_notification_composition_runs
+     WHERE batch_id=? AND status='SUPPRESSED'`,
+    [result.batch.id],
+  )
+  if (notifications.createdCount !== 0 || notifications.notifications.length !== 0
+      || Number(outbox?.count ?? 0) !== 0 || Number(suppressed?.count ?? 0) < 1) {
+    throw new Error('repair re-evaluation notifications were not suppressed')
   }
 
   const baseline = new DatabaseSync(baselinePath, { readOnly: true })
@@ -106,8 +125,12 @@ async function main(): Promise<void> {
       requestedAsOf,
       resolvedAsOf: result.resolvedAsOf,
       baselineDatabase: fs.realpathSync(baselinePath),
-      notificationCompositionCalled: false,
+      notificationCompositionCalled: true,
+      notificationSuppressed: true,
       batchId: result.batch.id,
+      batchSource: result.batch.source,
+      repairKey,
+      supersedesBatchId: result.batch.supersedesBatchId,
       durationMs: Date.now() - startedAt,
       totalAdded,
       totalRemoved,
