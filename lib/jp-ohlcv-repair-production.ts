@@ -129,11 +129,13 @@ export type JpRepairProductionApproval = {
     priceBasisEvidenceSha256: string
     corporateActionEvidenceSha256: string
   }
-  // Files written by the final isolated rehearsal of this revision.
+  // Files written by the final isolated rehearsal of this revision; the final
+  // validation receipt is written by its validate-only run.
   rehearsal: {
     executionReceiptSha256: string
     validationReceiptSha256: string
     approvalPackageSha256: string
+    finalValidationReceiptSha256: string
   }
   services: LaunchdRuntimeIdentity[]
   runtimes: JpRepairRuntimeIdentity[]
@@ -147,7 +149,8 @@ export type JpRepairPreflightInput = {
   databasePath: string
   officialEvidencePath: string
   priceBasisEvidencePath: string
-  // validation-receipt.json and approval-package.json sit beside it.
+  // validation-receipt.json, approval-package.json, and
+  // final-validation-receipt.json sit beside it.
   rehearsalReceiptPath: string
   now: number
   gitCommitSha: () => string
@@ -217,6 +220,86 @@ function message(error: unknown): string {
 }
 
 const SHA256 = /^[0-9a-f]{64}$/
+const GIT_COMMIT = /^[0-9a-f]{40}$/
+
+export const JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME = 'final-validation-receipt.json'
+
+// Written by the rehearsal's validate-only PASS. Deterministic (no timestamps)
+// so a rerun reproduces it byte for byte.
+export type JpRepairFinalValidationReceipt = {
+  version: 1
+  status: 'PASS'
+  gitCommitSha: string
+  sourceTreeSha256: string
+  repairPlan: { path: string; sha256: string; approvalSha256: string }
+  executionReceiptSha256: string
+  validationReceiptSha256: string
+  approvalPackageSha256: string
+  source: unknown
+  sourcePhase: 'derived_complete'
+  stages: Array<{ name: string; status: string }>
+  databaseIdentity: unknown
+  analogIdentity: unknown
+}
+
+// The rehearsal captures HEAD once, in the execution receipt at
+// initialization. A resumed or validate-only run must be at that commit.
+export function assertJpRepairExecutionCommit(receipt: { gitCommitSha?: unknown }, currentGitCommitSha: string): string {
+  const commit = receipt.gitCommitSha
+  if (typeof commit !== 'string' || !GIT_COMMIT.test(commit)) {
+    throw new Error('execution receipt has no captured Git commit; rerun with --reset')
+  }
+  if (commit !== currentGitCommitSha) {
+    throw new Error('HEAD differs from the commit captured in the execution receipt; rerun with --reset')
+  }
+  return commit
+}
+
+// Reads repair-plan.json once and checks it is the plan the approval package
+// names: same realpath, byte hash, and approvalSha256.
+export function verifyJpRepairPlanBinding(
+  planPath: string,
+  bound: { path?: string; sha256?: string; approvalSha256?: string } | undefined,
+  expectedApprovalSha256: string | undefined,
+): { binding: JpRepairFinalValidationReceipt['repairPlan']; plan: JpOhlcvRepairPlan } {
+  const realpath = fs.realpathSync(planPath)
+  const bytes = fs.readFileSync(realpath)
+  const plan = JSON.parse(bytes.toString('utf8')) as JpOhlcvRepairPlan
+  const binding = { path: realpath, sha256: sha256(bytes), approvalSha256: plan.approvalSha256 }
+  if (!SHA256.test(plan.approvalSha256 ?? '') || plan.approvalSha256 !== expectedApprovalSha256
+      || bound?.path !== binding.path || bound.sha256 !== binding.sha256
+      || bound.approvalSha256 !== binding.approvalSha256) {
+    throw new Error('repair plan is not the plan bound by the approval package')
+  }
+  return { binding, plan }
+}
+
+// Returns false when no final receipt exists yet. An existing one must equal
+// this validation's receipt exactly; it is never overwritten.
+export function verifyExistingJpRepairFinalValidationReceipt(
+  filePath: string,
+  receipt: JpRepairFinalValidationReceipt,
+): boolean {
+  // The checked file and the read bytes come from one no-follow descriptor.
+  let descriptor: number
+  try {
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return false
+    if (code === 'ELOOP') throw new Error('final validation receipt is not a regular file')
+    throw error
+  }
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error('final validation receipt is not a regular file')
+    if (!fs.readFileSync(descriptor).equals(Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`))) {
+      throw new Error('final validation receipt differs from this validation; it was changed or substituted')
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  return true
+}
 
 export function corporateActionEvidenceSha256(report: { providerAudit?: unknown }): string {
   if (!report.providerAudit || typeof report.providerAudit !== 'object') {
@@ -525,7 +608,7 @@ function assertContentIdentity(identity: DatabaseContentIdentity | undefined, ow
   }
 }
 
-// Reads the final rehearsal's receipts (schema of
+// Reads the final rehearsal's four receipts (schema of
 // scripts/rehearse-jp-local-repair-derived.ts) and checks they are this
 // revision's, PASS, and cross-linked. The rehearsal ran on an isolated copy,
 // so its database identity is never compared byte-for-byte with production.
@@ -540,6 +623,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
   }
   const execution = read<{
     status?: string
+    gitCommitSha?: string
     sourceTreeSha256?: string
     source?: RehearsalSource
     stages?: RehearsalStage[]
@@ -565,26 +649,46 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     sourceTreeSha256?: string
     providerContentSha256?: string
     officialEvidence?: { sha256?: string }
-    repairPlan?: { approvalSha256?: string }
+    repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
     sourceIdentity?: RehearsalSource
     stages?: RehearsalStage[]
     databaseIdentity?: { database?: { realpath?: string; inode?: number } }
   }>(path.join(directory, 'approval-package.json'), bound?.approvalPackageSha256)
+  const final = read<{
+    version?: number
+    status?: string
+    gitCommitSha?: string
+    sourceTreeSha256?: string
+    repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
+    executionReceiptSha256?: string
+    validationReceiptSha256?: string
+    approvalPackageSha256?: string
+    source?: RehearsalSource
+    sourcePhase?: string
+    stages?: RehearsalStage[]
+    databaseIdentity?: unknown
+    analogIdentity?: unknown
+  }>(path.join(directory, JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME), bound?.finalValidationReceiptSha256)
 
   const names = assertPassingStages(execution.value.stages, 'execution receipt')
-  if (JSON.stringify(assertPassingStages(approvalPackage.value.stages, 'approval package')) !== JSON.stringify(names)) {
-    throw new Error('approval package stages differ from the execution receipt')
+  for (const [owner, stages] of [['approval package', approvalPackage.value.stages],
+    ['final validation receipt', final.value.stages]] as const) {
+    if (JSON.stringify(assertPassingStages(stages, owner)) !== JSON.stringify(names)) {
+      throw new Error(`${owner} stages differ from the execution receipt`)
+    }
   }
   for (const [owner, value] of [['execution receipt', execution.value], ['validation receipt', validation.value],
-    ['approval package', approvalPackage.value]] as const) {
+    ['approval package', approvalPackage.value], ['final validation receipt', final.value]] as const) {
     if (value.status !== 'PASS') throw new Error(`${owner} status is ${String(value.status)}`)
     if (value.sourceTreeSha256 !== approved.runtimeSourceTreeSha256) {
       throw new Error(`${owner} is from another runtime source tree`)
     }
   }
-  if (validation.value.version !== 1 || approvalPackage.value.version !== 1
+  if (validation.value.version !== 1 || approvalPackage.value.version !== 1 || final.value.version !== 1
+      || execution.value.gitCommitSha !== approved.gitCommitSha
       || validation.value.gitCommitSha !== approved.gitCommitSha
-      || approvalPackage.value.gitCommitSha !== approved.gitCommitSha) {
+      || approvalPackage.value.gitCommitSha !== approved.gitCommitSha
+      || final.value.gitCommitSha !== approved.gitCommitSha) {
     throw new Error('rehearsal receipts are from another revision')
   }
   if (execution.value.approvalPackageSha256 !== approvalPackage.sha256
@@ -593,11 +697,22 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
       || validation.value.stageCount !== names.length
       || validation.value.sourcePhase !== 'derived_complete'
       || JSON.stringify(validation.value.source) !== JSON.stringify(execution.value.source)
-      || JSON.stringify(approvalPackage.value.sourceIdentity) !== JSON.stringify(execution.value.source)) {
+      || JSON.stringify(approvalPackage.value.sourceIdentity) !== JSON.stringify(execution.value.source)
+      || final.value.executionReceiptSha256 !== execution.sha256
+      || final.value.validationReceiptSha256 !== validation.sha256
+      || final.value.approvalPackageSha256 !== approvalPackage.sha256
+      || final.value.sourcePhase !== 'derived_complete'
+      || JSON.stringify(final.value.source) !== JSON.stringify(execution.value.source)) {
     throw new Error('rehearsal receipts do not reference each other')
   }
+  // The plan file itself stays with the rehearsal; its binding must agree.
+  const plan = approvalPackage.value.repairPlan
+  const finalPlan = final.value.repairPlan
   if (execution.value.source?.approvalSha256 !== approved.plan?.approvalSha256
-      || approvalPackage.value.repairPlan?.approvalSha256 !== approved.plan?.approvalSha256
+      || plan?.approvalSha256 !== approved.plan?.approvalSha256
+      || !plan?.path || !SHA256.test(plan?.sha256 ?? '')
+      || finalPlan?.path !== plan?.path || finalPlan?.sha256 !== plan?.sha256
+      || finalPlan?.approvalSha256 !== plan?.approvalSha256
       || approvalPackage.value.providerContentSha256 !== approved.evidence?.providerContentSha256
       || approvalPackage.value.officialEvidence?.sha256 !== approved.evidence?.officialEvidenceSha256) {
     throw new Error('rehearsal receipts are for another plan or evidence')
@@ -606,7 +721,9 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
   assertContentIdentity(validation.value.analogIdentity, 'validation analog')
   const rehearsed = validation.value.databaseIdentity!.database!
   const packaged = approvalPackage.value.databaseIdentity?.database
-  if (!packaged || packaged.realpath !== rehearsed.realpath || packaged.inode !== rehearsed.inode) {
+  if (!packaged || packaged.realpath !== rehearsed.realpath || packaged.inode !== rehearsed.inode
+      || JSON.stringify(final.value.databaseIdentity) !== JSON.stringify(validation.value.databaseIdentity)
+      || JSON.stringify(final.value.analogIdentity) !== JSON.stringify(validation.value.analogIdentity)) {
     throw new Error('rehearsal receipts disagree on the rehearsal database identity')
   }
   if (rehearsed.realpath === fs.realpathSync(input.databasePath)) {

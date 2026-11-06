@@ -1,8 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
@@ -19,6 +20,13 @@ import {
 } from '@/lib/jp-ohlcv-local-repair'
 import { summarizeOpenJpOhlcvCoverageIssues } from '@/lib/jp-ohlcv-coverage'
 import { sameJpOhlcvRow } from '@/lib/jp-ohlcv-repair-policy'
+import {
+  JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME,
+  assertJpRepairExecutionCommit,
+  verifyExistingJpRepairFinalValidationReceipt,
+  verifyJpRepairPlanBinding,
+  type JpRepairFinalValidationReceipt,
+} from '@/lib/jp-ohlcv-repair-production'
 import { jpRepairRuntimeSourceTreeSha256 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
 
 type OfficialEvidence = {
@@ -101,6 +109,8 @@ type Receipt = {
   baseDatabase: string
   metadataDatabase: string
   officialEvidence: string
+  // HEAD captured once at initialization; resume and validate-only require it.
+  gitCommitSha: string
   sourceTreeSha256: string
   providerEnvelope: { provider: number; accepted: number; noTrade: number; invalid: number }
   source: null | {
@@ -248,6 +258,21 @@ function sourceTreeSha256(): string {
   return jpRepairRuntimeSourceTreeSha256()
 }
 
+// Same resolution as stockboardBuildProvenance in the runtime manifest.
+function gitHeadSha(): string {
+  const commit = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('HEAD is not a commit')
+  return commit
+}
+
+// Re-checked immediately before each approval artifact is written, so a
+// checkout or edit during the long run cannot be attributed to the start.
+function assertRevisionUnchanged(gitCommitSha: string, sourceTree: string): void {
+  if (gitHeadSha() !== gitCommitSha || sourceTreeSha256() !== sourceTree) {
+    throw new Error('HEAD or runtime source tree changed during the rehearsal; rerun with --reset')
+  }
+}
+
 function sealedCommandFiles(command: readonly string[]): Array<{ path: string; sha256: string }> {
   return command
     .filter((value) => /\.(?:ts|js|mjs|cjs)$/.test(value))
@@ -329,9 +354,7 @@ function readReceipt(filePath: string): Receipt {
 
 function writeReceipt(filePath: string, receipt: Receipt): void {
   receipt.updatedAt = new Date().toISOString()
-  const temporary = `${filePath}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 })
-  fs.renameSync(temporary, filePath)
+  writeJsonAtomic(filePath, receipt)
 }
 
 function valuationChunkIdentities(tickers: readonly string[]): ValuationChunkIdentity[] {
@@ -707,6 +730,38 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
   const descriptor = fs.openSync(temporary, 'r')
   try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
   fs.renameSync(temporary, filePath)
+  // The rename is durable only once the parent directory entry is synced.
+  const directory = fs.openSync(path.dirname(filePath), 'r')
+  try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
+}
+
+// Creates the final receipt without ever replacing an existing entry: the
+// bytes go to an exclusive no-follow temporary file that is hard-linked into
+// place, so a concurrent writer's receipt makes the link fail with EEXIST and
+// is then verified instead.
+export function persistFinalValidationReceipt(filePath: string, receipt: JpRepairFinalValidationReceipt): void {
+  if (verifyExistingJpRepairFinalValidationReceipt(filePath, receipt)) return
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+  const descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT
+    | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600)
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify(receipt, null, 2)}\n`)
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  try {
+    fs.linkSync(temporary, filePath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  } finally {
+    fs.rmSync(temporary, { force: true })
+  }
+  const directory = fs.openSync(path.dirname(filePath), 'r')
+  try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
+  if (!verifyExistingJpRepairFinalValidationReceipt(filePath, receipt)) {
+    throw new Error('final validation receipt was not persisted')
+  }
 }
 
 function fileIdentity(filePath: string): Record<string, string | number> {
@@ -1019,7 +1074,12 @@ function hydrateApiServingCache(database: string): void {
   }
 }
 
-async function initialize(cli: Cli, official: OfficialEvidence, sourceTree: string): Promise<Receipt> {
+async function initialize(
+  cli: Cli,
+  official: OfficialEvidence,
+  sourceTree: string,
+  gitCommitSha: string,
+): Promise<Receipt> {
   const target = new DatabaseSync(cli.database)
   try {
     const plan = createJpOhlcvRepairPlan({
@@ -1048,6 +1108,7 @@ async function initialize(cli: Cli, official: OfficialEvidence, sourceTree: stri
       baseDatabase: fs.realpathSync(cli.base),
       metadataDatabase: fs.realpathSync(cli.metadata),
       officialEvidence: fs.realpathSync(cli.official),
+      gitCommitSha,
       sourceTreeSha256: sourceTree,
       providerEnvelope: {
         provider: official.sourceContract.providerRows,
@@ -1076,6 +1137,110 @@ function stageCommand(script: string, args: string[] = [], nodeArgs: string[] = 
   return [process.execPath, ...nodeArgs, '--import', process.env.STOCKBOARD_TSX_IMPORT ?? 'tsx', script, ...args]
 }
 
+// validate-only's receipt checks, run before any database is opened. Each
+// receipt is read once, so its hash and parsed content come from the same
+// bytes. Returns the final validation receipt this run attests; an existing
+// one must already equal it.
+export function bindValidateOnlyReceipts(input: {
+  database: string
+  receipt: string
+  gitHeadSha: string
+  sourceTreeSha256: string
+}): {
+  receipt: Receipt
+  plan: JpOhlcvRepairPlan
+  gitCommitSha: string
+  executionReceiptSha256: string
+  approvalPackageSha256: string
+  finalValidationPath: string
+  finalValidation: JpRepairFinalValidationReceipt
+} {
+  const executionBytes = fs.readFileSync(input.receipt)
+  const executionReceiptSha256 = createHash('sha256').update(executionBytes).digest('hex')
+  const receipt = JSON.parse(executionBytes.toString('utf8')) as Receipt
+  if (receipt.status !== 'PASS') throw new Error(`validate-only requires PASS; found ${receipt.status}`)
+  const gitCommitSha = assertJpRepairExecutionCommit(receipt, input.gitHeadSha)
+  if (receipt.sourceTreeSha256 !== input.sourceTreeSha256) {
+    throw new Error('validate-only source tree does not match the execution receipt')
+  }
+  const packagePath = path.join(path.dirname(input.receipt), 'approval-package.json')
+  const approvalPackageSha256 = receipt.approvalPackageSha256
+  if (!approvalPackageSha256 || !fs.existsSync(packagePath)) {
+    throw new Error('validate-only approval package is missing')
+  }
+  const packageBytes = fs.readFileSync(packagePath)
+  if (createHash('sha256').update(packageBytes).digest('hex') !== approvalPackageSha256) {
+    throw new Error('validate-only approval package changed')
+  }
+  const approvalPackage = JSON.parse(packageBytes.toString('utf8')) as {
+    version?: number
+    status?: string
+    gitCommitSha?: string
+    sourceTreeSha256?: string
+    repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
+    sourceIdentity?: unknown
+  }
+  if (approvalPackage.version !== 1
+      || approvalPackage.status !== 'PASS'
+      || approvalPackage.gitCommitSha !== gitCommitSha
+      || approvalPackage.sourceTreeSha256 !== input.sourceTreeSha256
+      || JSON.stringify(approvalPackage.sourceIdentity) !== JSON.stringify(receipt.source)) {
+    throw new Error('validate-only approval package is from another revision or source run')
+  }
+  const { binding: repairPlan, plan } = verifyJpRepairPlanBinding(
+    path.join(path.dirname(input.database), 'repair-plan.json'),
+    approvalPackage.repairPlan,
+    receipt.source?.approvalSha256,
+  )
+  const validationPath = path.join(path.dirname(input.receipt), 'validation-receipt.json')
+  if (!fs.existsSync(validationPath)) throw new Error('validate-only final validation receipt is missing')
+  const validationBytes = fs.readFileSync(validationPath)
+  const validation = JSON.parse(validationBytes.toString('utf8')) as {
+    version?: number
+    status?: string
+    gitCommitSha?: string
+    sourceTreeSha256?: string
+    executionReceiptSha256?: string
+    approvalPackageSha256?: string
+    source?: unknown
+    stageCount?: number
+    sourcePhase?: string
+    databaseIdentity?: Record<string, unknown>
+    analogIdentity?: Record<string, unknown>
+  }
+  if (validation.version !== 1
+      || validation.status !== 'PASS'
+      || validation.gitCommitSha !== gitCommitSha
+      || validation.sourceTreeSha256 !== input.sourceTreeSha256
+      || validation.executionReceiptSha256 !== executionReceiptSha256
+      || validation.approvalPackageSha256 !== approvalPackageSha256
+      || validation.stageCount !== receipt.stages.length
+      || validation.sourcePhase !== 'derived_complete'
+      || JSON.stringify(validation.source) !== JSON.stringify(receipt.source)) {
+    throw new Error('validate-only final validation receipt does not bind the completed execution')
+  }
+  const finalValidationPath = path.join(path.dirname(input.receipt), JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME)
+  const finalValidation: JpRepairFinalValidationReceipt = {
+    version: 1,
+    status: 'PASS',
+    gitCommitSha,
+    sourceTreeSha256: input.sourceTreeSha256,
+    repairPlan,
+    executionReceiptSha256,
+    validationReceiptSha256: createHash('sha256').update(validationBytes).digest('hex'),
+    approvalPackageSha256,
+    source: receipt.source,
+    sourcePhase: 'derived_complete',
+    stages: receipt.stages.map(({ name, status }) => ({ name, status })),
+    databaseIdentity: validation.databaseIdentity,
+    analogIdentity: validation.analogIdentity,
+  }
+  verifyExistingJpRepairFinalValidationReceipt(finalValidationPath, finalValidation)
+  return {
+    receipt, plan, gitCommitSha, executionReceiptSha256, approvalPackageSha256, finalValidationPath, finalValidation,
+  }
+}
+
 async function main(): Promise<void> {
   const cli = parseCli()
   for (const output of [cli.database, cli.analog, cli.receipt]) assertTemporary(output)
@@ -1096,43 +1261,21 @@ async function main(): Promise<void> {
     if (!fs.existsSync(cli.database) || !fs.existsSync(cli.analog) || !fs.existsSync(cli.receipt)) {
       throw new Error('validate-only requires the completed database, analog database, and receipt')
     }
-    const receipt = readReceipt(cli.receipt)
-    if (receipt.status !== 'PASS') throw new Error(`validate-only requires PASS; found ${receipt.status}`)
-    const plan = JSON.parse(fs.readFileSync(path.join(path.dirname(cli.database), 'repair-plan.json'), 'utf8')) as JpOhlcvRepairPlan
+    const currentSourceTree = sourceTreeSha256()
+    const {
+      receipt, plan, gitCommitSha, executionReceiptSha256, approvalPackageSha256, finalValidationPath, finalValidation,
+    } = bindValidateOnlyReceipts({
+      database: cli.database,
+      receipt: cli.receipt,
+      gitHeadSha: gitHeadSha(),
+      sourceTreeSha256: currentSourceTree,
+    })
     const plannedTickers = plan.approvedMissingKeys.map((key) => key.split(':')[0]).sort()
     assertCompleteStageReceipts(receipt, valuationChunkIdentities(plannedTickers))
-    const currentSourceTree = sourceTreeSha256()
-    if (receipt.sourceTreeSha256 !== currentSourceTree) {
-      throw new Error('validate-only source tree does not match the execution receipt')
-    }
-    const packagePath = path.join(path.dirname(cli.receipt), 'approval-package.json')
-    if (!receipt.approvalPackageSha256
-        || !fs.existsSync(packagePath)
-        || fileSha256(packagePath) !== receipt.approvalPackageSha256) {
-      throw new Error('validate-only approval package is missing or changed')
-    }
-    const validationPath = path.join(path.dirname(cli.receipt), 'validation-receipt.json')
-    if (!fs.existsSync(validationPath)) throw new Error('validate-only final validation receipt is missing')
-    const validation = JSON.parse(fs.readFileSync(validationPath, 'utf8')) as {
-      status?: string
-      sourceTreeSha256?: string
-      executionReceiptSha256?: string
-      approvalPackageSha256?: string
-      stageCount?: number
-      databaseIdentity?: Record<string, unknown>
-      analogIdentity?: Record<string, unknown>
-    }
-    if (validation.status !== 'PASS'
-        || validation.sourceTreeSha256 !== currentSourceTree
-        || validation.executionReceiptSha256 !== fileSha256(cli.receipt)
-        || validation.approvalPackageSha256 !== receipt.approvalPackageSha256
-        || validation.stageCount !== receipt.stages.length) {
-      throw new Error('validate-only final validation receipt does not bind the completed execution')
-    }
     const databaseIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.database)
     const analogIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.analog)
-    if (JSON.stringify(validation.databaseIdentity) !== JSON.stringify(databaseIdentityBeforeValidation)
-        || JSON.stringify(validation.analogIdentity) !== JSON.stringify(analogIdentityBeforeValidation)) {
+    if (JSON.stringify(finalValidation.databaseIdentity) !== JSON.stringify(databaseIdentityBeforeValidation)
+        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(analogIdentityBeforeValidation)) {
       throw new Error('validate-only database identity changed after final validation')
     }
     assertQuickCheck(cli.database)
@@ -1142,16 +1285,27 @@ async function main(): Promise<void> {
       official,
       receipt,
       'derived_complete',
-      receipt.approvalPackageSha256,
+      approvalPackageSha256,
     )
     if (JSON.stringify(databaseIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
         || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
       throw new Error('validate-only database content changed during final validation')
     }
+    // Written once after the first PASS; a rerun must reproduce it exactly.
+    assertRevisionUnchanged(gitCommitSha, currentSourceTree)
+    persistFinalValidationReceipt(finalValidationPath, finalValidation)
+    // The receipt attests these identities; they must still hold after it lands.
+    // On mismatch the receipt is kept as evidence; only --reset clears it.
+    if (JSON.stringify(finalValidation.databaseIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
+        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+      throw new Error('validate-only database content changed while the final validation receipt was written; rerun with --reset to start a new rehearsal')
+    }
     console.log(JSON.stringify({
       status: 'PASS',
-      sourceReceiptSha256: fileSha256(cli.receipt),
-      approvalPackageSha256: receipt.approvalPackageSha256,
+      gitCommitSha,
+      sourceReceiptSha256: executionReceiptSha256,
+      approvalPackageSha256,
+      finalValidationReceiptSha256: fileSha256(finalValidationPath),
       stageCount: receipt.stages.length,
       finalChecks,
     }, null, 2))
@@ -1165,7 +1319,7 @@ async function main(): Promise<void> {
       'trigger-delta-receipt.json', 'large-holder-impact-receipt.json',
       'forward-returns-impact-receipt.json', 'forward-returns-quarantine.sqlite',
       'forward-returns-quarantine-receipt.json', 'serving-cache-purge-receipt.json',
-      'validation-receipt.json', 'approval-package.json',
+      'validation-receipt.json', 'approval-package.json', JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME,
     ].map((file) => path.join(path.dirname(cli.database), file))
     for (const file of [cli.database, `${cli.database}-wal`, `${cli.database}-shm`, cli.analog, `${cli.analog}-wal`, `${cli.analog}-shm`, apiServingCache, `${apiServingCache}-wal`, `${apiServingCache}-shm`, cli.receipt, ...generated]) {
       if (fs.existsSync(file)) fs.rmSync(file)
@@ -1173,7 +1327,14 @@ async function main(): Promise<void> {
     const checkpoints = path.join(path.dirname(cli.database), 'checkpoints')
     if (fs.existsSync(checkpoints)) fs.rmSync(checkpoints, { recursive: true })
   }
+  // A validated rehearsal is closed: resuming it would rewrite receipts the
+  // final validation receipt binds. lstat also catches a dangling symlink.
+  if (fs.lstatSync(path.join(path.dirname(cli.receipt), JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME),
+    { throwIfNoEntry: false })) {
+    throw new Error('final validation receipt exists; rerun with --reset to start a new rehearsal')
+  }
   const sourceTree = sourceTreeSha256()
+  const head = gitHeadSha()
   const fresh = !fs.existsSync(cli.receipt)
   if (fresh) {
     fs.mkdirSync(path.dirname(cli.database), { recursive: true })
@@ -1206,11 +1367,12 @@ async function main(): Promise<void> {
   try {
     let receipt = fs.existsSync(cli.receipt)
       ? readReceipt(cli.receipt)
-      : await initialize(cli, official, sourceTree)
+      : await initialize(cli, official, sourceTree, head)
     if (fresh) checkpointNativeWriter(cli.database)
     if (receipt.sourceTreeSha256 !== sourceTree) {
       throw new Error('rehearsal source tree changed; rerun with --reset instead of mixing revisions')
     }
+    const gitCommitSha = assertJpRepairExecutionCommit(receipt, head)
     writeReceipt(cli.receipt, receipt)
     const baseline = new DatabaseSync(cli.base, { readOnly: true })
     const existingKeys = new Set<string>()
@@ -1533,7 +1695,7 @@ async function main(): Promise<void> {
       version: 1,
       status: 'PASS',
       createdAt: new Date().toISOString(),
-      gitCommitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      gitCommitSha,
       sourceTreeSha256: sourceTree,
       officialEvidence: { path: fs.realpathSync(cli.official), sha256: fileSha256(cli.official) },
       providerContentSha256: official.sourceContract.contentSha256,
@@ -1557,6 +1719,7 @@ async function main(): Promise<void> {
       forwardReturnEvidence,
       finalChecks: pendingChecks,
     }
+    assertRevisionUnchanged(gitCommitSha, sourceTree)
     writeJsonAtomic(packagePath, approvalPackage)
     const approvalPackageSha256 = fileSha256(packagePath)
     const completed = new DatabaseSync(cli.database)
@@ -1593,11 +1756,12 @@ async function main(): Promise<void> {
     receipt.approvalPackageSha256 = approvalPackageSha256
     writeReceipt(cli.receipt, receipt)
     const validationPath = path.join(path.dirname(cli.receipt), 'validation-receipt.json')
+    assertRevisionUnchanged(gitCommitSha, sourceTree)
     writeJsonAtomic(validationPath, {
       version: 1,
       status: 'PASS',
       createdAt: new Date().toISOString(),
-      gitCommitSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      gitCommitSha,
       sourceTreeSha256: sourceTree,
       executionReceiptSha256: fileSha256(cli.receipt),
       approvalPackageSha256,
@@ -1622,7 +1786,11 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(readReceipt(cli.receipt), null, 2))
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+// Run only as the entry point; the readiness test imports the validate-only
+// wiring without starting a rehearsal.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

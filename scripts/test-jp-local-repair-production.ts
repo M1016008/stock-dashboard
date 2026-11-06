@@ -13,6 +13,7 @@ import {
   type JpOhlcvOfficialRow,
 } from '@/lib/jp-ohlcv-local-repair'
 import {
+  JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME,
   JP_REPAIR_PRODUCTION_LIMITATIONS,
   JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION,
   JP_REPAIR_REHEARSAL_STAGE_COUNT,
@@ -20,9 +21,13 @@ import {
   JP_REPAIR_SERVICE_LABELS,
   JP_REPAIR_TRIGGER_RUNTIME_LABELS,
   JP_REPAIR_TRIGGER_SCHEMA_CONTRACT,
+  assertJpRepairExecutionCommit,
   corporateActionEvidenceSha256,
   inspectJpRepairDatabaseLogicalState,
   preflightJpRepairProduction,
+  verifyExistingJpRepairFinalValidationReceipt,
+  verifyJpRepairPlanBinding,
+  type JpRepairFinalValidationReceipt,
   type JpRepairPreflightInput,
   type JpRepairProductionApproval,
   type JpRepairRuntimeIdentity,
@@ -44,6 +49,7 @@ import {
   type LaunchdRuntimeIdentity,
 } from '@/lib/storage/launchd-writer-hold-driver'
 import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
+import { bindValidateOnlyReceipts, persistFinalValidationReceipt } from './rehearse-jp-local-repair-derived'
 
 // realpath: runtime WorkingDirectory binding compares resolved paths.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-repair-production-')))
@@ -215,11 +221,12 @@ type Fixture = {
 type LoadedJobOverride = { path?: string; program?: string; workingDirectory?: string | null; extra?: string[] }
 
 type RehearsalDocument = Record<string, unknown>
-type RehearsalMutation = Partial<Record<'execution' | 'validation' | 'package', (document: RehearsalDocument) => void>>
+type RehearsalMutation = Partial<Record<'execution' | 'validation' | 'package' | 'final',
+  (document: RehearsalDocument) => void>>
 
 // Mirrors the files scripts/rehearse-jp-local-repair-derived.ts writes:
 // approval-package.json, then the PASS execution receipt naming it, then the
-// validation receipt naming both.
+// validation receipt naming both, then validate-only's final receipt naming all.
 function writeRehearsal(directory: string, approval: Pick<JpRepairProductionApproval,
   'gitCommitSha' | 'runtimeSourceTreeSha256' | 'plan' | 'evidence'>, mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
   const rehearsal = path.join(directory, 'rehearsal')
@@ -234,25 +241,34 @@ function writeRehearsal(directory: string, approval: Pick<JpRepairProductionAppr
   }))
   const source = { approvalSha256: approval.plan.approvalSha256, approved: 3, inserted: 3, conflictsPreserved: 2, receiptId: 1 }
   const rehearsedDatabase = { realpath: path.join(rehearsal, 'stockboard.db'), inode: 42 }
+  const repairPlan = { path: path.join(rehearsal, 'repair-plan.json'), sha256: 'b'.repeat(64),
+    approvalSha256: approval.plan.approvalSha256 }
   const approvalPackageSha256 = write('approval-package.json', {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
     officialEvidence: { sha256: approval.evidence.officialEvidenceSha256 },
     providerContentSha256: approval.evidence.providerContentSha256,
-    repairPlan: { approvalSha256: approval.plan.approvalSha256 },
+    repairPlan: { ...repairPlan },
     sourceIdentity: source, stages,
     databaseIdentity: { database: { ...rehearsedDatabase, size: 1, mtimeMs: 1 }, wal: null },
   }, mutate.package)
   const executionReceiptSha256 = write('rehearsal-receipt.json', {
-    version: 1, status: 'PASS', database: rehearsedDatabase.realpath,
+    version: 1, status: 'PASS', database: rehearsedDatabase.realpath, gitCommitSha: approval.gitCommitSha,
     sourceTreeSha256: approval.runtimeSourceTreeSha256, source, stages, approvalPackageSha256,
   }, mutate.execution)
+  const databaseIdentity = { database: { ...rehearsedDatabase, size: 1, sha256: 'd'.repeat(64) }, walBytes: 0 }
+  const analogIdentity = { database: { realpath: path.join(rehearsal, 'analog.db'), inode: 43, size: 1, sha256: 'a'.repeat(64) }, walBytes: 0 }
   const validationReceiptSha256 = write('validation-receipt.json', {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
     executionReceiptSha256, approvalPackageSha256, source, stageCount: stages.length, sourcePhase: 'derived_complete',
-    databaseIdentity: { database: { ...rehearsedDatabase, size: 1, sha256: 'd'.repeat(64) }, walBytes: 0 },
-    analogIdentity: { database: { realpath: path.join(rehearsal, 'analog.db'), inode: 43, size: 1, sha256: 'a'.repeat(64) }, walBytes: 0 },
+    databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
   }, mutate.validation)
-  return { executionReceiptSha256, validationReceiptSha256, approvalPackageSha256 }
+  const finalValidationReceiptSha256 = write(JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME, {
+    version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
+    repairPlan: { ...repairPlan }, executionReceiptSha256, validationReceiptSha256, approvalPackageSha256, source,
+    sourcePhase: 'derived_complete', stages: structuredClone(stages),
+    databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
+  } satisfies JpRepairFinalValidationReceipt, mutate.final)
+  return { executionReceiptSha256, validationReceiptSha256, approvalPackageSha256, finalValidationReceiptSha256 }
 }
 
 function officialRows(): JpOhlcvOfficialRow[] {
@@ -876,7 +892,228 @@ async function testRehearsalReceipts(): Promise<void> {
     validation: (document) => {
       (document.databaseIdentity as { database: { realpath: string } }).database.realpath = production
     },
+    final: (document) => {
+      (document.databaseIdentity as { database: { realpath: string } }).database.realpath = production
+    },
   }, mismatch, 'a rehearsal on the production database is not isolated')
+
+  // The execution receipt carries the commit captured at initialization.
+  await rebind({ execution: (document) => { delete document.gitCommitSha } }, mismatch, 'execution without a commit')
+  await rebind({ execution: (document) => { document.gitCommitSha = '0'.repeat(40) } }, mismatch,
+    'execution at another commit')
+  await rebind({ package: (document) => {
+    (document.repairPlan as { sha256: string }).sha256 = '0'.repeat(64)
+  } }, mismatch, 'a swapped plan hash in the approval package')
+
+  // The final validation receipt: byte tamper, missing, or unbound by v3.
+  const final = path.join(path.dirname(fixture.rehearsalReceipt), JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME)
+  fs.appendFileSync(final, ' ')
+  assert.deepEqual(await holdReasons(preflightInput(fixture)), mismatch, 'tampered final validation receipt')
+  fs.rmSync(final)
+  assert.deepEqual(await holdReasons(preflightInput(fixture)), mismatch, 'missing final validation receipt')
+  writeRehearsal(directory, fixture.approval)
+  await expect(rewrite(fixture, (approval) => {
+    delete (approval.rehearsal as Partial<JpRepairProductionApproval['rehearsal']>).finalValidationReceiptSha256
+    return approval
+  }), 'an approval that does not bind the final validation receipt')
+
+  // Re-approved but substituted final receipts.
+  const finalCases: Array<[(document: RehearsalDocument) => void, string]> = [
+    [(document) => { document.gitCommitSha = '0'.repeat(40) }, 'final at another revision'],
+    [(document) => { document.sourceTreeSha256 = '0'.repeat(64) }, 'final from another source tree'],
+    [(document) => { document.status = 'HOLD' }, 'final not PASS'],
+    [(document) => { document.version = 2 }, 'final of another version'],
+    [(document) => { document.executionReceiptSha256 = '0'.repeat(64) }, 'final names another execution receipt'],
+    [(document) => { document.validationReceiptSha256 = '0'.repeat(64) }, 'final names another validation receipt'],
+    [(document) => { document.approvalPackageSha256 = '0'.repeat(64) }, 'final names another approval package'],
+    [(document) => { (document.repairPlan as { sha256: string }).sha256 = '0'.repeat(64) }, 'final swapped plan hash'],
+    [(document) => { (document.repairPlan as { path: string }).path = path.join(root, 'other-plan.json') },
+      'final names another plan path'],
+    [(document) => { (document.repairPlan as { approvalSha256: string }).approvalSha256 = '0'.repeat(64) },
+      'final names another plan approval'],
+    [(document) => { (document.source as { receiptId: number }).receiptId = 2 }, 'final from another source run'],
+    [(document) => { document.sourcePhase = 'derived_pending' }, 'final not derived_complete'],
+    [(document) => { (document.stages as unknown[]).pop() }, 'final with 27 stages'],
+    [(document) => { (document.stages as Array<{ name: string }>)[0]!.name = 'other' }, 'final with other stages'],
+    [(document) => {
+      (document.databaseIdentity as { database: { sha256: string } }).database.sha256 = '0'.repeat(64)
+    }, 'final with another database'],
+    [(document) => {
+      (document.analogIdentity as { database: { inode: number } }).database.inode = 7
+    }, 'final with another analog database'],
+  ]
+  for (const [change, note] of finalCases) await rebind({ final: change }, mismatch, note)
+
+  async function expect(expectedApprovalSha256: string, note: string): Promise<void> {
+    assert.deepEqual(await holdReasons(preflightInput(fixture, { expectedApprovalSha256 })), mismatch, note)
+    writeApproval(fixture, fixture.approval)
+  }
+}
+
+// Rehearsal-side contracts used by resume and validate-only.
+function testRehearsalContracts(): void {
+  const commit = 'f'.repeat(40)
+  assert.equal(assertJpRepairExecutionCommit({ gitCommitSha: commit }, commit), commit)
+  assert.throws(() => assertJpRepairExecutionCommit({}, commit), /no captured Git commit/, 'legacy receipt')
+  assert.throws(() => assertJpRepairExecutionCommit({ gitCommitSha: 'HEAD' }, commit), /no captured Git commit/)
+  assert.throws(() => assertJpRepairExecutionCommit({ gitCommitSha: commit }, '0'.repeat(40)), /HEAD differs/,
+    'resume or validate-only at another revision')
+
+  const directory = path.join(root, 'contracts')
+  fs.mkdirSync(directory, { recursive: true })
+  const planPath = path.join(directory, 'repair-plan.json')
+  const approvalSha256 = '1'.repeat(64)
+  fs.writeFileSync(planPath, `${JSON.stringify({ approvalSha256, approvedMissingKeys: [] })}\n`)
+  const bound = { path: planPath, sha256: sha256(fs.readFileSync(planPath)), approvalSha256 }
+  assert.deepEqual(verifyJpRepairPlanBinding(planPath, bound, approvalSha256).binding, bound)
+  for (const [binding, expected, note] of [
+    [{ ...bound, sha256: '0'.repeat(64) }, approvalSha256, 'swapped plan hash'],
+    [{ ...bound, path: path.join(directory, 'other.json') }, approvalSha256, 'another plan path'],
+    [{ ...bound, approvalSha256: '0'.repeat(64) }, approvalSha256, 'another plan approval in the package'],
+    [bound, '0'.repeat(64), 'plan of another source repair'],
+    [undefined, approvalSha256, 'package without a plan binding'],
+  ] as const) {
+    assert.throws(() => verifyJpRepairPlanBinding(planPath, binding, expected), /not the plan bound/, note)
+  }
+  fs.writeFileSync(planPath, `${JSON.stringify({ approvalSha256, approvedMissingKeys: ['x'] })}\n`)
+  assert.throws(() => verifyJpRepairPlanBinding(planPath, bound, approvalSha256), /not the plan bound/,
+    'a rewritten plan with the same approvalSha256')
+
+  const receipt: JpRepairFinalValidationReceipt = {
+    version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: 'e'.repeat(64), repairPlan: bound,
+    executionReceiptSha256: '2'.repeat(64), validationReceiptSha256: '3'.repeat(64), approvalPackageSha256: '4'.repeat(64),
+    source: { approvalSha256 }, sourcePhase: 'derived_complete',
+    stages: [{ name: 'snapshots', status: 'PASS' }], databaseIdentity: { walBytes: 0 }, analogIdentity: { walBytes: 0 },
+  }
+  const finalPath = path.join(directory, JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME)
+  assert.equal(verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), false, 'missing is written once')
+  fs.writeFileSync(finalPath, `${JSON.stringify(receipt, null, 2)}\n`)
+  assert.equal(verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), true, 'an identical rerun verifies')
+  for (const [other, note] of [
+    [{ ...receipt, gitCommitSha: '0'.repeat(40) }, 'another revision'],
+    [{ ...receipt, databaseIdentity: { walBytes: 1 } }, 'another database'],
+    [{ ...receipt, executionReceiptSha256: '0'.repeat(64) }, 'another execution receipt'],
+  ] as const) {
+    assert.throws(() => verifyExistingJpRepairFinalValidationReceipt(finalPath, other), /changed or substituted/, note)
+  }
+  fs.appendFileSync(finalPath, ' ')
+  assert.throws(() => verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), /changed or substituted/,
+    'a tampered existing receipt is never overwritten')
+  fs.rmSync(finalPath)
+  fs.writeFileSync(path.join(directory, 'elsewhere.json'), `${JSON.stringify(receipt, null, 2)}\n`)
+  fs.symlinkSync(path.join(directory, 'elsewhere.json'), finalPath)
+  assert.throws(() => verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), /not a regular file/,
+    'a symlinked receipt is a substitution')
+}
+
+// Drives the rehearsal's own validate-only wiring (not a copy of it) over a
+// completed rehearsal directory, then tampers with one artifact per case.
+function testValidateOnlyWiring(): void {
+  const commit = 'a'.repeat(40)
+  const sourceTree = 'b'.repeat(64)
+  const approvalSha256 = 'c'.repeat(64)
+  const source = { receiptId: 1, approvalSha256, approved: 1 }
+  const stages = [{ name: 'snapshots', status: 'PASS' }, { name: 'analog', status: 'PASS' }]
+  const identity = { database: { realpath: '/tmp/rehearsal.sqlite', inode: 1 }, walBytes: 0 }
+  const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`
+  let count = 0
+
+  const completed = () => {
+    const directory = path.join(root, `validate-only-${count++}`)
+    fs.mkdirSync(directory, { recursive: true })
+    const files = {
+      database: path.join(directory, 'stockboard.sqlite'),
+      receipt: path.join(directory, 'rehearsal-receipt.json'),
+      plan: path.join(directory, 'repair-plan.json'),
+      package: path.join(directory, 'approval-package.json'),
+      validation: path.join(directory, 'validation-receipt.json'),
+      final: path.join(directory, JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME),
+    }
+    fs.writeFileSync(files.plan, `${JSON.stringify({ approvalSha256, approvedMissingKeys: ['1301:2026-07-17'] })}\n`)
+    const approvalPackage = {
+      version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree,
+      repairPlan: { path: files.plan, sha256: sha256(fs.readFileSync(files.plan)), approvalSha256 },
+      sourceIdentity: source, stages,
+    }
+    fs.writeFileSync(files.package, json(approvalPackage))
+    const execution = {
+      status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree, source, stages,
+      approvalPackageSha256: sha256(fs.readFileSync(files.package)),
+    }
+    fs.writeFileSync(files.receipt, json(execution))
+    fs.writeFileSync(files.validation, json({
+      version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree,
+      executionReceiptSha256: sha256(fs.readFileSync(files.receipt)),
+      approvalPackageSha256: execution.approvalPackageSha256, source, stageCount: stages.length,
+      sourcePhase: 'derived_complete', databaseIdentity: identity, analogIdentity: identity,
+    }))
+    const bind = (head = commit) => bindValidateOnlyReceipts({
+      database: files.database, receipt: files.receipt, gitHeadSha: head, sourceTreeSha256: sourceTree,
+    })
+    return { files, approvalPackage, execution, bind }
+  }
+
+  // Control: the untampered rehearsal binds, writes its final receipt once,
+  // and a rerun reproduces it.
+  const control = completed()
+  const bound = control.bind()
+  assert.equal(bound.gitCommitSha, commit)
+  assert.equal(fs.existsSync(control.files.final), false, 'binding alone writes nothing')
+  persistFinalValidationReceipt(bound.finalValidationPath, bound.finalValidation)
+  persistFinalValidationReceipt(bound.finalValidationPath, bound.finalValidation)
+  assert.equal(fs.readFileSync(control.files.final, 'utf8'), json(bound.finalValidation))
+  assert.equal(control.bind().finalValidationPath, control.files.final, 'an identical rerun binds')
+  assert.equal(fs.readdirSync(path.dirname(control.files.final)).some((file) => file.endsWith('.tmp')), false,
+    'no temporary receipt remains')
+
+  const head = completed()
+  assert.throws(() => head.bind('d'.repeat(40)), /HEAD differs/, 'validate-only at another HEAD')
+
+  const plan = completed()
+  fs.writeFileSync(plan.files.plan, `${JSON.stringify({ approvalSha256, approvedMissingKeys: ['1332:2026-07-17'] })}\n`)
+  assert.throws(() => plan.bind(), /not the plan bound/, 'plan bytes changed under the same approvalSha256')
+
+  const substituted = completed()
+  fs.writeFileSync(substituted.files.package, json({ ...substituted.approvalPackage, createdAt: 'other' }))
+  assert.throws(() => substituted.bind(), /approval package changed/, 'substituted approval package')
+  // Rebinding the execution receipt to a substitute still fails on content.
+  for (const [change, note] of [
+    [{ version: 2 }, 'package of another version'],
+    [{ sourceIdentity: { ...source, receiptId: 2 } }, 'package from another source run'],
+    [{ gitCommitSha: 'd'.repeat(40) }, 'package at another revision'],
+  ] as const) {
+    const rebound = completed()
+    fs.writeFileSync(rebound.files.package, json({ ...rebound.approvalPackage, ...change }))
+    fs.writeFileSync(rebound.files.receipt, json({
+      ...rebound.execution, approvalPackageSha256: sha256(fs.readFileSync(rebound.files.package)),
+    }))
+    assert.throws(() => rebound.bind(), /another revision or source run/, note)
+  }
+  const validation = completed()
+  const document = JSON.parse(fs.readFileSync(validation.files.validation, 'utf8')) as { version: number }
+  fs.writeFileSync(validation.files.validation, json({ ...document, version: 2 }))
+  assert.throws(() => validation.bind(), /does not bind the completed execution/, 'validation of another version')
+
+  const final = completed()
+  const finalBound = final.bind()
+  persistFinalValidationReceipt(finalBound.finalValidationPath, finalBound.finalValidation)
+  const finalBytes = fs.readFileSync(final.files.final)
+  finalBytes[finalBytes.length - 2] ^= 1
+  fs.writeFileSync(final.files.final, finalBytes)
+  assert.throws(() => final.bind(), /changed or substituted/, 'one byte of the existing final receipt changed')
+  assert.throws(() => persistFinalValidationReceipt(finalBound.finalValidationPath, finalBound.finalValidation),
+    /changed or substituted/, 'a changed final receipt is never overwritten')
+  assert.deepEqual(fs.readFileSync(final.files.final), finalBytes)
+  fs.rmSync(final.files.final)
+  fs.symlinkSync(path.join(root, 'elsewhere.json'), final.files.final)
+  assert.throws(() => persistFinalValidationReceipt(finalBound.finalValidationPath, finalBound.finalValidation),
+    /not a regular file/, 'a dangling symlink is never written through')
+  assert.equal(fs.existsSync(path.join(root, 'elsewhere.json')), false)
+
+  const legacy = completed()
+  const { gitCommitSha: _omitted, ...withoutCommit } = legacy.execution
+  fs.writeFileSync(legacy.files.receipt, json(withoutCommit))
+  assert.throws(() => legacy.bind(), /no captured Git commit/, 'execution receipt from before gitCommitSha')
 }
 
 async function main(): Promise<void> {
@@ -886,6 +1123,8 @@ async function main(): Promise<void> {
     await testPreflight()
     await testContractBindings()
     await testRehearsalReceipts()
+    testRehearsalContracts()
+    testValidateOnlyWiring()
     console.log('JP local repair production readiness tests: PASS')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
