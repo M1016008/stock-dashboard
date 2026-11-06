@@ -14,6 +14,7 @@ import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/week
 // This module is preflight-only: it reads approval, evidence, the database
 // (read-only), and launchd state, and never writes or holds anything.
 export const JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION = 'PREFLIGHT_JP_LOCAL_REPAIR'
+export const JP_REPAIR_APPROVAL_VERSION = 4
 export const JP_REPAIR_APPROVAL_MAXIMUM_VALIDITY_MS = 12 * 60 * 60 * 1_000
 
 // Every service that can touch the database, in stop order. web-health comes
@@ -23,7 +24,7 @@ export const JP_REPAIR_APPROVAL_MAXIMUM_VALIDITY_MS = 12 * 60 * 60 * 1_000
 // not touch the database; it is listed so every loaded com.stockboard.* label
 // is sealed by plist/program identity. Any loaded com.stockboard.* label
 // outside the approved set holds the preflight. A future, separately approved
-// executor must pass this list, in this order, to the existing
+// executor must pass the present services, in this order, to the existing
 // withWeeklyWriterHold. No executor is implemented here.
 export const JP_REPAIR_SERVICE_LABELS: readonly string[] = [
   'com.stockboard.web-health',
@@ -35,6 +36,17 @@ export const JP_REPAIR_SERVICE_LABELS: readonly string[] = [
   'com.stockboard.dev-capacity-monitor',
 ]
 export const JP_REPAIR_SERVICE_LABEL_PREFIX = 'com.stockboard.'
+
+// A required service may be approved as absent only if listed here. It stays
+// in the required list; the approval names its exact expected plist path, and
+// both the missing definition and the unloaded label are verified.
+export const JP_REPAIR_ABSENCE_APPROVABLE_LABELS: readonly string[] = ['com.stockboard.us-earnings']
+export type JpRepairAbsentService = { label: string; absent: true; plistPath: string }
+export type JpRepairApprovedService = LaunchdRuntimeIdentity | JpRepairAbsentService
+
+export function isJpRepairAbsentService(service: JpRepairApprovedService): service is JpRepairAbsentService {
+  return (service as { absent?: unknown })?.absent === true
+}
 
 // Services whose code interprets Trigger repair results: web (API and read
 // model read the supersede semantics), update-latest (daily Trigger evaluation
@@ -89,22 +101,26 @@ export type JpRepairDatabaseLogicalState = {
 export type JpRepairArtifact = { type: 'FILE' | 'TREE'; path: string; sha256: string }
 
 // A Git worktree runtime is bound to its WorkingDirectory realpath, HEAD (the
-// approved gitCommitSha), and
-// the approved runtimeSourceTreeSha256 (clean, no untracked runtime files); an
+// approved gitCommitSha), the approved runtimeSourceTreeSha256 (clean, no
+// untracked runtime files), and its installed node_modules lockfile; an
 // immutable runtime to artifact hashes. Both are also bound to their plist and
 // program through `services`.
 export type JpRepairRuntimeIdentity =
-  | { label: string; kind: 'GIT_WORKTREE'; workingDirectory: string; gitHead: string; artifacts: JpRepairArtifact[] }
+  | { label: string; kind: 'GIT_WORKTREE'; workingDirectory: string; gitHead: string; nodeModulesLockSha256: string
+    artifacts: JpRepairArtifact[] }
   | { label: string; kind: 'IMMUTABLE'; workingDirectory: string | null; artifacts: JpRepairArtifact[] }
 
 export type JpRepairProductionApproval = {
-  version: 3
+  version: typeof JP_REPAIR_APPROVAL_VERSION
   action: typeof JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION
   operator: string
   approvedAt: string
   expiresAt: string
   gitCommitSha: string
   runtimeSourceTreeSha256: string
+  // node_modules/.package-lock.json of the checkout running the preflight
+  // (the stage scripts resolve their dependencies there).
+  nodeModulesLockSha256: string
   // The repair key the Trigger re-evaluation writes; it must be the plan hash.
   repairKey: string
   database: {
@@ -137,7 +153,7 @@ export type JpRepairProductionApproval = {
     approvalPackageSha256: string
     finalValidationReceiptSha256: string
   }
-  services: LaunchdRuntimeIdentity[]
+  services: JpRepairApprovedService[]
   runtimes: JpRepairRuntimeIdentity[]
 }
 
@@ -155,6 +171,7 @@ export type JpRepairPreflightInput = {
   now: number
   gitCommitSha: () => string
   runtimeSourceTreeSha256: () => string
+  nodeModulesLockSha256: () => string
   inspectStorageVolumeUuid: () => string
   // Read-only: regenerates the plan from the live database and reports the
   // logical state.
@@ -162,15 +179,20 @@ export type JpRepairPreflightInput = {
     plan: JpOhlcvRepairPlan
     logical: JpRepairDatabaseLogicalState
   }
-  // Called only after the approval hash is verified.
+  // Called only after the approval hash is verified, with present services.
   createServiceObserver: (services: readonly LaunchdRuntimeIdentity[]) => Pick<WriterHoldDriver, 'observe'>
+  // Throws unless the approved-absent service has no plist and is not loaded
+  // (assertLaunchdServiceAbsent).
+  assertServiceAbsent: (service: JpRepairAbsentService) => void
   listLoadedServiceLabels: () => string[]
   // Called only for services whose plist identity was verified. For a Git
-  // worktree, sourceTreeSha256 is jpRepairRuntimeSourceTreeSha256(cwd).
+  // worktree, sourceTreeSha256 is jpRepairRuntimeSourceTreeSha256(cwd) and
+  // nodeModulesLockSha256 is jpRepairNodeModulesLockSha256(cwd).
   inspectRuntime: (service: LaunchdRuntimeIdentity) => {
     workingDirectory: string | null
     gitHead: string | null
     sourceTreeSha256: string | null
+    nodeModulesLockSha256: string | null
   }
 }
 
@@ -231,6 +253,7 @@ export type JpRepairFinalValidationReceipt = {
   status: 'PASS'
   gitCommitSha: string
   sourceTreeSha256: string
+  nodeModulesLockSha256: string
   repairPlan: { path: string; sha256: string; approvalSha256: string }
   executionReceiptSha256: string
   validationReceiptSha256: string
@@ -364,7 +387,7 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
     return result(approvalSha256, null, null, [])
   }
   await check('APPROVAL_INVALID', () => {
-    if (approved.version !== 3) throw new Error('unsupported approval version')
+    if (approved.version !== JP_REPAIR_APPROVAL_VERSION) throw new Error('unsupported approval version')
     if (approved.action !== JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION) throw new Error('unknown approval action')
     if (typeof approved.operator !== 'string' || !approved.operator.trim() || approved.operator.length > 128) {
       throw new Error('operator is required')
@@ -386,6 +409,12 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
   await check('RUNTIME_SOURCE_MISMATCH', () => {
     if (input.runtimeSourceTreeSha256() !== approved.runtimeSourceTreeSha256) {
       throw new Error('runtime source tree differs from the approved manifest')
+    }
+  })
+  await check('RUNTIME_DEPENDENCY_MISMATCH', () => {
+    if (!SHA256.test(approved.nodeModulesLockSha256 ?? '')
+        || input.nodeModulesLockSha256() !== approved.nodeModulesLockSha256) {
+      throw new Error('node_modules/.package-lock.json differs from the approval')
     }
   })
   // Identity only: mtime/size of a live WAL database are volatile and not bound.
@@ -516,16 +545,32 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
     if (JSON.stringify(labels) !== JSON.stringify(JP_REPAIR_SERVICE_LABELS)) {
       throw new Error(`approval must list exactly the ${JP_REPAIR_SERVICE_LABELS.length} services in stop order`)
     }
+    const unapproved = approvedServices.filter((service) => isJpRepairAbsentService(service)
+      && !JP_REPAIR_ABSENCE_APPROVABLE_LABELS.includes(service.label))
+    if (unapproved.length > 0) throw new Error(`absence is not approvable for ${unapproved.map((s) => s.label).join(',')}`)
   })
+  const absentServices = approvedServices.filter(isJpRepairAbsentService)
+  const presentServices = approvedServices.filter((service): service is LaunchdRuntimeIdentity =>
+    !isJpRepairAbsentService(service))
+  // An approved-absent label is never stopped, so a loaded one is as unknown
+  // as any other.
   await check('UNKNOWN_LOADED_SERVICE', () => {
-    const stopped = new Set(approvedServices.map((service) => service?.label))
+    const stopped = new Set(presentServices.map((service) => service?.label))
     const unknown = input.listLoadedServiceLabels()
       .filter((label) => label.startsWith(JP_REPAIR_SERVICE_LABEL_PREFIX) && !stopped.has(label))
     if (unknown.length > 0) throw new Error(unknown.join(','))
   })
+  for (const service of absentServices) {
+    await check('APPROVED_ABSENT_SERVICE_PRESENT', () => {
+      if (!presentServices.some((present) => path.dirname(present?.plistPath ?? '') === path.dirname(service.plistPath))) {
+        throw new Error(`${service.label}: expected plist path is outside the approved LaunchAgents directory`)
+      }
+      input.assertServiceAbsent(service)
+    })
+  }
   const verified = new Map<string, LaunchdRuntimeIdentity>()
-  const observer = input.createServiceObserver(approvedServices)
-  for (const service of approvedServices) {
+  const observer = input.createServiceObserver(presentServices)
+  for (const service of presentServices) {
     await check('SERVICE_IDENTITY_MISMATCH', async () => {
       const observed = await observer.observe(service.label)
       if (observed.definitionSha256 !== service.definitionSha256 || observed.program !== service.program) {
@@ -559,6 +604,10 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
         }
         if (observed.sourceTreeSha256 !== approved.runtimeSourceTreeSha256) {
           throw new Error(`${runtime.label}: runtime source tree differs from the approved manifest`)
+        }
+        if (!SHA256.test(runtime.nodeModulesLockSha256 ?? '')
+            || observed.nodeModulesLockSha256 !== runtime.nodeModulesLockSha256) {
+          throw new Error(`${runtime.label}: node_modules/.package-lock.json differs from the approval`)
         }
       } else if (runtime.kind !== 'IMMUTABLE' || !(runtime.artifacts?.length > 0)) {
         throw new Error(`${runtime.label}: an immutable runtime must bind at least one artifact`)
@@ -625,6 +674,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     source?: RehearsalSource
     stages?: RehearsalStage[]
     approvalPackageSha256?: string
@@ -634,6 +684,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     executionReceiptSha256?: string
     approvalPackageSha256?: string
     source?: RehearsalSource
@@ -647,6 +698,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     providerContentSha256?: string
     officialEvidence?: { sha256?: string }
     repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
@@ -659,6 +711,7 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
     executionReceiptSha256?: string
     validationReceiptSha256?: string
@@ -682,6 +735,9 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     if (value.status !== 'PASS') throw new Error(`${owner} status is ${String(value.status)}`)
     if (value.sourceTreeSha256 !== approved.runtimeSourceTreeSha256) {
       throw new Error(`${owner} is from another runtime source tree`)
+    }
+    if (value.nodeModulesLockSha256 !== approved.nodeModulesLockSha256) {
+      throw new Error(`${owner} is from another installed dependency set`)
     }
   }
   if (validation.value.version !== 1 || approvalPackage.value.version !== 1 || final.value.version !== 1

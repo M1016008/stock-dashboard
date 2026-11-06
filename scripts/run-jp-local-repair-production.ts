@@ -10,9 +10,10 @@ import {
   inspectJpRepairDatabaseLogicalState,
   preflightJpRepairProduction,
 } from '@/lib/jp-ohlcv-repair-production'
-import { jpRepairRuntimeSourceTreeSha256 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
+import { jpRepairNodeModulesLockSha256, jpRepairRuntimeSourceTreeSha256 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
 import { configForDatabase, hasStorageFatalLatch, inspectStorage } from '@/lib/storage/external-storage-guard'
 import {
+  assertLaunchdServiceAbsent,
   createLaunchdWriterHoldDriver,
   listLoadedLaunchdLabels,
   readLaunchdWorkingDirectory,
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
     now: Date.now(),
     gitCommitSha: () => execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     runtimeSourceTreeSha256: () => jpRepairRuntimeSourceTreeSha256(),
+    nodeModulesLockSha256: () => jpRepairNodeModulesLockSha256(process.cwd()),
     inspectStorageVolumeUuid: () => {
       const config = configForDatabase(databasePath, 'db_maintenance')
       if (hasStorageFatalLatch(config)) throw new Error('storage fatal latch is set')
@@ -90,6 +92,7 @@ async function main(): Promise<void> {
     // Used only for observe(); bootout/bootstrap are never called here. A
     // loaded job must also have been loaded from the approved plist/program.
     createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, { verifyLoadedJob: true }),
+    assertServiceAbsent: (service) => assertLaunchdServiceAbsent(service),
     listLoadedServiceLabels: () => listLoadedLaunchdLabels(JP_REPAIR_SERVICE_LABEL_PREFIX),
     inspectRuntime: (service) => {
       // The loaded job's actual working directory, checked against the plist.
@@ -104,6 +107,7 @@ async function main(): Promise<void> {
         workingDirectory,
         gitHead,
         sourceTreeSha256: gitHead && workingDirectory ? jpRepairRuntimeSourceTreeSha256(workingDirectory) : null,
+        nodeModulesLockSha256: gitHead && workingDirectory ? jpRepairNodeModulesLockSha256(workingDirectory) : null,
       }
     },
   })

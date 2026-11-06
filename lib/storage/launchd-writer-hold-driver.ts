@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type {
   ApprovedWriterIdentity,
@@ -189,6 +190,28 @@ export function readLaunchdWorkingDirectory(identity: LaunchdRuntimeIdentity, op
   assertLoadedJob(identity, job)
   if (job.workingDirectory !== configured) throw new Error(`WRITER_LOADED_WORKING_DIRECTORY_MISMATCH:${identity.label}`)
   return job.workingDirectory
+}
+
+// Read-only: an approved-absent service has nothing at its exact plist path
+// (not even a dangling symlink) and no loaded job under its label.
+export function assertLaunchdServiceAbsent(identity: { label: string; plistPath: string }, options: {
+  run?: CommandRunner
+  uid?: number
+} = {}): void {
+  const run = options.run ?? systemCommandRunner
+  const uid = options.uid ?? process.getuid?.()
+  if (!Number.isInteger(uid)) throw new Error('LAUNCHD_UID_UNAVAILABLE')
+  if (typeof identity.plistPath !== 'string' || !path.isAbsolute(identity.plistPath)
+      || path.basename(identity.plistPath) !== `${identity.label}.plist`) {
+    throw new Error(`ABSENT_SERVICE_PLIST_PATH_INVALID:${identity.label}`)
+  }
+  if (fs.lstatSync(identity.plistPath, { throwIfNoEntry: false })) {
+    throw new Error(`ABSENT_SERVICE_DEFINITION_PRESENT:${identity.label}`)
+  }
+  const print = launchdPrint(identity.label, run, uid as number)
+  if (isMissingLaunchdJob(print)) return
+  if (print.status === 0) throw new Error(`ABSENT_SERVICE_LOADED:${identity.label}`)
+  commandFailure('LAUNCHCTL_PRINT', print)
 }
 
 export function createLaunchdWriterHoldDriver(

@@ -27,7 +27,16 @@ import {
   verifyJpRepairPlanBinding,
   type JpRepairFinalValidationReceipt,
 } from '@/lib/jp-ohlcv-repair-production'
-import { jpRepairRuntimeSourceTreeSha256 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
+import {
+  JP_REPAIR_ANALOG_BASENAME,
+  JP_REPAIR_SERVING_CACHE_BASENAME,
+  JP_REPAIR_STAGE_UNSET_ENVIRONMENT,
+  jpRepairStageEnvironment,
+} from '@/lib/jp-ohlcv-repair-stage-environment'
+import {
+  jpRepairNodeModulesLockSha256,
+  jpRepairRuntimeSourceTreeSha256,
+} from '@/lib/jp-ohlcv-repair-runtime-manifest'
 
 type OfficialEvidence = {
   date: string
@@ -112,6 +121,7 @@ type Receipt = {
   // HEAD captured once at initialization; resume and validate-only require it.
   gitCommitSha: string
   sourceTreeSha256: string
+  nodeModulesLockSha256: string
   providerEnvelope: { provider: number; accepted: number; noTrade: number; invalid: number }
   source: null | {
     approvalSha256: string
@@ -133,6 +143,7 @@ type Cli = {
   metadata: string
   official: string
   analog: string
+  servingCache: string
   receipt: string
   priceBasisEvidence: string
   reset: boolean
@@ -205,12 +216,18 @@ function required(name: string): string {
 function parseCli(): Cli {
   const database = required('--database')
   const directory = path.dirname(database)
+  // Pinned beside the database under the production basenames.
+  const analog = path.join(directory, JP_REPAIR_ANALOG_BASENAME)
+  if (argument('--analog') && path.resolve(argument('--analog')!) !== analog) {
+    throw new Error(`--analog must be ${analog}`)
+  }
   return {
     database,
     base: required('--base'),
     metadata: required('--metadata'),
     official: required('--official'),
-    analog: path.resolve(argument('--analog') ?? path.join(directory, 'analog-jp.sqlite')),
+    analog,
+    servingCache: path.join(directory, JP_REPAIR_SERVING_CACHE_BASENAME),
     receipt: path.resolve(argument('--receipt') ?? path.join(directory, 'rehearsal-receipt.json')),
     priceBasisEvidence: path.resolve(argument('--price-basis-evidence')
       ?? 'docs/architecture/2026-11-01/jp-repair-price-basis-evidence.json'),
@@ -267,9 +284,10 @@ function gitHeadSha(): string {
 
 // Re-checked immediately before each approval artifact is written, so a
 // checkout or edit during the long run cannot be attributed to the start.
-function assertRevisionUnchanged(gitCommitSha: string, sourceTree: string): void {
-  if (gitHeadSha() !== gitCommitSha || sourceTreeSha256() !== sourceTree) {
-    throw new Error('HEAD or runtime source tree changed during the rehearsal; rerun with --reset')
+function assertRevisionUnchanged(gitCommitSha: string, sourceTree: string, nodeModulesLockSha256: string): void {
+  if (gitHeadSha() !== gitCommitSha || sourceTreeSha256() !== sourceTree
+      || jpRepairNodeModulesLockSha256(process.cwd()) !== nodeModulesLockSha256) {
+    throw new Error('HEAD, runtime source tree, or installed dependencies changed during the rehearsal; rerun with --reset')
   }
 }
 
@@ -1079,6 +1097,7 @@ async function initialize(
   official: OfficialEvidence,
   sourceTree: string,
   gitCommitSha: string,
+  nodeModulesLockSha256: string,
 ): Promise<Receipt> {
   const target = new DatabaseSync(cli.database)
   try {
@@ -1110,6 +1129,7 @@ async function initialize(
       officialEvidence: fs.realpathSync(cli.official),
       gitCommitSha,
       sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
       providerEnvelope: {
         provider: official.sourceContract.providerRows,
         accepted: official.sourceContract.acceptedRows,
@@ -1146,6 +1166,7 @@ export function bindValidateOnlyReceipts(input: {
   receipt: string
   gitHeadSha: string
   sourceTreeSha256: string
+  nodeModulesLockSha256: string
 }): {
   receipt: Receipt
   plan: JpOhlcvRepairPlan
@@ -1163,6 +1184,9 @@ export function bindValidateOnlyReceipts(input: {
   if (receipt.sourceTreeSha256 !== input.sourceTreeSha256) {
     throw new Error('validate-only source tree does not match the execution receipt')
   }
+  if (receipt.nodeModulesLockSha256 !== input.nodeModulesLockSha256) {
+    throw new Error('validate-only installed dependencies do not match the execution receipt')
+  }
   const packagePath = path.join(path.dirname(input.receipt), 'approval-package.json')
   const approvalPackageSha256 = receipt.approvalPackageSha256
   if (!approvalPackageSha256 || !fs.existsSync(packagePath)) {
@@ -1177,6 +1201,7 @@ export function bindValidateOnlyReceipts(input: {
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     repairPlan?: { path?: string; sha256?: string; approvalSha256?: string }
     sourceIdentity?: unknown
   }
@@ -1184,6 +1209,7 @@ export function bindValidateOnlyReceipts(input: {
       || approvalPackage.status !== 'PASS'
       || approvalPackage.gitCommitSha !== gitCommitSha
       || approvalPackage.sourceTreeSha256 !== input.sourceTreeSha256
+      || approvalPackage.nodeModulesLockSha256 !== input.nodeModulesLockSha256
       || JSON.stringify(approvalPackage.sourceIdentity) !== JSON.stringify(receipt.source)) {
     throw new Error('validate-only approval package is from another revision or source run')
   }
@@ -1200,6 +1226,7 @@ export function bindValidateOnlyReceipts(input: {
     status?: string
     gitCommitSha?: string
     sourceTreeSha256?: string
+    nodeModulesLockSha256?: string
     executionReceiptSha256?: string
     approvalPackageSha256?: string
     source?: unknown
@@ -1212,6 +1239,7 @@ export function bindValidateOnlyReceipts(input: {
       || validation.status !== 'PASS'
       || validation.gitCommitSha !== gitCommitSha
       || validation.sourceTreeSha256 !== input.sourceTreeSha256
+      || validation.nodeModulesLockSha256 !== input.nodeModulesLockSha256
       || validation.executionReceiptSha256 !== executionReceiptSha256
       || validation.approvalPackageSha256 !== approvalPackageSha256
       || validation.stageCount !== receipt.stages.length
@@ -1225,6 +1253,7 @@ export function bindValidateOnlyReceipts(input: {
     status: 'PASS',
     gitCommitSha,
     sourceTreeSha256: input.sourceTreeSha256,
+    nodeModulesLockSha256: input.nodeModulesLockSha256,
     repairPlan,
     executionReceiptSha256,
     validationReceiptSha256: createHash('sha256').update(validationBytes).digest('hex'),
@@ -1243,7 +1272,7 @@ export function bindValidateOnlyReceipts(input: {
 
 async function main(): Promise<void> {
   const cli = parseCli()
-  for (const output of [cli.database, cli.analog, cli.receipt]) assertTemporary(output)
+  for (const output of [cli.database, cli.analog, cli.servingCache, cli.receipt]) assertTemporary(output)
   if (!fs.existsSync(cli.base) || !fs.existsSync(cli.metadata) || !fs.existsSync(cli.official)) {
     throw new Error('base, metadata, and official evidence must already exist')
   }
@@ -1262,6 +1291,7 @@ async function main(): Promise<void> {
       throw new Error('validate-only requires the completed database, analog database, and receipt')
     }
     const currentSourceTree = sourceTreeSha256()
+    const currentNodeModulesLock = jpRepairNodeModulesLockSha256(process.cwd())
     const {
       receipt, plan, gitCommitSha, executionReceiptSha256, approvalPackageSha256, finalValidationPath, finalValidation,
     } = bindValidateOnlyReceipts({
@@ -1269,6 +1299,7 @@ async function main(): Promise<void> {
       receipt: cli.receipt,
       gitHeadSha: gitHeadSha(),
       sourceTreeSha256: currentSourceTree,
+      nodeModulesLockSha256: currentNodeModulesLock,
     })
     const plannedTickers = plan.approvedMissingKeys.map((key) => key.split(':')[0]).sort()
     assertCompleteStageReceipts(receipt, valuationChunkIdentities(plannedTickers))
@@ -1292,7 +1323,7 @@ async function main(): Promise<void> {
       throw new Error('validate-only database content changed during final validation')
     }
     // Written once after the first PASS; a rerun must reproduce it exactly.
-    assertRevisionUnchanged(gitCommitSha, currentSourceTree)
+    assertRevisionUnchanged(gitCommitSha, currentSourceTree, currentNodeModulesLock)
     persistFinalValidationReceipt(finalValidationPath, finalValidation)
     // The receipt attests these identities; they must still hold after it lands.
     // On mismatch the receipt is kept as evidence; only --reset clears it.
@@ -1313,7 +1344,7 @@ async function main(): Promise<void> {
   }
 
   if (cli.reset) {
-    const apiServingCache = path.join(path.dirname(cli.database), 'api-serving-cache.sqlite')
+    const apiServingCache = cli.servingCache
     const generated = [
       'repair-plan.json',
       'trigger-delta-receipt.json', 'large-holder-impact-receipt.json',
@@ -1335,14 +1366,19 @@ async function main(): Promise<void> {
   }
   const sourceTree = sourceTreeSha256()
   const head = gitHeadSha()
+  const nodeModulesLockSha256 = jpRepairNodeModulesLockSha256(process.cwd())
   const fresh = !fs.existsSync(cli.receipt)
   if (fresh) {
     fs.mkdirSync(path.dirname(cli.database), { recursive: true })
     fs.copyFileSync(cli.base, cli.database)
     fs.chmodSync(cli.database, 0o600)
   }
-  process.env.USE_LOCAL_DB = '1'
-  process.env.STOCKBOARD_DB_PATH = cli.database
+  // Every child (schema, lock holder, stages) inherits only the pinned paths.
+  const stageEnvironment = jpRepairStageEnvironment(process.env, {
+    database: cli.database, servingCache: cli.servingCache, analog: cli.analog,
+  })
+  for (const name of JP_REPAIR_STAGE_UNSET_ENVIRONMENT) delete process.env[name]
+  Object.assign(process.env, stageEnvironment)
   if (fresh) {
     // Fixture-only schema preparation and hydration happen before the measured
     // maintenance lease. Production already contains these tables and data.
@@ -1360,17 +1396,20 @@ async function main(): Promise<void> {
       throw new Error(`fixture schema initialization failed: ${schema.stderr || schema.stdout}`)
     }
     hydrateScreenerInputs(cli.database, cli.metadata)
-    hydrateApiServingCache(path.join(path.dirname(cli.database), 'api-serving-cache.sqlite'))
+    hydrateApiServingCache(cli.servingCache)
     checkpointNativeWriter(cli.database)
   }
   const parentLock = await startMaintenanceLockHolder(cli.database)
   try {
     let receipt = fs.existsSync(cli.receipt)
       ? readReceipt(cli.receipt)
-      : await initialize(cli, official, sourceTree, head)
+      : await initialize(cli, official, sourceTree, head, nodeModulesLockSha256)
     if (fresh) checkpointNativeWriter(cli.database)
     if (receipt.sourceTreeSha256 !== sourceTree) {
       throw new Error('rehearsal source tree changed; rerun with --reset instead of mixing revisions')
+    }
+    if (receipt.nodeModulesLockSha256 !== nodeModulesLockSha256) {
+      throw new Error('rehearsal installed dependencies changed; rerun with --reset instead of mixing dependency sets')
     }
     const gitCommitSha = assertJpRepairExecutionCommit(receipt, head)
     writeReceipt(cli.receipt, receipt)
@@ -1390,9 +1429,7 @@ async function main(): Promise<void> {
     if (tickers.length !== 4_061) throw new Error(`unexpected affected ticker count: ${tickers.length}`)
 
   const common = {
-    ...process.env,
-    USE_LOCAL_DB: '1',
-    STOCKBOARD_DB_PATH: cli.database,
+    ...stageEnvironment,
     SKIP_SCHEMA_ENSURE: '1',
     TICKERS: tickers.join(','),
     STOCKBOARD_PARENT_MAINTENANCE_OWNER: parentLock.owner,
@@ -1507,7 +1544,7 @@ async function main(): Promise<void> {
       command: stageCommand('scripts/rehearse-jp-repair-cache-purge.ts', [
         '--database', cli.database,
         '--target-date', TARGET_DATE,
-        '--api-serving-cache', path.join(path.dirname(cli.database), 'api-serving-cache.sqlite'),
+        '--api-serving-cache', cli.servingCache,
         '--output', path.join(path.dirname(cli.database), 'serving-cache-purge-receipt.json'),
         '--apply',
       ]),
@@ -1541,7 +1578,7 @@ async function main(): Promise<void> {
       ]),
     },
     { name: 'coverage_verified', command: stageCommand('scripts/guard-data-freshness.ts'), env: { DATA_FRESHNESS_GUARD_DRY_RUN: '1' } },
-    { name: 'analog', command: stageCommand('scripts/build-analog-sequence-index.ts', ['JP', 'full']), env: { ANALOG_JP_DB_PATH: cli.analog, ANALOG_HIGH_PRIORITY: '1' } },
+    { name: 'analog', command: stageCommand('scripts/build-analog-sequence-index.ts', ['JP', 'full']), env: { ANALOG_HIGH_PRIORITY: '1' } },
     {
       name: 'ml_serving_current',
       command: stageCommand('scripts/run-ml-serving-fast.ts'),
@@ -1649,6 +1686,10 @@ async function main(): Promise<void> {
       stderrTail,
       chunks: stage.chunks ? chunkReceipts : undefined,
     }
+    if (item.status === 'PASS') {
+      // Never persist PASS for work performed by a changed checkout or dependency set.
+      assertRevisionUnchanged(gitCommitSha, sourceTree, nodeModulesLockSha256)
+    }
     receipt.stages = [...receipt.stages.filter((prior) => prior.name !== stage.name), item]
     receipt.status = item.status === 'PASS' ? 'DERIVED_PENDING' : 'HOLD'
     writeReceipt(cli.receipt, receipt)
@@ -1697,6 +1738,7 @@ async function main(): Promise<void> {
       createdAt: new Date().toISOString(),
       gitCommitSha,
       sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
       officialEvidence: { path: fs.realpathSync(cli.official), sha256: fileSha256(cli.official) },
       providerContentSha256: official.sourceContract.contentSha256,
       priceBasisEvidence,
@@ -1719,7 +1761,7 @@ async function main(): Promise<void> {
       forwardReturnEvidence,
       finalChecks: pendingChecks,
     }
-    assertRevisionUnchanged(gitCommitSha, sourceTree)
+    assertRevisionUnchanged(gitCommitSha, sourceTree, nodeModulesLockSha256)
     writeJsonAtomic(packagePath, approvalPackage)
     const approvalPackageSha256 = fileSha256(packagePath)
     const completed = new DatabaseSync(cli.database)
@@ -1756,13 +1798,14 @@ async function main(): Promise<void> {
     receipt.approvalPackageSha256 = approvalPackageSha256
     writeReceipt(cli.receipt, receipt)
     const validationPath = path.join(path.dirname(cli.receipt), 'validation-receipt.json')
-    assertRevisionUnchanged(gitCommitSha, sourceTree)
+    assertRevisionUnchanged(gitCommitSha, sourceTree, nodeModulesLockSha256)
     writeJsonAtomic(validationPath, {
       version: 1,
       status: 'PASS',
       createdAt: new Date().toISOString(),
       gitCommitSha,
       sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
       executionReceiptSha256: fileSha256(cli.receipt),
       approvalPackageSha256,
       source: receipt.source,

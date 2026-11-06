@@ -52,6 +52,20 @@ export function jpRepairRuntimeSourceTreeSha256(cwd = process.cwd()): string {
   return createHash('sha256').update(manifest).digest('hex')
 }
 
+// Installed dependency identity: npm's hidden lockfile, which npm rewrites on
+// every install, is bound as approval/deploy-time evidence. The node_modules
+// tree itself is not hashed. The file must be a regular file, not a symlink.
+export function jpRepairNodeModulesLockSha256(cwd: string): string {
+  const file = path.join(cwd, 'node_modules', '.package-lock.json')
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error(`${file} is not a regular file`)
+    return createHash('sha256').update(fs.readFileSync(descriptor)).digest('hex')
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}
+
 // Provenance of a compiled web build. next build also compiles app/ and
 // components/, so the whole tracked tree (not only the runtime pathspecs) must
 // equal HEAD and no untracked executable source may exist anywhere. Under the

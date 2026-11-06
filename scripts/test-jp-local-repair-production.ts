@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -41,13 +41,19 @@ import {
   verifyStockboardBuildManifest,
   writeStockboardBuildManifest,
 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
+import { jpRepairStageEnvironment } from '@/lib/jp-ohlcv-repair-stage-environment'
 import {
+  assertLaunchdServiceAbsent,
   createLaunchdWriterHoldDriver,
   listLoadedLaunchdLabels,
   readLaunchdWorkingDirectory,
   type CommandRunner,
   type LaunchdRuntimeIdentity,
 } from '@/lib/storage/launchd-writer-hold-driver'
+import {
+  quarantineInSameDirectory,
+  restoreFromSameDirectoryQuarantine,
+} from '@/lib/storage/same-directory-quarantine'
 import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
 import { bindValidateOnlyReceipts, persistFinalValidationReceipt } from './rehearse-jp-local-repair-derived'
 
@@ -214,7 +220,7 @@ type Fixture = {
   // What `launchctl print` reports for a loaded job, when it is not the
   // approved plist/program/WorkingDirectory.
   jobs: Map<string, LoadedJobOverride>
-  heads: Map<string, { gitHead: string; sourceTreeSha256: string }>
+  heads: Map<string, { gitHead: string; sourceTreeSha256: string; nodeModulesLockSha256: string }>
   rehearsalReceipt: string
 }
 
@@ -228,7 +234,8 @@ type RehearsalMutation = Partial<Record<'execution' | 'validation' | 'package' |
 // approval-package.json, then the PASS execution receipt naming it, then the
 // validation receipt naming both, then validate-only's final receipt naming all.
 function writeRehearsal(directory: string, approval: Pick<JpRepairProductionApproval,
-  'gitCommitSha' | 'runtimeSourceTreeSha256' | 'plan' | 'evidence'>, mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
+  'gitCommitSha' | 'runtimeSourceTreeSha256' | 'nodeModulesLockSha256' | 'plan' | 'evidence'>,
+mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
   const rehearsal = path.join(directory, 'rehearsal')
   fs.mkdirSync(rehearsal, { recursive: true })
   const write = (name: string, document: RehearsalDocument, change?: (value: RehearsalDocument) => void): string => {
@@ -245,6 +252,7 @@ function writeRehearsal(directory: string, approval: Pick<JpRepairProductionAppr
     approvalSha256: approval.plan.approvalSha256 }
   const approvalPackageSha256 = write('approval-package.json', {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
+    nodeModulesLockSha256: approval.nodeModulesLockSha256,
     officialEvidence: { sha256: approval.evidence.officialEvidenceSha256 },
     providerContentSha256: approval.evidence.providerContentSha256,
     repairPlan: { ...repairPlan },
@@ -253,17 +261,20 @@ function writeRehearsal(directory: string, approval: Pick<JpRepairProductionAppr
   }, mutate.package)
   const executionReceiptSha256 = write('rehearsal-receipt.json', {
     version: 1, status: 'PASS', database: rehearsedDatabase.realpath, gitCommitSha: approval.gitCommitSha,
-    sourceTreeSha256: approval.runtimeSourceTreeSha256, source, stages, approvalPackageSha256,
+    sourceTreeSha256: approval.runtimeSourceTreeSha256,
+    nodeModulesLockSha256: approval.nodeModulesLockSha256, source, stages, approvalPackageSha256,
   }, mutate.execution)
   const databaseIdentity = { database: { ...rehearsedDatabase, size: 1, sha256: 'd'.repeat(64) }, walBytes: 0 }
   const analogIdentity = { database: { realpath: path.join(rehearsal, 'analog.db'), inode: 43, size: 1, sha256: 'a'.repeat(64) }, walBytes: 0 }
   const validationReceiptSha256 = write('validation-receipt.json', {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
+    nodeModulesLockSha256: approval.nodeModulesLockSha256,
     executionReceiptSha256, approvalPackageSha256, source, stageCount: stages.length, sourcePhase: 'derived_complete',
     databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
   }, mutate.validation)
   const finalValidationReceiptSha256 = write(JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME, {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
+    nodeModulesLockSha256: approval.nodeModulesLockSha256,
     repairPlan: { ...repairPlan }, executionReceiptSha256, validationReceiptSha256, approvalPackageSha256, source,
     sourcePhase: 'derived_complete', stages: structuredClone(stages),
     databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
@@ -334,19 +345,22 @@ function createFixture(name: string): Fixture {
   // Observed Git state per WorkingDirectory; web also seals its compiled build
   // and the deploy script's build manifest inside it.
   const provenance = { gitCommitSha: 'f'.repeat(40), runtimeSourceTreeSha256: 'e'.repeat(64) }
-  const heads = new Map<string, { gitHead: string; sourceTreeSha256: string }>()
+  const nodeModulesLockSha256 = '9'.repeat(64)
+  const heads = new Map<string, { gitHead: string; sourceTreeSha256: string; nodeModulesLockSha256: string }>()
   const runtimes = JP_REPAIR_TRIGGER_RUNTIME_LABELS.map((label): JpRepairRuntimeIdentity => {
     const workingDirectory = path.join(directory, 'runtime', label)
-    heads.set(workingDirectory, { gitHead: provenance.gitCommitSha, sourceTreeSha256: provenance.runtimeSourceTreeSha256 })
+    heads.set(workingDirectory, { gitHead: provenance.gitCommitSha, sourceTreeSha256: provenance.runtimeSourceTreeSha256,
+      nodeModulesLockSha256 })
     if (label !== 'com.stockboard.web') {
-      return { label, kind: 'GIT_WORKTREE', workingDirectory, gitHead: provenance.gitCommitSha, artifacts: [] }
+      return { label, kind: 'GIT_WORKTREE', workingDirectory, gitHead: provenance.gitCommitSha, nodeModulesLockSha256,
+        artifacts: [] }
     }
     const tree = path.join(workingDirectory, '.next-live')
     fs.mkdirSync(path.join(tree, 'server', 'app'), { recursive: true })
     fs.writeFileSync(path.join(tree, 'BUILD_ID'), 'build-1')
     fs.writeFileSync(path.join(tree, 'server', 'app', 'page.js'), 'compiled-1\n')
     writeStockboardBuildManifest(tree, provenance)
-    return { label, kind: 'GIT_WORKTREE', workingDirectory, gitHead: provenance.gitCommitSha,
+    return { label, kind: 'GIT_WORKTREE', workingDirectory, gitHead: provenance.gitCommitSha, nodeModulesLockSha256,
       artifacts: [{ type: 'TREE', path: tree, sha256: jpRepairCompiledTreeSha256(tree) }] }
   })
   const loaded = new Set(JP_REPAIR_SERVICE_LABELS.filter((label) => label !== 'com.stockboard.us-ml-weekly'))
@@ -379,6 +393,7 @@ function createFixture(name: string): Fixture {
   const stat = fs.statSync(database)
   const bound = {
     ...provenance,
+    nodeModulesLockSha256: '8'.repeat(64),
     plan: { targetDate, approvalSha256: plan.approvalSha256, preservedConflictKeys: plan.preservedConflictKeys },
     evidence: {
       providerContentSha256: 'c'.repeat(64),
@@ -389,7 +404,7 @@ function createFixture(name: string): Fixture {
     },
   }
   const approval: JpRepairProductionApproval = {
-    version: 3,
+    version: 4,
     action: JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION,
     operator: 'yoshio',
     approvedAt: '2026-11-06T00:00:00.000Z',
@@ -450,19 +465,24 @@ function preflightInput(fixture: Fixture, overrides: Partial<JpRepairPreflightIn
     now: Date.parse('2026-11-06T01:00:00.000Z'),
     gitCommitSha: () => fixture.approval.gitCommitSha,
     runtimeSourceTreeSha256: () => fixture.approval.runtimeSourceTreeSha256,
+    nodeModulesLockSha256: () => '8'.repeat(64),
     inspectStorageVolumeUuid: () => 'volume-uuid',
     inspectDatabase: () => inspect(fixture.database),
     createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, {
       run: fixture.run, uid: 501, verifyLoadedJob: true,
     }),
+    assertServiceAbsent: (service) => assertLaunchdServiceAbsent(service, { run: fixture.run, uid: 501 }),
     listLoadedServiceLabels: () => listLoadedLaunchdLabels(JP_REPAIR_SERVICE_LABEL_PREFIX, { run: fixture.run, uid: 501 }),
-    inspectRuntime: (service) => {
-      const workingDirectory = readLaunchdWorkingDirectory(service, { run: fixture.run, uid: 501 })
-      const git = workingDirectory ? fixture.heads.get(workingDirectory) : undefined
-      return { workingDirectory, gitHead: git?.gitHead ?? null, sourceTreeSha256: git?.sourceTreeSha256 ?? null }
-    },
+    inspectRuntime: (service) => observedRuntime(fixture, service, fixture.run),
     ...overrides,
   }
+}
+
+function observedRuntime(fixture: Fixture, service: LaunchdRuntimeIdentity, run: CommandRunner) {
+  const workingDirectory = readLaunchdWorkingDirectory(service, { run, uid: 501 })
+  const git = workingDirectory ? fixture.heads.get(workingDirectory) : undefined
+  return { workingDirectory, gitHead: git?.gitHead ?? null, sourceTreeSha256: git?.sourceTreeSha256 ?? null,
+    nodeModulesLockSha256: git?.nodeModulesLockSha256 ?? null }
 }
 
 async function holdReasons(input: JpRepairPreflightInput): Promise<string[]> {
@@ -486,11 +506,32 @@ async function testPreflight(): Promise<void> {
   })
   assert.deepEqual(await holdReasons(preflightInput(fixture, { expectedApprovalSha256: executeSha })),
     ['APPROVAL_INVALID'])
-  // v2 predates the build manifest contract and is never accepted.
-  const v2Sha = writeApproval(fixture, { ...fixture.approval, version: 2 as unknown as 3 })
-  assert.deepEqual(await holdReasons(preflightInput(fixture, { expectedApprovalSha256: v2Sha })),
-    ['APPROVAL_INVALID'], 'an old v2 approval')
+  // v2 predates the build manifest contract and v3 the absent-service and
+  // dependency contract; neither is accepted.
+  for (const version of [2, 3]) {
+    const oldSha = writeApproval(fixture, { ...fixture.approval, version: version as unknown as 4 })
+    assert.deepEqual(await holdReasons(preflightInput(fixture, { expectedApprovalSha256: oldSha })),
+      ['APPROVAL_INVALID'], `an old v${version} approval`)
+  }
   writeApproval(fixture, fixture.approval)
+
+  // Installed dependencies: the preflight checkout and each Git runtime.
+  assert.deepEqual(await holdReasons(preflightInput(fixture, { nodeModulesLockSha256: () => '0'.repeat(64) })),
+    ['RUNTIME_DEPENDENCY_MISMATCH'])
+  assert.deepEqual(await holdReasons(preflightInput(fixture, { nodeModulesLockSha256: () => {
+    throw new Error('ENOENT: node_modules/.package-lock.json')
+  } })), ['RUNTIME_DEPENDENCY_MISMATCH'])
+  const lockless = writeApproval(fixture, { ...fixture.approval, nodeModulesLockSha256: undefined as unknown as string })
+  assert.deepEqual(await holdReasons(preflightInput(fixture, { expectedApprovalSha256: lockless })),
+    ['RUNTIME_DEPENDENCY_MISMATCH', 'REHEARSAL_RECEIPT_MISMATCH'],
+    'an approval without dependency evidence')
+  writeApproval(fixture, fixture.approval)
+  const runtimeDirectory = fixture.approval.runtimes[1]!.workingDirectory!
+  const runtimeHead = fixture.heads.get(runtimeDirectory)!
+  fixture.heads.set(runtimeDirectory, { ...runtimeHead, nodeModulesLockSha256: '0'.repeat(64) })
+  assert.deepEqual(await holdReasons(preflightInput(fixture)), ['RUNTIME_IDENTITY_MISMATCH'],
+    'a runtime reinstalled other dependencies')
+  fixture.heads.set(runtimeDirectory, runtimeHead)
 
   // Expiry and an over-long validity window.
   assert.deepEqual(await holdReasons(preflightInput(fixture, { now: Date.parse('2026-11-06T06:00:00.000Z') })),
@@ -676,11 +717,7 @@ async function testContractBindings(): Promise<void> {
   }
   assert.deepEqual(await holdReasons(preflightInput(fixture, {
     createServiceObserver: (services) => createLaunchdWriterHoldDriver(services, { run: pathless, uid: 501, verifyLoadedJob: true }),
-    inspectRuntime: (service) => {
-      const workingDirectory = readLaunchdWorkingDirectory(service, { run: pathless, uid: 501 })
-      const git = workingDirectory ? fixture.heads.get(workingDirectory) : undefined
-      return { workingDirectory, gitHead: git?.gitHead ?? null, sourceTreeSha256: git?.sourceTreeSha256 ?? null }
-    },
+    inspectRuntime: (service) => observedRuntime(fixture, service, pathless),
   })), ['SERVICE_IDENTITY_MISMATCH', 'RUNTIME_IDENTITY_MISMATCH'], 'a loaded job without a path holds')
   await expect(undefined, [], 'the approved loaded jobs pass')
 
@@ -921,6 +958,7 @@ async function testRehearsalReceipts(): Promise<void> {
   const finalCases: Array<[(document: RehearsalDocument) => void, string]> = [
     [(document) => { document.gitCommitSha = '0'.repeat(40) }, 'final at another revision'],
     [(document) => { document.sourceTreeSha256 = '0'.repeat(64) }, 'final from another source tree'],
+    [(document) => { document.nodeModulesLockSha256 = '0'.repeat(64) }, 'final from another dependency set'],
     [(document) => { document.status = 'HOLD' }, 'final not PASS'],
     [(document) => { document.version = 2 }, 'final of another version'],
     [(document) => { document.executionReceiptSha256 = '0'.repeat(64) }, 'final names another execution receipt'],
@@ -981,6 +1019,7 @@ function testRehearsalContracts(): void {
 
   const receipt: JpRepairFinalValidationReceipt = {
     version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: 'e'.repeat(64), repairPlan: bound,
+    nodeModulesLockSha256: 'f'.repeat(64),
     executionReceiptSha256: '2'.repeat(64), validationReceiptSha256: '3'.repeat(64), approvalPackageSha256: '4'.repeat(64),
     source: { approvalSha256 }, sourcePhase: 'derived_complete',
     stages: [{ name: 'snapshots', status: 'PASS' }], databaseIdentity: { walBytes: 0 }, analogIdentity: { walBytes: 0 },
@@ -991,6 +1030,7 @@ function testRehearsalContracts(): void {
   assert.equal(verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), true, 'an identical rerun verifies')
   for (const [other, note] of [
     [{ ...receipt, gitCommitSha: '0'.repeat(40) }, 'another revision'],
+    [{ ...receipt, nodeModulesLockSha256: '0'.repeat(64) }, 'another installed dependency set'],
     [{ ...receipt, databaseIdentity: { walBytes: 1 } }, 'another database'],
     [{ ...receipt, executionReceiptSha256: '0'.repeat(64) }, 'another execution receipt'],
   ] as const) {
@@ -1011,6 +1051,7 @@ function testRehearsalContracts(): void {
 function testValidateOnlyWiring(): void {
   const commit = 'a'.repeat(40)
   const sourceTree = 'b'.repeat(64)
+  const nodeModulesLockSha256 = 'd'.repeat(64)
   const approvalSha256 = 'c'.repeat(64)
   const source = { receiptId: 1, approvalSha256, approved: 1 }
   const stages = [{ name: 'snapshots', status: 'PASS' }, { name: 'analog', status: 'PASS' }]
@@ -1032,23 +1073,27 @@ function testValidateOnlyWiring(): void {
     fs.writeFileSync(files.plan, `${JSON.stringify({ approvalSha256, approvedMissingKeys: ['1301:2026-07-17'] })}\n`)
     const approvalPackage = {
       version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
       repairPlan: { path: files.plan, sha256: sha256(fs.readFileSync(files.plan)), approvalSha256 },
       sourceIdentity: source, stages,
     }
     fs.writeFileSync(files.package, json(approvalPackage))
     const execution = {
       status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree, source, stages,
+      nodeModulesLockSha256,
       approvalPackageSha256: sha256(fs.readFileSync(files.package)),
     }
     fs.writeFileSync(files.receipt, json(execution))
     fs.writeFileSync(files.validation, json({
       version: 1, status: 'PASS', gitCommitSha: commit, sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
       executionReceiptSha256: sha256(fs.readFileSync(files.receipt)),
       approvalPackageSha256: execution.approvalPackageSha256, source, stageCount: stages.length,
       sourcePhase: 'derived_complete', databaseIdentity: identity, analogIdentity: identity,
     }))
     const bind = (head = commit) => bindValidateOnlyReceipts({
       database: files.database, receipt: files.receipt, gitHeadSha: head, sourceTreeSha256: sourceTree,
+      nodeModulesLockSha256,
     })
     return { files, approvalPackage, execution, bind }
   }
@@ -1116,6 +1161,212 @@ function testValidateOnlyWiring(): void {
   assert.throws(() => legacy.bind(), /no captured Git commit/, 'execution receipt from before gitCommitSha')
 }
 
+const US_EARNINGS = 'com.stockboard.us-earnings'
+
+function sql(database: string, statement: string): void {
+  const db = new DatabaseSync(database)
+  try { db.exec(statement) } finally { db.close() }
+}
+
+function usEarningsPlist(fixture: Fixture): string {
+  return fixture.services.find((service) => service.label === US_EARNINGS)!.plistPath
+}
+
+// us-earnings is not installed: it stays in the required list as an approved
+// absence bound to its exact expected plist path.
+function approveUsEarningsAbsent(fixture: Fixture): void {
+  const plistPath = usEarningsPlist(fixture)
+  fs.rmSync(plistPath)
+  fixture.loaded.delete(US_EARNINGS)
+  fixture.approval.services = fixture.approval.services.map((service) => service.label === US_EARNINGS
+    ? { label: US_EARNINGS, absent: true as const, plistPath } : service)
+  writeApproval(fixture, fixture.approval)
+}
+
+async function testApprovedAbsentService(): Promise<void> {
+  const fixture = createFixture('absent')
+  const expect = async (expectedApprovalSha256: string | undefined, codes: string[], note: string) => {
+    assert.deepEqual(await holdReasons(preflightInput(fixture, expectedApprovalSha256 ? { expectedApprovalSha256 } : {})),
+      codes, note)
+    writeApproval(fixture, fixture.approval)
+  }
+  const plist = usEarningsPlist(fixture)
+  fs.renameSync(plist, `${plist}.moved`)
+  fixture.loaded.delete(US_EARNINGS)
+  await expect(undefined, ['SERVICE_IDENTITY_MISMATCH'], 'a missing service approved as present is never skipped')
+  fs.renameSync(`${plist}.moved`, plist)
+  approveUsEarningsAbsent(fixture)
+  await expect(undefined, [], 'an approved absence with no plist and no loaded job passes')
+  assert.equal(JP_REPAIR_SERVICE_LABELS.includes(US_EARNINGS), true, 'us-earnings stays in the required contract')
+  await expect(rewrite(fixture, (approval) => ({
+    ...approval, services: approval.services.filter((service) => service.label !== US_EARNINGS),
+  })), ['SERVICE_SET_MISMATCH'], 'dropping the service is not an absence approval')
+
+  // The definition appears (file or dangling symlink) or the label loads.
+  fs.writeFileSync(plist, 'reinstalled\n')
+  await expect(undefined, ['APPROVED_ABSENT_SERVICE_PRESENT'], 'the plist appeared')
+  fs.rmSync(plist)
+  fs.symlinkSync(path.join(root, 'nowhere.plist'), plist)
+  await expect(undefined, ['APPROVED_ABSENT_SERVICE_PRESENT'], 'a dangling symlink at the plist path')
+  fs.unlinkSync(plist)
+  assert.equal(fs.lstatSync(plist, { throwIfNoEntry: false }), undefined)
+  fixture.loaded.add(US_EARNINGS)
+  await expect(undefined, ['UNKNOWN_LOADED_SERVICE', 'APPROVED_ABSENT_SERVICE_PRESENT'], 'the absent label is loaded')
+  fixture.loaded.delete(US_EARNINGS)
+  fixture.loaded.add('com.stockboard.new-db-writer')
+  await expect(undefined, ['UNKNOWN_LOADED_SERVICE'], 'an unknown loaded label still holds')
+  fixture.loaded.delete('com.stockboard.new-db-writer')
+
+  // The exact expected path: basename, LaunchAgents directory, absolute.
+  const relocated = (plistPath: string) => rewrite(fixture, (approval) => {
+    approval.services = approval.services.map((service) => service.label === US_EARNINGS
+      ? { label: US_EARNINGS, absent: true as const, plistPath } : service)
+    return approval
+  })
+  for (const [other, note] of [
+    [path.join(path.dirname(plist), 'com.stockboard.other.plist'), 'another basename'],
+    [path.join(root, 'elsewhere', `${US_EARNINGS}.plist`), 'another directory'],
+    [`LaunchAgents/${US_EARNINGS}.plist`, 'a relative path'],
+  ] as const) {
+    await expect(relocated(other), ['APPROVED_ABSENT_SERVICE_PRESENT'], note)
+  }
+  // Absence is approvable for us-earnings only, and only as `absent: true`.
+  const monitor = 'com.stockboard.dev-capacity-monitor'
+  await expect(rewrite(fixture, (approval) => {
+    approval.services = approval.services.map((service) => service.label === monitor
+      ? { label: monitor, absent: true as const, plistPath: (service as LaunchdRuntimeIdentity).plistPath } : service)
+    return approval
+  }), ['SERVICE_SET_MISMATCH', 'UNKNOWN_LOADED_SERVICE', 'APPROVED_ABSENT_SERVICE_PRESENT'], 'absence of another label')
+  await expect(rewrite(fixture, (approval) => {
+    approval.services = approval.services.map((service) => service.label === US_EARNINGS
+      ? { label: US_EARNINGS, absent: 'yes', plistPath: plist } as unknown as LaunchdRuntimeIdentity : service)
+    return approval
+  }), ['SERVICE_IDENTITY_MISMATCH'], 'a non-boolean absent flag is a present service')
+  const denied: CommandRunner = (file, args, timeoutMs) => file === '/bin/launchctl' && args[0] === 'print'
+    ? { status: 5, signal: null, stdout: '', stderr: 'Operation not permitted' } : fixture.run(file, args, timeoutMs)
+  assert.throws(() => assertLaunchdServiceAbsent({ label: US_EARNINGS, plistPath: plist }, { run: denied, uid: 501 }),
+    /LAUNCHCTL_PRINT_FAILED/, 'an unreadable launchd state is not absence')
+}
+
+function testQuarantinePrimitive(): void {
+  const directory = path.join(root, 'quarantine')
+  fs.mkdirSync(directory)
+  const original = path.join(directory, 'stockboard.db')
+  sql(original, "CREATE TABLE t(v TEXT); INSERT INTO t VALUES('sealed')")
+  const stat = fs.statSync(original)
+  const identity = { originalPath: original, quarantinedPath: path.join(directory, '.stockboard.db.q'),
+    dev: Number(stat.dev), inode: Number(stat.ino) }
+  const before = sha256(fs.readFileSync(original))
+  const replaceWithCopy = (file: string) => {
+    fs.copyFileSync(file, `${file}.copy`)
+    fs.renameSync(`${file}.copy`, file)
+  }
+
+  for (const suffix of ['-wal', '-shm', '-journal']) {
+    fs.writeFileSync(`${original}${suffix}`, '')
+    assert.throws(() => quarantineInSameDirectory(identity), /QUARANTINE_COMPANION_PRESENT/, suffix)
+    fs.rmSync(`${original}${suffix}`)
+  }
+  assert.throws(() => quarantineInSameDirectory({ ...identity, quarantinedPath: path.join(root, '.elsewhere') }),
+    /QUARANTINE_NOT_SAME_DIRECTORY/)
+  fs.symlinkSync(directory, path.join(root, 'quarantine-link'))
+  assert.throws(() => quarantineInSameDirectory({ ...identity,
+    originalPath: path.join(root, 'quarantine-link', 'stockboard.db'),
+    quarantinedPath: path.join(root, 'quarantine-link', '.stockboard.db.q') }), /QUARANTINE_DIRECTORY_NOT_REALPATH/)
+  assert.throws(() => quarantineInSameDirectory({ ...identity, inode: identity.inode + 1 }), /QUARANTINE_IDENTITY_MISMATCH/)
+  fs.linkSync(original, path.join(directory, 'alias.db'))
+  assert.throws(() => quarantineInSameDirectory(identity), /QUARANTINE_LINK_COUNT_MISMATCH/, 'a hard-linked database')
+  fs.rmSync(path.join(directory, 'alias.db'))
+  fs.writeFileSync(identity.quarantinedPath, 'occupied')
+  assert.throws(() => quarantineInSameDirectory(identity), /EEXIST/, 'an existing target is never replaced')
+  assert.equal(fs.readFileSync(identity.quarantinedPath, 'utf8'), 'occupied')
+  fs.rmSync(identity.quarantinedPath)
+  assert.equal(sha256(fs.readFileSync(original)), before, 'refused quarantines changed nothing')
+
+  const quarantine = quarantineInSameDirectory(identity)
+  assert.equal(fs.existsSync(original), false)
+  assert.equal(fs.statSync(identity.quarantinedPath).ino, stat.ino)
+  assert.throws(() => restoreFromSameDirectoryQuarantine({
+    ...quarantine,
+    originalPath: path.join(root, 'other', 'stockboard.db'),
+  }), /QUARANTINE_NOT_SAME_DIRECTORY/, 'restore revalidates the same-directory contract')
+  fs.writeFileSync(`${identity.quarantinedPath}-wal`, '')
+  assert.throws(() => restoreFromSameDirectoryQuarantine(quarantine), /QUARANTINE_COMPANION_PRESENT/)
+  fs.rmSync(`${identity.quarantinedPath}-wal`)
+  sql(original, 'SELECT 1')
+  assert.throws(() => restoreFromSameDirectoryQuarantine(quarantine), /EEXIST/, 'a recreated original path')
+  assert.equal(sha256(fs.readFileSync(identity.quarantinedPath)), before, 'the refused restore changed nothing')
+  fs.rmSync(original)
+  restoreFromSameDirectoryQuarantine(quarantine)
+  assert.equal(sha256(fs.readFileSync(original)), before)
+  assert.equal(fs.statSync(original).ino, stat.ino)
+  assert.equal(fs.existsSync(identity.quarantinedPath), false)
+
+  const drifted = quarantineInSameDirectory(identity)
+  replaceWithCopy(drifted.quarantinedPath)
+  assert.throws(() => restoreFromSameDirectoryQuarantine(drifted), /QUARANTINE_IDENTITY_MISMATCH/, 'inode drift')
+  assert.equal(fs.existsSync(original), false, 'a refused restore is not retried or forced')
+}
+
+function testStageEnvironment(): void {
+  const directory = path.join(root, 'stage-env')
+  fs.mkdirSync(directory)
+  const paths = {
+    database: path.join(directory, 'stockboard.db'),
+    servingCache: path.join(directory, 'stockboard-serving-cache.db'),
+    analog: path.join(directory, 'analog-jp.db'),
+  }
+  const caller: NodeJS.ProcessEnv = {
+    ...process.env, LOCAL_DB_PATH: '/Volumes/production/stockboard.db',
+    US_ANALYTICS_DB_PATH: '/Volumes/production/stockboard-us.db', STOCKBOARD_DB_PATH: '/Volumes/production/stockboard.db',
+    SERVING_CACHE_DB_PATH: '/Volumes/production/stockboard-serving-cache.db',
+    ANALOG_JP_DB_PATH: '/Volumes/production/analog-jp.db',
+    ANALOG_US_DB_PATH: '/Volumes/production/analog-us.db',
+    MA_TRAJECTORY_SHADOW_DB_PATH: '/Volumes/production/ma-trajectory-shadow.db',
+    MA_TRAJECTORY_SHADOW_DB_PATH_JP: '/Volumes/production/ma-trajectory-shadow-jp.db',
+    STOCKBOARD_SOURCE_DB_PATH: '/Volumes/production/source.db',
+    READONLY_SQLITE_DB_PATH: '/Volumes/production/readonly.db',
+    PHASE16D_SOURCE_FIXTURE_DB: '/Volumes/production/phase16d.db',
+    STOCKBOARD_DB_ROLE: 'us-analytics',
+    TURSO_DATABASE_URL: 'libsql://production.example.invalid',
+    TURSO_AUTH_TOKEN: 'secret',
+  }
+  const env = jpRepairStageEnvironment(caller, paths)
+  assert.deepEqual([env.STOCKBOARD_DB_PATH, env.SERVING_CACHE_DB_PATH, env.ANALOG_JP_DB_PATH, env.USE_LOCAL_DB],
+    [paths.database, paths.servingCache, paths.analog, '1'])
+  for (const name of ['LOCAL_DB_PATH', 'US_ANALYTICS_DB_PATH', 'ANALOG_US_DB_PATH', 'MA_TRAJECTORY_SHADOW_DB_PATH',
+    'MA_TRAJECTORY_SHADOW_DB_PATH_JP', 'STOCKBOARD_SOURCE_DB_PATH', 'READONLY_SQLITE_DB_PATH',
+    'PHASE16D_SOURCE_FIXTURE_DB', 'STOCKBOARD_DB_ROLE', 'TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN']) {
+    assert.equal(name in env, false, `leaked ${name} is removed`)
+  }
+  assert.equal(caller.LOCAL_DB_PATH, '/Volumes/production/stockboard.db', 'the caller environment is not mutated')
+  for (const [change, note] of [
+    [{ analog: path.join(directory, 'analog-jp.sqlite') }, 'the old analog basename'],
+    [{ servingCache: path.join(directory, 'api-serving-cache.sqlite') }, 'the old serving cache basename'],
+    [{ database: 'stockboard.db' }, 'a relative database path'],
+  ] as const) {
+    assert.throws(() => jpRepairStageEnvironment(caller, { ...paths, ...change }), /production basenames/, note)
+  }
+  // What the stage libraries actually resolve under that environment.
+  const resolved = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    const load = async (file, name) => { const module = await import(file); return module[name] ?? module.default[name] }
+    const localDbPath = await load('./lib/db/client.ts', 'localDbPath')
+    const servingCache = await load('./lib/api/serving-cache.ts', 'resolveServingCacheDbPath')
+    const analog = await load('./lib/db/analog-sequence-index.ts', 'resolveAnalogSequenceIndexPath')
+    console.log(JSON.stringify([localDbPath, servingCache(), analog('JP')]))
+  `], { cwd: process.cwd(), env: { ...env, SKIP_SCHEMA_ENSURE: '1' }, encoding: 'utf8' })
+  assert.equal(resolved.status, 0, resolved.stderr)
+  assert.deepEqual(JSON.parse(resolved.stdout.trim().split('\n').at(-1)!),
+    [paths.database, paths.servingCache, paths.analog].map((file) => fs.realpathSync(path.dirname(file)) + path.sep
+      + path.basename(file)))
+  // The rehearsal uses it for every child and re-checks the revision per stage.
+  const rehearsal = fs.readFileSync(path.resolve('scripts/rehearse-jp-local-repair-derived.ts'), 'utf8')
+  assert.doesNotMatch(rehearsal, /api-serving-cache\.sqlite|analog-jp\.sqlite/)
+  assert.match(rehearsal, /const common = \{\n {4}\.\.\.stageEnvironment,/)
+  assert.match(rehearsal,
+    /if \(item\.status === 'PASS'\)[\s\S]*assertRevisionUnchanged\(gitCommitSha, sourceTree, nodeModulesLockSha256\)[\s\S]*receipt\.stages =/)
+}
+
 async function main(): Promise<void> {
   try {
     testRuntimeManifest()
@@ -1125,6 +1376,9 @@ async function main(): Promise<void> {
     await testRehearsalReceipts()
     testRehearsalContracts()
     testValidateOnlyWiring()
+    await testApprovedAbsentService()
+    testQuarantinePrimitive()
+    testStageEnvironment()
     console.log('JP local repair production readiness tests: PASS')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

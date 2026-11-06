@@ -7,6 +7,10 @@ import path from 'node:path'
 // @ts-expect-error Node 24 ships node:sqlite; the repository pins older Node type declarations.
 import { DatabaseSync } from 'node:sqlite'
 import { assertNoUnauthorizedDatabaseHandles } from '@/lib/storage/launchd-writer-hold-driver'
+import {
+  quarantineInSameDirectory,
+  restoreFromSameDirectoryQuarantine,
+} from '@/lib/storage/same-directory-quarantine'
 
 const mode = process.argv[2] ?? 'parent'
 const dbPath = process.env.STOCKBOARD_DB_PATH ?? ''
@@ -27,13 +31,6 @@ function assertNoDatabaseHandles(database: string): void {
     approvedReaders: [],
     timeoutMs: 10_000,
   })
-}
-
-function restoreQuarantinedDatabase(original: string, quarantined: string): void {
-  fs.linkSync(quarantined, original)
-  syncDirectory(path.dirname(original))
-  fs.unlinkSync(quarantined)
-  syncDirectory(path.dirname(original))
 }
 
 async function verifyQuarantineBoundary(directory: string): Promise<void> {
@@ -66,22 +63,24 @@ async function verifyQuarantineBoundary(directory: string): Promise<void> {
 
   const originalStat = fs.statSync(original)
   assert.equal(originalStat.dev, fs.statSync(directory).dev)
-  fs.renameSync(original, quarantined)
-  syncDirectory(directory)
+  const quarantine = quarantineInSameDirectory({
+    originalPath: original, quarantinedPath: quarantined, dev: Number(originalStat.dev), inode: Number(originalStat.ino),
+  })
   assert.equal(fs.existsSync(original), false)
   assert.equal(fs.statSync(quarantined).ino, originalStat.ino)
   assert.equal(fileSha256(quarantined), before)
 
   const accidental = new DatabaseSync(original)
   accidental.close()
-  assert.throws(() => restoreQuarantinedDatabase(original, quarantined), /EEXIST/)
+  assert.throws(() => restoreFromSameDirectoryQuarantine(quarantine), /EEXIST/)
   assert.equal(fileSha256(quarantined), before)
   fs.unlinkSync(original)
-  restoreQuarantinedDatabase(original, quarantined)
+  restoreFromSameDirectoryQuarantine(quarantine)
   assert.equal(fileSha256(original), before)
+  assert.equal(fs.existsSync(quarantined), false)
 
-  fs.renameSync(original, quarantined)
-  fs.linkSync(quarantined, original)
+  // A crash between link and unlink leaves both names on one inode.
+  fs.linkSync(original, quarantined)
   syncDirectory(directory)
   assert.equal(fs.statSync(original).ino, fs.statSync(quarantined).ino, 'link-before-unlink is crash-recoverable')
   fs.unlinkSync(quarantined)
@@ -195,7 +194,8 @@ function runChild(childMode: string, environment: NodeJS.ProcessEnv): Promise<st
 
 async function parent(): Promise<void> {
   verifyDirectSqliteInitialization()
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-maintenance-boundary-'))
+  // realpath: the quarantine refuses a directory reached through a symlink.
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-maintenance-boundary-')))
   await verifyQuarantineBoundary(directory)
   const database = path.join(directory, 'fixture.sqlite')
   const fixture = new DatabaseSync(database)

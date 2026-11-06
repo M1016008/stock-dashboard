@@ -102,7 +102,7 @@ jobs:
         run: npm run test:us-parity:targeted
 
       - name: JP OHLCV local repair contracts
-        run: npx tsx scripts/test-jp-local-repair.ts && npx tsx scripts/test-jp-ohlcv-coverage.ts && npx tsx scripts/test-jp-local-repair-maintenance-boundary.ts
+        run: npm run test:jp-local-repair-production && npx tsx scripts/test-jp-local-repair.ts && npx tsx scripts/test-jp-ohlcv-coverage.ts && npx tsx scripts/test-jp-local-repair-maintenance-boundary.ts
 
       - name: TypeScript
         run: npx tsc --noEmit
