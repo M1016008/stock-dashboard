@@ -29,6 +29,18 @@ function parseHorizons(value: string | undefined, fallback: number[]): number[] 
 }
 
 const HORIZONS = parseHorizons(process.env.FORWARD_RETURN_HORIZONS, DEFAULT_HORIZONS)
+const RECOMPUTE_FROM_DATE = process.env.FORWARD_RETURN_RECOMPUTE_FROM_DATE?.trim() || null
+const RECOMPUTE_TO_DATE = process.env.FORWARD_RETURN_RECOMPUTE_TO_DATE?.trim() || null
+
+for (const [name, value] of [
+  ['FORWARD_RETURN_RECOMPUTE_FROM_DATE', RECOMPUTE_FROM_DATE],
+  ['FORWARD_RETURN_RECOMPUTE_TO_DATE', RECOMPUTE_TO_DATE],
+] as const) {
+  if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`invalid ${name}: ${value}`)
+}
+if (RECOMPUTE_TO_DATE && !RECOMPUTE_FROM_DATE) {
+  throw new Error('FORWARD_RETURN_RECOMPUTE_TO_DATE requires FORWARD_RETURN_RECOMPUTE_FROM_DATE')
+}
 
 function parsePositiveInt(value: string | undefined): number | null {
   if (!value?.trim()) return null
@@ -53,12 +65,18 @@ async function computeForwardReturnsForHorizon(horizon: number, tickers: string[
   const deleteTickerWhere = tickers?.length
     ? `AND ticker IN (${tickers.map(() => '?').join(', ')})`
     : ''
+  const dateWhere = RECOMPUTE_FROM_DATE
+    ? `AND date >= ? ${RECOMPUTE_TO_DATE ? 'AND date <= ?' : ''}`
+    : ''
+  const dateArgs = RECOMPUTE_FROM_DATE
+    ? [RECOMPUTE_FROM_DATE, ...(RECOMPUTE_TO_DATE ? [RECOMPUTE_TO_DATE] : [])]
+    : []
   const projectionArgs: Array<string | number> = [...(tickers ?? []), horizon, horizon, horizon]
 
   const results = await client.batch([
     {
-      sql: `DELETE FROM forward_returns WHERE horizon_days = ? ${deleteTickerWhere}`,
-      args: [horizon, ...(tickers ?? [])],
+      sql: `DELETE FROM forward_returns WHERE horizon_days = ? ${deleteTickerWhere} ${dateWhere}`,
+      args: [horizon, ...(tickers ?? []), ...dateArgs],
     },
     {
       sql: `
@@ -84,8 +102,10 @@ async function computeForwardReturnsForHorizon(horizon: number, tickers: string[
         AND future_close > 0
         AND future_date IS NOT NULL
         AND return_pct IS NOT NULL
+        ${RECOMPUTE_FROM_DATE ? 'AND date >= ?' : ''}
+        ${RECOMPUTE_TO_DATE ? 'AND date <= ?' : ''}
     `,
-      args: [horizon, ...projectionArgs],
+      args: [horizon, ...projectionArgs, ...dateArgs],
     },
   ], 'write')
 
@@ -120,7 +140,8 @@ async function main() {
 
   console.log(
     `Forward returns 計算開始: ${tickers.length} 銘柄 / horizons=${HORIZONS.join(',')}` +
-    (chunkedTickerLists ? ` / tickerChunk=${TICKER_CHUNK_SIZE}` : ''),
+    (chunkedTickerLists ? ` / tickerChunk=${TICKER_CHUNK_SIZE}` : '') +
+    (RECOMPUTE_FROM_DATE ? ` / dates=${RECOMPUTE_FROM_DATE}..${RECOMPUTE_TO_DATE ?? 'latest'}` : ''),
   )
   const startTime = Date.now()
 

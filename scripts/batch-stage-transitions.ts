@@ -13,7 +13,7 @@
 
 import { db, client } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
-import { acquireExclusiveUpdateLock, type UpdateLockHandle } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock, assertActiveUpdateLockOwner, type UpdateLockHandle } from '@/lib/server/update-lock'
 import { eq } from 'drizzle-orm'
 
 const LOCK_POLL_MS = Math.max(5_000, Number(process.env.STAGE_TRANSITIONS_LOCK_POLL_SECONDS ?? 15) * 1_000)
@@ -24,6 +24,19 @@ function wait(milliseconds: number): Promise<void> {
 }
 
 async function acquireLockOrWait(): Promise<UpdateLockHandle> {
+  const parentOwner = process.env.STOCKBOARD_PARENT_MAINTENANCE_OWNER
+  if (parentOwner) {
+    const assertParent = async (): Promise<void> => {
+      await assertActiveUpdateLockOwner('db_maintenance', parentOwner)
+    }
+    await assertParent()
+    return {
+      jobType: 'db_maintenance',
+      owner: parentOwner,
+      heartbeat: assertParent,
+      release: async () => undefined,
+    }
+  }
   const startedAt = Date.now()
   let lastNoticeAt = 0
   while (Date.now() - startedAt < LOCK_WAIT_MS) {

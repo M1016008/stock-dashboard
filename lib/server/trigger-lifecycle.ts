@@ -159,6 +159,25 @@ function event(row: EventRow): TriggerLifecycleEvent {
   }
 }
 
+let supersessionColumnAvailable = false
+
+// Production LaunchAgents run with SKIP_SCHEMA_ENSURE=1, so the normal path
+// must keep working before the repair column is migrated. Without the column
+// no evaluation can be superseded, so omitting the filter is equivalent.
+export async function triggerEvaluationSupersessionAvailable(): Promise<boolean> {
+  if (supersessionColumnAvailable) return true
+  const row = await execGet<{ present: number }>(
+    "SELECT 1 AS present FROM pragma_table_info('trigger_evaluations') WHERE name='superseded_by_evaluation_id'",
+  )
+  supersessionColumnAvailable = Boolean(row?.present)
+  return supersessionColumnAvailable
+}
+
+async function activeEvaluationFilter(alias?: string): Promise<string> {
+  if (!await triggerEvaluationSupersessionAvailable()) return ''
+  return ` AND ${alias ? `${alias}.` : ''}superseded_by_evaluation_id IS NULL`
+}
+
 async function evaluationContext(evaluationId: string): Promise<EvaluationContextRow> {
   if (!UUID_PATTERN.test(evaluationId)) throw new TriggerLifecycleEvaluationNotFoundError()
   const row = await execGet<EvaluationContextRow>(`
@@ -177,7 +196,7 @@ async function previousEvaluation(current: EvaluationContextRow): Promise<Evalua
            evaluation_config_signature, resolved_as_of, status
     FROM trigger_evaluations
     WHERE definition_id=? AND evaluation_version=? AND engine_version=? AND score_version=?
-      AND evaluation_config_signature=? AND status='COMPLETED' AND resolved_as_of < ?
+      AND evaluation_config_signature=? AND status='COMPLETED' AND resolved_as_of < ?${await activeEvaluationFilter()}
     ORDER BY resolved_as_of DESC, completed_at DESC, created_at DESC
     LIMIT 1
   `, [
@@ -198,7 +217,7 @@ export async function getPreviousEvaluationMemberTickers(input: {
   const previous = await execGet<{ id: string }>(`
     SELECT id FROM trigger_evaluations
     WHERE definition_id=? AND evaluation_version=? AND engine_version=? AND score_version=?
-      AND evaluation_config_signature=? AND status='COMPLETED' AND resolved_as_of < ?
+      AND evaluation_config_signature=? AND status='COMPLETED' AND resolved_as_of < ?${await activeEvaluationFilter()}
     ORDER BY resolved_as_of DESC, completed_at DESC, created_at DESC LIMIT 1
   `, [input.definitionId, input.evaluationVersion, input.engineVersion, input.scoreVersion,
     input.evaluationConfigSignature, input.resolvedAsOf])
@@ -266,6 +285,7 @@ export async function deriveAndPersistTriggerLifecycle(evaluationId: string): Pr
     return summarize(current.id, null, [])
   }
 
+  const historyFilter = await activeEvaluationFilter('evaluations')
   const [previousRows, currentRows, observationRows, historyRows] = await Promise.all([
     execAll<MemberRow>('SELECT ticker, trigger_status, trigger_score, price FROM trigger_evaluation_members WHERE evaluation_id=?', [previous.id]),
     execAll<MemberRow>('SELECT ticker, trigger_status, trigger_score, price FROM trigger_evaluation_members WHERE evaluation_id=?', [current.id]),
@@ -278,7 +298,7 @@ export async function deriveAndPersistTriggerLifecycle(evaluationId: string): Pr
       WHERE evaluations.definition_id=? AND evaluations.evaluation_version=?
         AND evaluations.engine_version=? AND evaluations.score_version=?
         AND evaluations.evaluation_config_signature=? AND evaluations.status='COMPLETED'
-        AND evaluations.resolved_as_of < ?
+        AND evaluations.resolved_as_of < ?${historyFilter}
       GROUP BY members.ticker
     `, [current.definition_id, current.evaluation_version, current.engine_version,
       current.score_version, current.evaluation_config_signature, current.resolved_as_of]),

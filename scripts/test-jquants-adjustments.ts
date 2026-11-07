@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict'
 import {
   hasJQuantsCorporateAction,
+  isJQuantsNoTradeRow,
   isLikelyJQuantsCorporateActionBoundary,
   shouldApplyJQuantsLegacyAdjustment,
+  type JQuantsDailyProviderRow,
 } from '@/lib/jquants'
+
+const noTradeRow: JQuantsDailyProviderRow = {
+  Date: '2026-07-17', Code: '99990',
+  O: null, H: null, L: null, C: null, UL: null, LL: null, Vo: null, Va: null,
+  AdjFactor: 1, AdjO: null, AdjH: null, AdjL: null, AdjC: null, AdjVo: null,
+}
+assert.equal(isJQuantsNoTradeRow(noTradeRow), true)
+assert.equal(isJQuantsNoTradeRow({ ...noTradeRow, C: 100 }), false)
 
 assert.equal(hasJQuantsCorporateAction(1), false)
 assert.equal(hasJQuantsCorporateAction(null), false)

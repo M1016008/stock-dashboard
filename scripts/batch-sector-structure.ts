@@ -10,7 +10,7 @@ import {
   type SectorStructureGroupRecord,
   type SectorStructureSourceRow,
 } from '@/lib/sector-structure-series'
-import { acquireExclusiveUpdateLock, type UpdateLockHandle } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock, assertInheritedUpdateLockOwner, type UpdateLockHandle } from '@/lib/server/update-lock'
 import { eq } from 'drizzle-orm'
 
 const LOOKBACK_DATES = Math.max(25, Math.min(180, Number(process.env.SECTOR_STRUCTURE_LOOKBACK_DAYS ?? 90)))
@@ -122,6 +122,17 @@ async function writeGroups(groups: SectorStructureGroupRecord[], lock: UpdateLoc
 async function main(): Promise<void> {
   await ensureReady()
   const skipLock = process.env.SECTOR_STRUCTURE_SKIP_LOCK === '1'
+  const legacyMaintenanceOwner = process.env.STOCKBOARD_PARENT_MAINTENANCE_OWNER?.trim() ?? ''
+  const parentOwner = process.env.STOCKBOARD_PARENT_UPDATE_LOCK_OWNER?.trim() || legacyMaintenanceOwner
+  const parentJobType = process.env.STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE?.trim()
+    || (legacyMaintenanceOwner ? 'db_maintenance' : '')
+  if (skipLock) {
+    await assertInheritedUpdateLockOwner(
+      parentJobType,
+      parentOwner,
+      ['db_maintenance', 'post_ohlcv_refresh', 'update_latest'],
+    )
+  }
   const lock = skipLock ? null : await acquireExclusiveUpdateLock('sector_structure')
   if (!skipLock && !lock) throw new Error('sector structure aggregation deferred: another update writer is active')
 

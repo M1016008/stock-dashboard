@@ -107,6 +107,18 @@ async function outbox(id: string): Promise<OutboxDeliveryRow> {
   return row
 }
 
+async function outboxSupersededByRepair(batchId: string): Promise<boolean> {
+  const row = await execGet<{ present: number }>(`
+    SELECT EXISTS(
+      SELECT 1 FROM trigger_evaluation_batches original
+      JOIN trigger_evaluation_batches repair
+        ON repair.resolved_as_of=original.resolved_as_of AND repair.source='DAILY_REPAIR'
+      WHERE original.id=?
+    ) AS present
+  `, [batchId])
+  return Boolean(row?.present)
+}
+
 function emptyPerformance(startedAt: number, outboxReadMs: number): NotificationDeliveryResult['performance'] {
   return {
     outboxReadMs,
@@ -208,7 +220,14 @@ async function claimOutbox(input: {
                 status='SENDING', send_attempt_count=send_attempt_count+1,
                 delivery_profile_id=?, delivery_provider='GMAIL',
                 delivery_retryable=NULL, delivery_started_at=?, last_error_category=NULL
-              WHERE id=? AND status=?`,
+              WHERE id=? AND status=?
+                AND NOT EXISTS (
+                  -- A same-date DAILY_REPAIR batch supersedes this outbox's batch.
+                  SELECT 1 FROM trigger_evaluation_batches original
+                  JOIN trigger_evaluation_batches repair
+                    ON repair.resolved_as_of=original.resolved_as_of AND repair.source='DAILY_REPAIR'
+                  WHERE original.id=notification_outbox.batch_id
+                )`,
         args: [input.profile.id, input.nowSeconds, input.row.id, status] as InValue[],
       })
       if (Number(claimed.rowsAffected ?? 0) !== 1) {
@@ -307,6 +326,9 @@ export async function deliverNotificationOutboxItem(input: {
   const outboxReadMs = performance.now() - readStartedAt
   if (initial.status === 'SENT' || initial.status === 'SENDING' || initial.status === 'CANCELLED') {
     if (initial.status === 'CANCELLED') throw new NotificationDeliveryServiceError('OUTBOX_CANCELLED')
+    return existingResult(initial, startedAt, outboxReadMs)
+  }
+  if (await outboxSupersededByRepair(initial.batch_id)) {
     return existingResult(initial, startedAt, outboxReadMs)
   }
   if (initial.status === 'FAILED'

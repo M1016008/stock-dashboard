@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execGet } from '@/lib/db/client'
+import { client, execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
@@ -19,6 +19,7 @@ import {
 } from '@/lib/server/update-lock'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import { loadOpenJpOhlcvCoverageIssueCounts } from '@/lib/jp-ohlcv-coverage'
 
 type DateRow = { date: string | null }
 type EpochRow = { value: number | null }
@@ -796,6 +797,25 @@ async function main(): Promise<void> {
   )
 
   const actions: Action[] = []
+  const jpCoverageIssues = await loadOpenJpOhlcvCoverageIssueCounts(client)
+  // Known protected conflicts are reported separately so they can never mask
+  // a newly missing row, fetch failure, or unapproved conflict.
+  actions.push({
+    key: 'jp-historical-coverage',
+    label: 'JP historical OHLCV coverage',
+    state: jpCoverageIssues.newIssues === 0 ? 'fresh' : 'deferred',
+    reason: jpCoverageIssues.newIssues === 0
+      ? 'no unresolved historical coverage issue outside known protected conflicts'
+      : `fetchFailed=${jpCoverageIssues.fetchFailed}, missing=${jpCoverageIssues.missing}, unexpectedProtectedConflicts=${jpCoverageIssues.unexpectedProtectedConflicts}; manual repair required`,
+  })
+  actions.push({
+    key: 'jp-protected-conflicts',
+    label: 'JP protected OHLCV conflicts',
+    state: jpCoverageIssues.protectedConflicts === 0 ? 'fresh' : 'deferred',
+    reason: jpCoverageIssues.protectedConflicts === 0
+      ? 'no protected conflict awaiting adjudication'
+      : `protectedConflicts=${jpCoverageIssues.protectedConflicts}; existing rows preserved, separate adjudication required`,
+  })
   const writerReservations = [
     ...activeLocks,
     ...heavyMlReservations,
@@ -905,6 +925,7 @@ async function main(): Promise<void> {
     dates: { jp: jpDates, us: usDates },
     usAutomation,
     usCoverageHealth,
+    jpCoverageIssues,
     sources,
     weekly,
     weeklySchedulePolicy,

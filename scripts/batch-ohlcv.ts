@@ -21,17 +21,30 @@
 //   - 失敗銘柄は batch_runs.error_summary に記録、バッチは続行
 
 import { spawn } from 'node:child_process'
-import { db, execAll, execGet, execRun } from '@/lib/db/client'
-import { ohlcvDaily, batchRuns, jquantsDailyCoverage, jquantsSyncRuns } from '@/lib/db/schema'
+import { client, db, execAll, execGet, execRun } from '@/lib/db/client'
+import { ohlcvDaily, batchRuns, jquantsSyncRuns } from '@/lib/db/schema'
 import {
   fetchJQuantsDaily,
-  fetchJQuantsDailyByDate,
+  fetchJQuantsDailyByDateEnvelope,
   hasJQuantsCorporateAction,
   isLikelyJQuantsCorporateActionBoundary,
   shouldApplyJQuantsLegacyAdjustment,
   type JQuantsDailyByDateRow,
 } from '@/lib/jquants'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
+import {
+  JpOhlcvProtectedConflictError,
+  isJpOhlcvProtectedConflictKey,
+  protectedDatesForTicker,
+  sameJpOhlcvRow,
+  type JpOhlcvComparableRow,
+} from '@/lib/jp-ohlcv-repair-policy'
+import {
+  assertJpOhlcvCoverageSchema,
+  assertNoPendingJpOhlcvRepair,
+  recordJpOhlcvCoverageFailure,
+  recordJpOhlcvCoverageSuccess,
+} from '@/lib/jp-ohlcv-coverage'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
@@ -103,6 +116,30 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error('unreachable')
 }
 
+async function excludeProtectedConflictRows<T extends JpOhlcvComparableRow>(rows: T[]): Promise<{
+  rows: T[]
+  preservedConflictTickers: string[]
+}> {
+  const protectedRows = rows.filter(isJpOhlcvProtectedConflictKey)
+  const preservedConflictTickers: string[] = []
+  for (const row of protectedRows) {
+    const existing = await execGet<JpOhlcvComparableRow>(
+      'SELECT ticker,date,open,high,low,close,volume FROM ohlcv_daily WHERE ticker=? AND date=?',
+      [row.ticker, row.date],
+    )
+    if (!existing) {
+      throw new JpOhlcvProtectedConflictError(`protected OHLCV row is missing: ${row.ticker}:${row.date}`)
+    }
+    if (!sameJpOhlcvRow(existing, row)) {
+      preservedConflictTickers.push(row.ticker)
+    }
+  }
+  return {
+    rows: rows.filter((row) => !isJpOhlcvProtectedConflictKey(row)),
+    preservedConflictTickers,
+  }
+}
+
 async function fetchAndStoreForTicker(
   ticker: string,
   lastDate: string | null,
@@ -126,6 +163,11 @@ async function fetchAndStoreForTicker(
 
   if (data.length === 0) return 0
 
+  // Historical refreshes must never overwrite the two preserved 2026-07-17
+  // conflicts. A differing provider value is a visible HOLD, not an UPSERT.
+  const protectedPartition = await excludeProtectedConflictRows(data.map((row) => ({ ticker, ...row })))
+  const storeableData = protectedPartition.rows
+
   const providerStartDate = data[0].date
   const legacyAdjustmentFactor = options.legacyAdjustmentFactor
   let applyLegacyAdjustment = false
@@ -148,10 +190,20 @@ async function fetchAndStoreForTicker(
     })
   }
 
+  if (applyLegacyAdjustment) {
+    const protectedHistoryDates = protectedDatesForTicker(ticker)
+      .filter((date) => date < providerStartDate)
+    if (protectedHistoryDates.length > 0) {
+      throw new JpOhlcvProtectedConflictError(
+        `legacy adjustment would cross protected OHLCV row(s): ${protectedHistoryDates.join(',')}`,
+      )
+    }
+  }
+
   // チャンク分割で UPSERT (libSQL の SQL 長制限対策)
   const CHUNK = 200
-  for (let i = 0; i < data.length; i += CHUNK) {
-    const chunk = data.slice(i, i + CHUNK).map(d => ({ ticker, ...d }))
+  for (let i = 0; i < storeableData.length; i += CHUNK) {
+    const chunk = storeableData.slice(i, i + CHUNK)
     await withDbRetry(() =>
       db
         .insert(ohlcvDaily)
@@ -195,13 +247,18 @@ async function fetchAndStoreForTicker(
     )
   }
 
-  return data.length
+  return storeableData.length
 }
 
-async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
+async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<{
+  storedRows: number
+  preservedConflictTickers: string[]
+}> {
+  const protectedPartition = await excludeProtectedConflictRows(rows)
+  const storeableRows = protectedPartition.rows
   const CHUNK = 200
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK).map(({ adjustmentFactor: _adjustmentFactor, ...row }) => row)
+  for (let i = 0; i < storeableRows.length; i += CHUNK) {
+    const chunk = storeableRows.slice(i, i + CHUNK).map(({ adjustmentFactor: _adjustmentFactor, ...row }) => row)
     await withDbRetry(() =>
       db
         .insert(ohlcvDaily)
@@ -218,7 +275,10 @@ async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
         }),
     )
   }
-  return rows.length
+  return {
+    storedRows: storeableRows.length,
+    preservedConflictTickers: protectedPartition.preservedConflictTickers,
+  }
 }
 
 async function findCorporateActionBoundaryCandidates(targetDate: string): Promise<string[]> {
@@ -261,6 +321,11 @@ async function findCorporateActionBoundaryCandidates(targetDate: string): Promis
 
 async function main() {
   console.log(`SOURCE=jquants, HISTORY_FROM=${DEFAULT_FROM_DATE}, TARGET_DATE=${TARGET_DATE}, CONCURRENCY=${CONCURRENCY}, RATE_LIMIT=${RATE_LIMIT_MS}ms, FORCE_FULL_HISTORY=${FORCE_FULL_HISTORY}`)
+
+  // Coverage is part of the ingestion commit contract. Fail before creating a
+  // run or contacting the provider when a Production bootstrap is incomplete.
+  await assertJpOhlcvCoverageSchema(client)
+  await assertNoPendingJpOhlcvRepair(client)
 
   // 開始記録
   const [run] = await db
@@ -317,10 +382,21 @@ async function main() {
       })
       .returning({ id: jquantsSyncRuns.id })
 
+    let bulkStoredRows = 0
     try {
+      // Persist the unresolved attempt before provider I/O or OHLCV writes.
+      // A SIGKILL after any later step therefore cannot be hidden by a newer day.
+      await recordJpOhlcvCoverageFailure(client, {
+        date: TARGET_DATE,
+        detail: 'date-bulk ingestion started; completion evidence pending',
+      })
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
-      const rows = await fetchJQuantsDailyByDate(TARGET_DATE)
-      const inserted = await storeRows(rows)
+      const envelope = await fetchJQuantsDailyByDateEnvelope(TARGET_DATE)
+      const rows = envelope.rows
+      const stored = await storeRows(rows)
+      const inserted = stored.storedRows
+      bulkStoredRows = inserted
+      rowsInserted += inserted
       const explicitCorporateActionTickers = Array.from(new Set(
         rows
           .filter(row => hasJQuantsCorporateAction(row.adjustmentFactor))
@@ -335,28 +411,37 @@ async function main() {
       for (const ticker of corporateActionTickers) {
         const adjustmentFactor = rows.find(row => row.ticker === ticker)?.adjustmentFactor ?? null
         console.log(`${ticker}: adjustment factor detected; refreshing J-Quants adjusted full history`)
-        adjustedHistoryRows += await fetchAndStoreForTicker(ticker, null, {
+        const refreshedRows = await fetchAndStoreForTicker(ticker, null, {
           fullHistory: true,
           legacyAdjustmentFactor: adjustmentFactor,
         })
+        adjustedHistoryRows += refreshedRows
+        // Persist the exact completed work even if a later ticker fails.
+        rowsInserted += refreshedRows
       }
       const rowTickerSet = new Set(rows.map(r => r.ticker))
-      const missingTickers = tickers
-        .filter(t => !rowTickerSet.has(t.ticker))
-        .map(t => t.ticker)
+      const noTradeTickerSet = new Set(envelope.noTradeTickers)
+      const presentRows = await execAll<{ ticker: string }>(
+        'SELECT ticker FROM ohlcv_daily WHERE date = ?',
+        [TARGET_DATE],
+      )
+      const presentTickerSet = new Set(presentRows.map((row) => row.ticker))
+      const missingTickers = rows
+        .filter((row) => !presentTickerSet.has(row.ticker))
+        .map((row) => row.ticker)
+      const satisfiedTickers = [
+        ...rows.filter((row) => presentTickerSet.has(row.ticker)).map((row) => row.ticker),
+        ...envelope.noTradeTickers,
+      ]
 
-      rowsInserted += inserted + adjustedHistoryRows
       succeeded += Math.max(0, tickers.length - missingTickers.length)
-      await db
-        .insert(jquantsDailyCoverage)
-        .values({ date: TARGET_DATE, expectedRows: rows.length })
-        .onConflictDoUpdate({
-          target: jquantsDailyCoverage.date,
-          set: {
-            expectedRows: sql`excluded.expected_rows`,
-            importedAt: sql`unixepoch()`,
-          },
-        })
+      await recordJpOhlcvCoverageSuccess(client, {
+        date: TARGET_DATE,
+        expectedRows: rows.length,
+        missingTickers,
+        protectedConflictTickers: stored.preservedConflictTickers,
+        satisfiedTickers,
+      })
       await db
         .update(jquantsSyncRuns)
         .set({
@@ -370,21 +455,44 @@ async function main() {
       console.log(
         `J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}, corporateActions=${explicitCorporateActionTickers.length}, boundaryCandidates=${boundaryCorporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
       )
-      tickers = tickers.filter(t => !rowTickerSet.has(t.ticker))
+      tickers = tickers.filter(t => !rowTickerSet.has(t.ticker) && !noTradeTickerSet.has(t.ticker))
       if (tickers.length > 0 && !ENABLE_MISSING_FALLBACK) {
         console.log(`missing ${tickers.length} tickers after date bulk; per-ticker fallback is disabled`)
         tickers = []
       }
     } catch (err) {
-      console.warn(`J-Quants date bulk をスキップ: ${err instanceof Error ? err.message : String(err)}`)
+      const errorSummary = err instanceof Error ? err.message : String(err)
+      console.warn(`J-Quants date bulk をスキップ: ${errorSummary}`)
+      try {
+        await recordJpOhlcvCoverageFailure(client, { date: TARGET_DATE, detail: errorSummary })
+      } catch (coverageError) {
+        console.error('J-Quants coverage failure could not be persisted:', coverageError)
+      }
       await db
         .update(jquantsSyncRuns)
         .set({
-          status: 'failed',
+          importedRows: bulkStoredRows,
+          status: bulkStoredRows > 0 ? 'partial' : 'failed',
           finishedAt: new Date(),
-          errorSummary: err instanceof Error ? err.message : String(err),
+          errorSummary,
         })
         .where(eq(jquantsSyncRuns.id, syncRun.id))
+      if (err instanceof JpOhlcvProtectedConflictError) {
+        errors.push(`protected_conflict: ${errorSummary}`)
+        await db
+          .update(batchRuns)
+          .set({
+            finishedAt: new Date(),
+            status: bulkStoredRows > 0 ? 'partial' : 'failed',
+            totalTickers: initialTickerCount,
+            succeeded: bulkStoredRows,
+            failed: 1,
+            rowsInserted,
+            errorSummary: JSON.stringify(errors.slice(0, 10)),
+          })
+          .where(eq(batchRuns.id, runId))
+        throw err
+      }
     }
   }
   let nextIndex = 0

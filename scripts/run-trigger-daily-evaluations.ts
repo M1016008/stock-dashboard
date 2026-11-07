@@ -11,7 +11,8 @@ function argumentValue(name: string): string | undefined {
 async function main(): Promise<void> {
   const requestedAsOf = argumentValue('--as-of')
   const dryRun = process.argv.includes('--dry-run')
-  const result = await runDailyTriggerEvaluations({ requestedAsOf, dryRun })
+  const repairKey = argumentValue('--repair-key')
+  const result = await runDailyTriggerEvaluations({ requestedAsOf, dryRun, repairKey })
   console.log(JSON.stringify({
     dryRun: result.dryRun,
     reusedBatch: result.reusedBatch,

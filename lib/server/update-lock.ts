@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { client, ensureReady, execAll, execGet, localDbPath } from '@/lib/db/client'
 
 export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 45 * 60
 export const EXCLUSIVE_UPDATE_JOB_TYPES = [
@@ -81,8 +81,28 @@ function processExists(pid: number): boolean {
   }
 }
 
+function ownerProcessExists(owner: string): boolean {
+  const pid = localOwnerPid(owner)
+  if (!pid || !processExists(pid)) return false
+  const ownerStartedAt = Number(owner.split(':')[2])
+  if (!Number.isFinite(ownerStartedAt)) return true
+  try {
+    const startedAt = Date.parse(execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+      timeout: 5_000,
+    }).trim())
+    // A process holding the lease must have existed before the lease was acquired.
+    return !Number.isFinite(startedAt) || startedAt <= ownerStartedAt + 2_000
+  } catch {
+    // An inconclusive identity audit must not reclaim an active lease.
+    return true
+  }
+}
+
 const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/(?:update-latest|refresh-after-ohlcv|batch-ohlcv|batch-snapshots|batch-physical-momentum|build-dashboard-cache)\.(?:ts|js)\b/,
+  /scripts\/(?:batch-(?:features|weekly-ohlcv|monthly-ma-monitor|technical-signals|forward-returns|pattern-stats|signal-stats|signal-return-stats)|build-(?:serving-backtest|serving-stock|historical-universe|analog-sequence-index)|backfill-(?:valuation-serving|integrated-screener)|rehearse-jp-repair-|audit-jp-repair-)\S*\.(?:ts|js)\b/,
   /scripts\/(?:update-us-latest|batch-us-|run-us-ml-job)\S*\.(?:ts|js)\b/,
   /scripts\/(?:run-ml-learning|guard-ml-freshness|batch-ml-|build-serving-ml-)\S*\.(?:ts|js)\b/,
   /scripts\/(?:batch-forward-extrema|batch-earnings(?:-times)?|build-serving-|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
@@ -129,6 +149,18 @@ function hasActiveSqliteWriterProcess(): boolean {
   try {
     const rows = processRows()
     const currentFamily = currentProcessFamilyPids(rows)
+    const usesLocalDatabase = process.env.USE_LOCAL_DB === '1' || !process.env.TURSO_DATABASE_URL
+    if (usesLocalDatabase) {
+      const audit = spawnSync('lsof', [
+        '-t', '--', localDbPath, `${localDbPath}-wal`, `${localDbPath}-shm`,
+      ], { encoding: 'utf8', timeout: 5_000 })
+      if (audit.error || audit.signal || (audit.status !== 0 && audit.status !== 1)) return true
+      const databasePids = audit.stdout
+        .split('\n')
+        .map((value) => Number(value.trim()))
+        .filter((pid) => Number.isInteger(pid) && pid > 0)
+      return databasePids.some((pid) => !currentFamily.has(pid))
+    }
     return rows.some((row) => (
       !currentFamily.has(row.pid)
       && SQLITE_WRITER_PROCESS_PATTERNS.some((pattern) => pattern.test(row.command))
@@ -181,8 +213,7 @@ export async function cleanupOrphanedUpdateLocks(jobTypes: readonly string[]): P
         owner: row.owner == null ? null : String(row.owner),
       }))
       .filter((row) => {
-        const pid = localOwnerPid(row.owner)
-        return row.jobType && row.owner && pid && !processExists(pid)
+        return row.jobType && row.owner && !ownerProcessExists(row.owner)
       })
     if (orphaned.length === 0) return 0
     const foundationJobTypes = new Set([
@@ -324,18 +355,30 @@ export async function acquireUpdateLock(
   let heartbeatInFlight: Promise<void> | null = null
   const heartbeat = (): Promise<void> => {
     if (heartbeatInFlight) return heartbeatInFlight
-    heartbeatInFlight = client.execute({
-      sql: `
-        UPDATE update_locks
-        SET heartbeat_at = unixepoch(),
-            lease_expires_at = unixepoch() + ?
-        WHERE job_type = ?
-          AND owner = ?
-          AND status = 'running'
-      `,
-      args: [leaseSeconds, jobType, owner],
-    })
-      .then(() => undefined)
+    heartbeatInFlight = (async () => {
+      for (let attempt = 1; attempt <= busyRetries; attempt += 1) {
+        try {
+          const result = await client.execute({
+            sql: `
+              UPDATE update_locks
+              SET heartbeat_at = unixepoch(),
+                  lease_expires_at = unixepoch() + ?
+              WHERE job_type = ?
+                AND owner = ?
+                AND status = 'running'
+            `,
+            args: [leaseSeconds, jobType, owner],
+          })
+          if (Number(result.rowsAffected ?? 0) !== 1) {
+            throw new Error(`Update lock ${jobType} ownership was lost`)
+          }
+          return
+        } catch (error) {
+          if (!isSqliteBusyError(error) || attempt >= busyRetries) throw error
+          await wait(Math.min(5_000, attempt * 500))
+        }
+      }
+    })()
       .finally(() => {
         heartbeatInFlight = null
       })
@@ -433,6 +476,28 @@ export async function getUpdateLock(jobType: string): Promise<UpdateLockSnapshot
     : null
 }
 
+export async function assertActiveUpdateLockOwner(
+  jobType: string,
+  expectedOwner: string,
+): Promise<UpdateLockSnapshot> {
+  const snapshot = await getUpdateLock(jobType)
+  if (!snapshot?.active || snapshot.owner !== expectedOwner) {
+    throw new Error(`${jobType} lease identity does not match its parent process`)
+  }
+  return snapshot
+}
+
+export async function assertInheritedUpdateLockOwner(
+  jobType: string,
+  expectedOwner: string,
+  allowedJobTypes: readonly string[],
+): Promise<UpdateLockSnapshot> {
+  if (!expectedOwner || !allowedJobTypes.includes(jobType)) {
+    throw new Error(`update lock inheritance is not allowed for ${jobType || 'an unspecified job'}`)
+  }
+  return assertActiveUpdateLockOwner(jobType, expectedOwner)
+}
+
 export async function getActiveUpdateLocks(jobTypes?: readonly string[]): Promise<UpdateLockSnapshot[]> {
   await cleanupExpiredUpdateLocks(jobTypes)
   const where = jobTypes && jobTypes.length > 0
@@ -502,8 +567,7 @@ export async function cleanupExpiredUpdateLocks(jobTypes?: readonly string[]): P
     for (const row of candidates.rows) {
       const jobType = String(row.job_type ?? '')
       const owner = row.owner == null ? null : String(row.owner)
-      const pid = localOwnerPid(owner)
-      if (!jobType || !owner || !pid || processExists(pid)) continue
+      if (!jobType || !owner || ownerProcessExists(owner)) continue
       writerAudit ??= hasActiveSqliteWriterProcess()
       if (writerAudit) continue
       const orphaned = await client.execute({

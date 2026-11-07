@@ -60,7 +60,17 @@ async function main(): Promise<void> {
     tickerCount: tickers.length,
     databasePath: localDbPath,
   }))
-  const built = await buildTwoYearLineServingCache({ market, tickers, asOfDate: snapshotDate })
+  const pendingValue = process.env.TWO_YEAR_LINE_PENDING_SOURCE_RUN_ID?.trim()
+  const pendingSourceRunId = pendingValue ? Number(pendingValue) : undefined
+  if (pendingValue && (!Number.isInteger(pendingSourceRunId) || pendingSourceRunId! <= 0)) {
+    throw new Error('TWO_YEAR_LINE_PENDING_SOURCE_RUN_ID must be a positive integer')
+  }
+  const built = await buildTwoYearLineServingCache({
+    market,
+    tickers,
+    asOfDate: snapshotDate,
+    pendingSourceRunId,
+  })
   console.log(JSON.stringify({
     event: 'two_year_line_serving_complete',
     market,

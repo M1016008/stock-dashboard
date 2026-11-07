@@ -1,6 +1,19 @@
 import { calculateStageFromThreeMa } from '@/lib/stage-classification'
 
 export const MA_SEQUENCE_VERSION = 3
+// Deployed commit 034310b wrote version 2 with strict (epsilon-free) stage
+// comparisons. Only the one-time JP repair builds it, via an explicit pin.
+export const MA_SEQUENCE_LEGACY_STRICT_VERSION = 2
+
+export function resolveMaSequenceBuildVersion(pin: string | undefined): number {
+  const value = pin?.trim()
+  if (!value) return MA_SEQUENCE_VERSION
+  const version = Number(value)
+  if (version !== MA_SEQUENCE_VERSION && version !== MA_SEQUENCE_LEGACY_STRICT_VERSION) {
+    throw new Error(`unsupported analog build version pin ${value}`)
+  }
+  return version
+}
 export const MA_SEQUENCE_SCORE_VERSION = 10
 export const MA_SEQUENCE_PERIODS = [5, 25, 75, 200] as const
 export const MA_SEQUENCE_STAGE_PERIODS = [5, 10, 20, 40, 60, 90, 200] as const
@@ -49,6 +62,8 @@ export type MaSequencePrepared = {
   weekly: MaSequenceFrame
   monthly: MaSequenceFrame
   yearly: MaSequenceFrame
+  // Set only for the version-2 repair build: strict historical stage classification.
+  legacyStrictStages?: true
 }
 
 export type MaSequenceFrame = {
@@ -272,7 +287,10 @@ function buildCalendarFrame(
   return { step, periods, mas, bucketKeys, velocityIndexes }
 }
 
-export function prepareMaSequence(rows: MaSequencePriceRow[]): MaSequencePrepared {
+export function prepareMaSequence(
+  rows: MaSequencePriceRow[],
+  options: { legacyStrictStages?: boolean } = {},
+): MaSequencePrepared {
   const ordered = rows.filter((row) => row.date && finite(row.close) && row.close > 0)
   let needsSort = false
   for (let index = 1; index < ordered.length; index += 1) {
@@ -289,6 +307,7 @@ export function prepareMaSequence(rows: MaSequencePriceRow[]): MaSequencePrepare
     weekly: buildCalendarFrame(ordered, MA_SEQUENCE_WEEKLY_PERIODS, 'W', 4, 5),
     monthly: buildCalendarFrame(ordered, MA_SEQUENCE_MONTHLY_PERIODS, 'M', 3, 21),
     yearly: buildCalendarFrame(ordered, MA_SEQUENCE_YEARLY_PERIODS, 'Y', 1, 252),
+    ...(options.legacyStrictStages ? { legacyStrictStages: true as const } : {}),
   }
 }
 
@@ -325,11 +344,24 @@ function stageFromThree(a: number | null, b: number | null, c: number | null): n
   return calculateStageFromThreeMa(a, b, c) ?? 0
 }
 
-function frameStages(frame: MaSequenceFrame, index: number): number[] {
+// Historical version-2 classifier (commit 034310b), kept verbatim.
+function strictStageFromThree(a: number | null, b: number | null, c: number | null): number {
+  if (!finite(a) || !finite(b) || !finite(c)) return 0
+  if (a > b && b > c) return 1
+  if (b > a && a > c) return 2
+  if (b > c && c > a) return 3
+  if (c > b && b > a) return 4
+  if (c > a && a > b) return 5
+  if (a > c && c > b) return 6
+  return 0
+}
+
+function frameStages(prepared: MaSequencePrepared, frame: MaSequenceFrame, index: number): number[] {
+  const classify = prepared.legacyStrictStages ? strictStageFromThree : stageFromThree
   const currentMas = frame.mas.map((series) => series[index])
   const stages: number[] = []
   for (let periodIndex = 0; periodIndex + 2 < currentMas.length; periodIndex += 1) {
-    stages.push(stageFromThree(
+    stages.push(classify(
       currentMas[periodIndex],
       currentMas[periodIndex + 1],
       currentMas[periodIndex + 2],
@@ -348,7 +380,7 @@ function buildPointAt(
   return {
     date: prepared.rows[index].date,
     values,
-    stages: frameStages(frame, index),
+    stages: frameStages(prepared, frame, index),
   }
 }
 
@@ -1033,7 +1065,7 @@ export function maSequenceBandNeighbors(band: number, maxBitDistance = 1): numbe
 }
 
 export function stageCodeAt(prepared: MaSequencePrepared, index: number): string | null {
-  const stages = frameStages(prepared.stage, index)
+  const stages = frameStages(prepared, prepared.stage, index)
   if (stages.some((stage) => stage === 0)) return null
   return stages.join('')
 }

@@ -8,6 +8,10 @@ import {
   type SavedTriggerEvaluationConfig,
   type SavedTriggerViewConfig,
 } from '@/lib/trigger-definition'
+import {
+  TRIGGER_DAILY_EVALUATION_SOURCE,
+  TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE,
+} from '@/lib/trigger-daily-evaluation'
 import type { TriggerLifecycleEventType } from '@/lib/trigger-lifecycle'
 import {
   TRIGGER_LIFECYCLE_ALERT_SECTION_KEYS,
@@ -40,6 +44,7 @@ type BatchRow = {
   source: string
   resolved_as_of: string
   status: string
+  repair_present: number
 }
 
 type ItemRow = {
@@ -487,16 +492,46 @@ export async function composeTriggerNotificationsForBatch(input: {
     return result
   }
   const batch = await timedRead(() => execGet<BatchRow>(
-    'SELECT id, source, resolved_as_of, status FROM trigger_evaluation_batches WHERE id=?',
-    [input.batchId],
+    `SELECT id, source, resolved_as_of, status,
+       EXISTS(SELECT 1 FROM trigger_evaluation_batches repair
+         WHERE repair.source=? AND repair.resolved_as_of=batch.resolved_as_of) AS repair_present
+     FROM trigger_evaluation_batches batch WHERE id=?`,
+    [TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE, input.batchId],
   ))
   if (!batch) throw new TriggerNotificationBatchNotFoundError()
-  if (batch.source !== 'DAILY' || !TERMINAL_BATCH_STATUSES.has(batch.status)) {
+  const compositionRunId = randomUUID()
+  const nowSeconds = Math.floor((input.now?.() ?? Date.now()) / 1000)
+  if (batch.source === TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE || Number(batch.repair_present) === 1) {
+    // Repair-induced differences are never delivered, and once a same-date
+    // repair exists (any status) the original batch is superseded as well.
+    // Every request is recorded so suppression is durable and auditable; the
+    // original outbox rows stay untouched (delivery refuses to claim them).
+    await execRun(`INSERT INTO trigger_notification_composition_runs (
+      id, batch_id, notification_policy_version, started_at, completed_at, status,
+      created_count, reused_count, duration_ms, error_category
+    ) VALUES (?, ?, ?, ?, unixepoch(), 'SUPPRESSED', 0, 0, ?, ?)`, [
+      compositionRunId, batch.id, TRIGGER_NOTIFICATION_POLICY_VERSION, nowSeconds,
+      performance.now() - totalStartedAt,
+      batch.source === TRIGGER_DAILY_REPAIR_EVALUATION_SOURCE
+        ? 'repair_reevaluation_suppressed' : 'superseded_by_repair',
+    ])
+    return {
+      batchId: batch.id,
+      resolvedAsOf: batch.resolved_as_of,
+      notificationPolicyVersion: TRIGGER_NOTIFICATION_POLICY_VERSION,
+      notifications: [],
+      createdCount: 0,
+      reusedCount: 0,
+      performance: {
+        sourceReadQueryCount, sourceReadMs, renderMs: 0, outboxWriteMs: 0,
+        totalMs: performance.now() - totalStartedAt,
+      },
+    }
+  }
+  if (batch.source !== TRIGGER_DAILY_EVALUATION_SOURCE || !TERMINAL_BATCH_STATUSES.has(batch.status)) {
     throw new TriggerNotificationBatchNotReadyError(batch.status)
   }
 
-  const compositionRunId = randomUUID()
-  const nowSeconds = Math.floor((input.now?.() ?? Date.now()) / 1000)
   await execRun(`INSERT INTO trigger_notification_composition_runs (
     id, batch_id, notification_policy_version, started_at, status
   ) VALUES (?, ?, ?, ?, 'RUNNING')`, [

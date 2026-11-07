@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 // @ts-expect-error Node 22 provides node:sqlite; the installed @types/node version predates it.
 import { DatabaseSync } from 'node:sqlite'
 import {
@@ -7,7 +11,21 @@ import {
   buildMaValuesFromOhlcv,
 } from '@/lib/hex-stage'
 import { stageFromThreeMa } from '@/lib/timeframes'
-import { stageCodeAt, type MaSequenceFrame, type MaSequencePrepared } from '@/lib/ml/ma-sequence'
+import {
+  MA_SEQUENCE_LEGACY_STRICT_VERSION,
+  MA_SEQUENCE_VERSION,
+  buildMaSequenceEmbedding,
+  prepareMaSequence,
+  resolveMaSequenceBuildVersion,
+  stageCodeAt,
+  type MaSequenceFrame,
+  type MaSequencePrepared,
+} from '@/lib/ml/ma-sequence'
+import {
+  JP_REPAIR_ANALOG_CONTRACT,
+  assertJpRepairAnalogMeta,
+} from '@/lib/jp-ohlcv-repair-stage-environment'
+import { assertIsolatedRuntimeEnvironment, createIsolatedRuntimeEnvironment } from '@/lib/runtime/isolation'
 import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
 import {
   buildCalendarStageBackfillStatements,
@@ -327,5 +345,150 @@ for (const ticker of ['FIRST', 'SECOND']) {
   }
 }
 batchSqlite.close()
+
+// Repair-only analog v2 compatibility: strict historical stages, v2 pin, v3 unchanged.
+assert.equal(resolveMaSequenceBuildVersion(undefined), MA_SEQUENCE_VERSION)
+assert.equal(resolveMaSequenceBuildVersion(' '), MA_SEQUENCE_VERSION)
+assert.equal(resolveMaSequenceBuildVersion('3'), MA_SEQUENCE_VERSION)
+assert.equal(resolveMaSequenceBuildVersion('2'), MA_SEQUENCE_LEGACY_STRICT_VERSION)
+for (const bad of ['1', '4', 'abc', '2.5']) {
+  assert.throws(() => resolveMaSequenceBuildVersion(bad), /unsupported analog build version pin/, `pin ${bad}`)
+}
+{
+  const strictCode = (a: number, b: number, c: number): string | null => {
+    const frame: MaSequenceFrame = { step: 1, periods: [1, 2, 3], mas: [[a], [b], [c]], bucketKeys: ['test'], velocityIndexes: [-1] }
+    const prepared: MaSequencePrepared = {
+      rows: [{ date: '2026-01-05', close: 1 }], stage: frame, daily: frame, weekly: frame, monthly: frame, yearly: frame,
+      legacyStrictStages: true,
+    }
+    return stageCodeAt(prepared, 0)
+  }
+  // Clear orderings agree with the canonical classifier.
+  for (const [short, middle, long, expected] of permutations) {
+    assert.equal(strictCode(short, middle, long), String(expected), `strict ${short}/${middle}/${long}`)
+  }
+  // A near tie below the canonical epsilon: strict still orders it, canonical does not.
+  const near = STAGE_COMPARISON_RELATIVE_EPSILON * 0.5
+  assert.equal(strictCode(1 + near, 1, 0.5), '1', 'strict v2 orders a sub-epsilon difference')
+  assert.equal(mlStageFromThree(1 + near, 1, 0.5), null, 'canonical v3 treats it as a tie')
+  // Exact ties are unclassified in both.
+  assert.equal(strictCode(1, 1, 0.5), null)
+
+  // Over a real series with no near ties the two builds are byte-identical.
+  const rows = Array.from({ length: 520 }, (_, index) => ({
+    date: new Date(Date.UTC(2024, 0, 1 + index)).toISOString().slice(0, 10),
+    close: 100 + 20 * Math.sin(index / 17) + index * 0.05,
+  }))
+  const canonical = prepareMaSequence(rows)
+  const strict = prepareMaSequence(rows, { legacyStrictStages: true })
+  assert.equal(canonical.legacyStrictStages, undefined, 'the default build never selects strict stages')
+  assert.equal(strict.legacyStrictStages, true)
+  let compared = 0
+  for (let index = 250; index < rows.length; index += 7) {
+    assert.equal(stageCodeAt(strict, index), stageCodeAt(canonical, index), `stage code ${index}`)
+    const left = buildMaSequenceEmbedding(canonical, index)
+    const right = buildMaSequenceEmbedding(strict, index)
+    assert.deepEqual(right, left, `embedding ${index}`)
+    compared += 1
+  }
+  assert.ok(compared > 20)
+  // A near-flat rising series (sub-epsilon MA gaps) is where strict v2 and canonical v3 differ; the flag selects the difference.
+  const flat = Array.from({ length: 300 }, (_, index) => ({
+    date: new Date(Date.UTC(2024, 0, 1 + index)).toISOString().slice(0, 10),
+    close: 100 + index * 1e-10,
+  }))
+  const flatStrict = stageCodeAt(prepareMaSequence(flat, { legacyStrictStages: true }), 299)
+  const flatCanonical = stageCodeAt(prepareMaSequence(flat), 299)
+  assert.notEqual(flatStrict, null, 'strict v2 classifies sub-epsilon gaps')
+  assert.equal(flatCanonical, null, 'canonical v3 treats them as ties')
+}
+
+// Real scripts/build-analog-sequence-index.ts against synthetic SQLite under the
+// isolation launcher's test environment, unmodified (guards, HOME, TMPDIR and
+// every database path pinned inside a temporary root; no Production or OWC
+// path). Proves the v2 pin writes completed v2 meta that assertJpRepairAnalogMeta
+// accepts, differs from the default v3 build only where strict stage
+// classification differs, and never reaches a US build. It does not exercise
+// the 28-stage repair.
+{
+  const series = (name: string, rows: number, close: (index: number) => number) =>
+    Array.from({ length: rows }, (_, index) => [
+      name, new Date(Date.UTC(2024, 0, 1 + index)).toISOString().slice(0, 10), close(index),
+    ] as const)
+  const fixture = [
+    ...series('SINE', 520, (index) => 100 + 20 * Math.sin(index / 17) + index * 0.05),
+    ...series('FLAT', 400, (index) => 100 + index * 1e-10),
+  ]
+  const buildAnalog = (market: 'JP' | 'US', pin: string | undefined) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-analog-v2-')))
+    try {
+      const environment = createIsolatedRuntimeEnvironment('test', root, process.env)
+      assertIsolatedRuntimeEnvironment(environment)
+      for (const dir of [environment.HOME!, environment.TMPDIR!, environment.XDG_CACHE_HOME!]) {
+        assert.ok(dir.startsWith(`${root}${path.sep}`), `${dir} is inside the isolated root`)
+        fs.mkdirSync(dir, { recursive: true })
+      }
+      if (pin !== undefined) environment.JP_REPAIR_ANALOG_META_VERSION = pin
+      const source = market === 'US' ? environment.US_ANALYTICS_DB_PATH! : environment.STOCKBOARD_DB_PATH!
+      const target = market === 'US' ? environment.ANALOG_US_DB_PATH! : environment.ANALOG_JP_DB_PATH!
+      for (const file of [source, target]) assert.ok(file.startsWith(`${root}${path.sep}`), `${file} is inside the isolated root`)
+      fs.mkdirSync(path.dirname(source), { recursive: true })
+      const sourceDb = new DatabaseSync(source)
+      sourceDb.exec('CREATE TABLE ohlcv_daily (ticker TEXT NOT NULL, date TEXT NOT NULL, close REAL, PRIMARY KEY (ticker, date))')
+      const insert = sourceDb.prepare('INSERT INTO ohlcv_daily(ticker, date, close) VALUES (?, ?, ?)')
+      for (const row of fixture) insert.run(...row)
+      if (market === 'US') {
+        sourceDb.exec(`CREATE TABLE us_analytics_copy_state (ticker TEXT PRIMARY KEY, status TEXT NOT NULL, ohlcv_rows INTEGER NOT NULL);
+          INSERT INTO us_analytics_copy_state SELECT ticker, 'done', COUNT(*) FROM ohlcv_daily GROUP BY ticker`)
+      }
+      sourceDb.close()
+      const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/build-analog-sequence-index.ts', market, 'full'],
+        { cwd: process.cwd(), env: environment, encoding: 'utf8' })
+      assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`)
+      const db = new DatabaseSync(target, { readOnly: true })
+      try {
+        assert.equal((db.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check, 'ok')
+        const meta = Object.fromEntries((db.prepare('SELECT key, value FROM analog_sequence_meta').all() as Array<{ key: string; value: string }>)
+          .map((row) => [row.key, row.value]))
+        const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+        const stages = new Map((db.prepare('SELECT ticker, date, stage_code FROM analog_sequence_index').all() as
+          Array<{ ticker: string; date: string; stage_code: string | null }>).map((row) => [`${row.ticker}|${row.date}`, row.stage_code]))
+        let repairMeta: Error | ReturnType<typeof assertJpRepairAnalogMeta>
+        try { repairMeta = assertJpRepairAnalogMeta(target) } catch (error) { repairMeta = error as Error }
+        return { meta, index: count('analog_sequence_index'), prices: count('analog_sequence_prices'), stages, repairMeta }
+      } finally {
+        db.close()
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+  const v2 = buildAnalog('JP', String(JP_REPAIR_ANALOG_CONTRACT.metaVersion))
+  const v3 = buildAnalog('JP', undefined)
+  const us = buildAnalog('US', String(JP_REPAIR_ANALOG_CONTRACT.metaVersion))
+  assert.equal(v2.meta.version, '2')
+  assert.deepEqual(v2.repairMeta, { version: 2, sourceDate: v2.meta.source_date }, 'the repair accepts the pinned v2 build')
+  assert.equal(v3.meta.version, String(MA_SEQUENCE_VERSION))
+  assert.ok(v3.repairMeta instanceof Error && /must be completed version 2/.test(v3.repairMeta.message),
+    'the repair rejects a default v3 build')
+  assert.equal(us.meta.version, String(MA_SEQUENCE_VERSION), 'the JP repair pin never changes a US build')
+  assert.ok(us.repairMeta instanceof Error)
+  assert.deepEqual(us.stages, v3.stages, 'a US build with the JP pin set is the default v3 build')
+  for (const built of [v2, v3, us]) {
+    assert.equal(built.meta.completed, '1')
+    assert.ok(built.index > 0 && built.prices === fixture.length, 'index and price data are present')
+  }
+  assert.deepEqual([...v2.stages.keys()].sort(), [...v3.stages.keys()].sort())
+  let flatDiffers = 0
+  for (const [key, stage] of v2.stages) {
+    if (key.startsWith('FLAT|')) {
+      if (stage !== v3.stages.get(key)) flatDiffers += 1
+    } else {
+      assert.equal(stage, v3.stages.get(key), `non-tie series is identical in v2 and v3: ${key}`)
+    }
+  }
+  assert.ok(flatDiffers > 0, 'strict v2 classifies sub-epsilon rows that v3 leaves unclassified')
+  assert.ok([...v3.stages].every(([key, stage]) => !key.startsWith('FLAT|') || stage === null))
+}
 
 console.log('stage classification and calendar snapshot tests passed')

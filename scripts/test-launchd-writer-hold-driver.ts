@@ -6,6 +6,7 @@ import path from 'node:path'
 import {
   assertNoUnauthorizedDatabaseHandles,
   createLaunchdWriterHoldDriver,
+  parseLoadedLaunchdJob,
   type CommandResult,
   type CommandRunner,
   type LaunchdRuntimeIdentity,
@@ -148,6 +149,30 @@ try {
   assert.throws(() => assertNoUnauthorizedDatabaseHandles({
     databasePath: '/fixture/stockboard.db', approvedReaders: [reader], timeoutMs: 1_000, run, uid: 501, exists: () => true,
   }), /LSOF_PROBE_AMBIGUOUS/)
+
+  // Loaded-job identity comes from the top-level keys of `launchctl print`.
+  const printed = (body: string) => `gui/501/${writer.label} = {\n${body}}\n`
+  assert.deepEqual(parseLoadedLaunchdJob(writer.label, printed(
+    `\tpath = ${writer.plistPath}\n\tprogram = /approved/writer\n\tworking directory = /srv/app\n`
+    + '\tsockets = {\n\t\tpath = /tmp/nested\n\t}\n')), {
+    path: writer.plistPath, program: '/approved/writer', workingDirectory: '/srv/app',
+  })
+  assert.equal(parseLoadedLaunchdJob(writer.label, printed(`\tpath = /p\n\tprogram = /x\n`)).workingDirectory, null)
+  for (const body of ['\tprogram = /x\n', '\tpath = /p\n', '\tpath = /p\n\tpath = /q\n\tprogram = /x\n',
+    '\tpath = /p\n\tprogram = \n', '\t\tpath = /p\n\t\tprogram = /x\n']) {
+    assert.throws(() => parseLoadedLaunchdJob(writer.label, printed(body)), /LAUNCHD_JOB_IDENTITY_AMBIGUOUS/, body)
+  }
+  // verifyLoadedJob is opt-in; the fixture print has no identity keys.
+  const verifying = createLaunchdWriterHoldDriver([writer], { run, uid: 501, verifyLoadedJob: true })
+  await assert.rejects(() => verifying.observe(writer.label), /LAUNCHD_JOB_IDENTITY_AMBIGUOUS/)
+  const programOf = { value: writer.program }
+  const identified: CommandRunner = (file, args, timeoutMs) => file === '/bin/launchctl' && args[0] === 'print'
+    ? { status: 0, signal: null, stdout: printed(`\tpath = ${writer.plistPath}\n\tprogram = ${programOf.value}\n`), stderr: '' }
+    : run(file, args, timeoutMs)
+  const checked = createLaunchdWriterHoldDriver([writer], { run: identified, uid: 501, verifyLoadedJob: true })
+  assert.equal((await checked.observe(writer.label)).loaded, true)
+  programOf.value = '/tmp/shadow'
+  await assert.rejects(() => checked.observe(writer.label), /WRITER_LOADED_PROGRAM_MISMATCH/)
 
   fs.appendFileSync(writer.plistPath, 'changed\n')
   await assert.rejects(() => driver.observe(writer.label), /WRITER_DEFINITION_MISMATCH/)

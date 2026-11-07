@@ -27,6 +27,10 @@ const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
 const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
 const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
 const FORCE_REBUILD = process.env.SNAPSHOT_FORCE_REBUILD === '1'
+const RECOMPUTE_FROM_DATE = process.env.SNAPSHOT_RECOMPUTE_FROM_DATE?.trim() || null
+if (RECOMPUTE_FROM_DATE && !/^\d{4}-\d{2}-\d{2}$/.test(RECOMPUTE_FROM_DATE)) {
+  throw new Error(`invalid SNAPSHOT_RECOMPUTE_FROM_DATE: ${RECOMPUTE_FROM_DATE}`)
+}
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -106,13 +110,15 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
       [ticker],
     ),
   ])
-  const lastSnapshotDate = FORCE_REBUILD
+  const lastSnapshotDate = FORCE_REBUILD || RECOMPUTE_FROM_DATE
     ? null
     : [state?.lastProcessedDate, existing?.maxDate]
         .filter((date): date is string => Boolean(date))
         .sort()
         .at(-1) ?? null
-  const startDate = lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
+  const startDate = RECOMPUTE_FROM_DATE
+    ? dateDaysBefore(RECOMPUTE_FROM_DATE, LOOKBACK_DAYS)
+    : lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
 
   const rows = await execAll<OHLCV>(
     `
@@ -136,6 +142,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
   const newSnapshots: SnapshotRow[] = []
   for (const calculation of buildSnapshotCalculations(rows)) {
     const { date, activeDays: _activeDays, segmentStartDate: _segmentStartDate, ...snapshotValues } = calculation
+    if (RECOMPUTE_FROM_DATE && date < RECOMPUTE_FROM_DATE) continue
     if (lastSnapshotDate && date <= lastSnapshotDate) continue
 
     newSnapshots.push({
@@ -159,7 +166,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
     const chunk = newSnapshots.slice(i, i + CHUNK)
     await withDbRetry(() => {
       const insert = db.insert(dailySnapshots).values(chunk)
-      if (!FORCE_REBUILD) return insert.onConflictDoNothing()
+      if (!FORCE_REBUILD && !RECOMPUTE_FROM_DATE) return insert.onConflictDoNothing()
 
       return insert.onConflictDoUpdate({
         target: [dailySnapshots.ticker, dailySnapshots.date],
@@ -244,7 +251,10 @@ async function main() {
   const errors: string[] = []
   const touchedSnapshotDates = new Set<string>()
 
-  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY}, FORCE_REBUILD=${FORCE_REBUILD})`)
+  console.log(
+    `Snapshot 計算開始: ${tickers.length} 銘柄 `
+    + `(CONCURRENCY=${CONCURRENCY}, FORCE_REBUILD=${FORCE_REBUILD}, RECOMPUTE_FROM=${RECOMPUTE_FROM_DATE ?? 'none'})`,
+  )
   const startTime = Date.now()
   let nextIndex = 0
   let processed = 0

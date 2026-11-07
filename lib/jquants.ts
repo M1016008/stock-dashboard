@@ -48,7 +48,7 @@ export function fromJQuantsCode(code: string): string {
 // API: 日足 OHLCV (/equities/bars/daily)
 // ─────────────────────────────────────
 
-interface JBarRow {
+export interface JQuantsDailyProviderRow {
   Date: string         // "2023-03-24"
   Code: string         // 5桁、例 "86970"
   O: number | null     // open
@@ -68,13 +68,24 @@ interface JBarRow {
 }
 
 interface JBarsResponse {
-  data: JBarRow[]
+  data: JQuantsDailyProviderRow[]
   pagination_key?: string
 }
 
-function toOhlcv(row: JBarRow): OHLCV | null {
-  if (row.AdjC == null && row.C == null) return null
-  const close = row.AdjC ?? row.C!
+interface JTradingCalendarResponse {
+  data?: Array<{ Date: string; HolDiv: string }>
+  pagination_key?: string
+}
+
+export function isJQuantsNoTradeRow(row: JQuantsDailyProviderRow): boolean {
+  return [row.O, row.H, row.L, row.C, row.Vo, row.AdjO, row.AdjH, row.AdjL, row.AdjC, row.AdjVo]
+    .every((value) => value == null)
+}
+
+function toOhlcv(row: JQuantsDailyProviderRow): OHLCV | null {
+  if (isJQuantsNoTradeRow(row)) return null
+  const close = row.AdjC ?? row.C
+  if (close == null) throw new Error(`J-Quants partial row has no close: ${row.Code}:${row.Date}`)
   const open  = row.AdjO ?? row.O ?? close
   const high  = row.AdjH ?? row.H ?? close
   const low   = row.AdjL ?? row.L ?? close
@@ -110,7 +121,7 @@ export async function fetchJQuantsDaily(
   if (from) params.set('from', from)  // v2 は ISO 形式そのまま受ける
   if (to)   params.set('to', to)
 
-  const all: JBarRow[] = []
+  const all: JQuantsDailyProviderRow[] = []
   let paginationKey: string | undefined
 
   do {
@@ -137,6 +148,12 @@ export async function fetchJQuantsDaily(
 export interface JQuantsDailyByDateRow extends OHLCV {
   ticker: string
   adjustmentFactor: number
+}
+
+export interface JQuantsDailyByDateEnvelope {
+  providerRows: number
+  rows: JQuantsDailyByDateRow[]
+  noTradeTickers: string[]
 }
 
 export function hasJQuantsCorporateAction(adjustmentFactor: number | null | undefined): boolean {
@@ -221,8 +238,43 @@ export function shouldApplyJQuantsLegacyAdjustment(input: {
 }
 
 export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
-  const apiKey = getApiKey()
+  return (await fetchJQuantsDailyByDateEnvelope(date)).rows
+}
+
+export async function fetchJQuantsDailyByDateEnvelope(date: string): Promise<JQuantsDailyByDateEnvelope> {
+  const providerRows = await fetchJQuantsDailyProviderRowsByDate(date)
   const all: JQuantsDailyByDateRow[] = []
+  const noTradeTickers: string[] = []
+  for (const row of providerRows) {
+    const ohlcv = toOhlcv(row)
+    if (!ohlcv) {
+      noTradeTickers.push(fromJQuantsCode(row.Code))
+      continue
+    }
+    all.push({
+      ticker: fromJQuantsCode(row.Code),
+      adjustmentFactor: row.AdjFactor ?? 1,
+      ...ohlcv,
+    })
+  }
+
+  return {
+    providerRows: providerRows.length,
+    rows: all.sort((a, b) => a.ticker.localeCompare(b.ticker)),
+    noTradeTickers: noTradeTickers.sort(),
+  }
+}
+
+/**
+ * Date-bulk provider rows without losing raw/adjusted fields. This is used by
+ * data-quality audits; serving and ingestion should continue to consume the
+ * normalized adjusted-price contract above.
+ */
+export async function fetchJQuantsDailyProviderRowsByDate(
+  date: string,
+): Promise<JQuantsDailyProviderRow[]> {
+  const apiKey = getApiKey()
+  const all: JQuantsDailyProviderRow[] = []
   let paginationKey: string | undefined
 
   do {
@@ -235,19 +287,34 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       throw new Error(`J-Quants bars/daily date=${date} 失敗: ${res.status} ${await res.text()}`)
     }
     const json = await res.json() as JBarsResponse
-    for (const row of json.data ?? []) {
-      const ohlcv = toOhlcv(row)
-      if (!ohlcv) continue
-      all.push({
-        ticker: fromJQuantsCode(row.Code),
-        adjustmentFactor: row.AdjFactor ?? 1,
-        ...ohlcv,
-      })
-    }
+    all.push(...(json.data ?? []))
     paginationKey = json.pagination_key
   } while (paginationKey)
 
-  return all.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  return all.sort((left, right) => left.Code.localeCompare(right.Code))
+}
+
+/** TSE cash-equity sessions from the official J-Quants trading calendar. */
+export async function fetchJQuantsTradingDates(from: string, to: string): Promise<string[]> {
+  const apiKey = getApiKey()
+  const dates: string[] = []
+  let paginationKey: string | undefined
+  do {
+    const url = new URL(`${BASE_URL}/markets/calendar`)
+    url.searchParams.set('from', from)
+    url.searchParams.set('to', to)
+    if (paginationKey) url.searchParams.set('pagination_key', paginationKey)
+    const response = await fetch(url, { headers: { 'x-api-key': apiKey } })
+    if (!response.ok) {
+      throw new Error(`J-Quants markets/calendar ${from}..${to} failed: ${response.status} ${await response.text()}`)
+    }
+    const payload = await response.json() as JTradingCalendarResponse
+    for (const row of payload.data ?? []) {
+      if (row.HolDiv === '1' || row.HolDiv === '2') dates.push(row.Date)
+    }
+    paginationKey = payload.pagination_key
+  } while (paginationKey)
+  return [...new Set(dates)].sort()
 }
 
 // ─────────────────────────────────────
