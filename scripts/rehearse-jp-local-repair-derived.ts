@@ -27,10 +27,13 @@ import {
   verifyJpRepairPlanBinding,
   type JpRepairFinalValidationReceipt,
 } from '@/lib/jp-ohlcv-repair-production'
+import type { JpRepairWorkflowContext } from '@/lib/jp-ohlcv-repair-executor'
 import {
   JP_REPAIR_ANALOG_BASENAME,
+  JP_REPAIR_ANALOG_CONTRACT,
   JP_REPAIR_SERVING_CACHE_BASENAME,
   JP_REPAIR_STAGE_UNSET_ENVIRONMENT,
+  assertJpRepairAnalogMeta,
   jpRepairStageEnvironment,
 } from '@/lib/jp-ohlcv-repair-stage-environment'
 import {
@@ -131,13 +134,17 @@ type Receipt = {
     receiptId: number
   }
   stages: StageReceipt[]
+  // Set durably before a stage command starts, cleared with its stage receipt.
+  inFlightStage?: { name: string; startedAt: string }
+  // Present only when the run was started by the execution gate.
+  executorBindingSha256?: string
   finalChecks?: Record<string, string | number>
   sealedResearch?: Record<string, { count: number; sha256: string }>
   holdReason?: string
   approvalPackageSha256?: string
 }
 
-type Cli = {
+export type Cli = {
   database: string
   base: string
   metadata: string
@@ -147,6 +154,7 @@ type Cli = {
   receipt: string
   priceBasisEvidence: string
   reset: boolean
+  validateOnly: boolean
   failBeforeStage: string | null
 }
 
@@ -232,6 +240,7 @@ function parseCli(): Cli {
     priceBasisEvidence: path.resolve(argument('--price-basis-evidence')
       ?? 'docs/architecture/2026-11-01/jp-repair-price-basis-evidence.json'),
     reset: process.argv.includes('--reset'),
+    validateOnly: process.argv.includes('--validate-only'),
     failBeforeStage: argument('--fail-before-stage'),
   }
 }
@@ -370,9 +379,64 @@ function readReceipt(filePath: string): Receipt {
   return JSON.parse(fs.readFileSync(filePath, 'utf8')) as Receipt
 }
 
-function writeReceipt(filePath: string, receipt: Receipt): void {
+function writeReceipt(filePath: string, receipt: { updatedAt: string }): void {
   receipt.updatedAt = new Date().toISOString()
   writeJsonAtomic(filePath, receipt)
+}
+
+// Stage checkpoint protocol. A stage is durably marked in flight before its
+// command can commit anything; the mark is cleared by the same atomic write
+// that records the stage receipt. A mark found on restart means the stage may
+// have committed output that no receipt describes. The stages are not proven
+// idempotent and no validator proves such output safe, so the run holds
+// instead of rerunning the stage; only --reset (a new rehearsal) clears it.
+// A FAIL stage receipt holds the same way: its partial output is not proven
+// safe to run over, so a failed stage is never rerun.
+export const JP_REPAIR_STAGE_IN_FLIGHT = 'JP_REPAIR_STAGE_IN_FLIGHT'
+export const JP_REPAIR_STAGE_FAILED = 'JP_REPAIR_STAGE_FAILED'
+
+type CheckpointStage = Pick<StageReceipt, 'name' | 'status' | 'sealedFiles'>
+export type JpRepairStageCheckpoint<S extends CheckpointStage = CheckpointStage> = Pick<
+  Receipt, 'status' | 'updatedAt' | 'inFlightStage'
+> & { stages: S[] }
+
+export function assertNoJpRepairStageInFlight(receipt: Pick<Receipt, 'inFlightStage'>): void {
+  if (!receipt.inFlightStage) return
+  throw Object.assign(new Error(`stage ${receipt.inFlightStage.name} started at ${receipt.inFlightStage.startedAt} `
+    + 'has no stage receipt; its output may already be committed, so it is not rerun; rerun with --reset to start a new rehearsal'),
+  { holdCode: JP_REPAIR_STAGE_IN_FLIGHT })
+}
+
+export function jpRepairStagePassed(
+  receipt: JpRepairStageCheckpoint,
+  name: string,
+  sealedFiles: StageReceipt['sealedFiles'],
+): boolean {
+  assertNoJpRepairStageInFlight(receipt)
+  if (receipt.stages.some((item) => item.name === name && item.status === 'FAIL')) {
+    throw Object.assign(new Error(`stage ${name} has a FAIL receipt; its partial output may already be committed, `
+      + 'so it is not rerun; rerun with --reset to start a new rehearsal'), { holdCode: JP_REPAIR_STAGE_FAILED })
+  }
+  return receipt.stages.some((item) => item.name === name && item.status === 'PASS'
+    && JSON.stringify(item.sealedFiles) === JSON.stringify(sealedFiles))
+}
+
+export function beginJpRepairStage(filePath: string, receipt: JpRepairStageCheckpoint, name: string): void {
+  assertNoJpRepairStageInFlight(receipt)
+  receipt.inFlightStage = { name, startedAt: new Date().toISOString() }
+  writeReceipt(filePath, receipt)
+}
+
+export function recordJpRepairStage<S extends CheckpointStage>(
+  filePath: string,
+  receipt: JpRepairStageCheckpoint<S>,
+  item: S,
+): void {
+  if (receipt.inFlightStage?.name !== item.name) throw new Error(`stage ${item.name} was not marked in flight`)
+  receipt.stages = [...receipt.stages.filter((prior) => prior.name !== item.name), item]
+  receipt.status = item.status === 'PASS' ? 'DERIVED_PENDING' : 'HOLD'
+  delete receipt.inFlightStage
+  writeReceipt(filePath, receipt)
 }
 
 function valuationChunkIdentities(tickers: readonly string[]): ValuationChunkIdentity[] {
@@ -698,6 +762,8 @@ function validateFinalState(
     }
     const analogRows = tableCount(cli.analog, 'analog_sequence_index')
     if (analogRows <= 0) throw new Error('analog index is empty')
+    // The deployed reader is v2; a v3 (or unfinished) build must never pass.
+    assertJpRepairAnalogMeta(cli.analog)
     return {
       targetDateRows: rows.length,
       openMissing: issueCounts.missing,
@@ -1234,6 +1300,8 @@ export function bindValidateOnlyReceipts(input: {
     sourcePhase?: string
     databaseIdentity?: Record<string, unknown>
     analogIdentity?: Record<string, unknown>
+    servingCacheIdentity?: Record<string, unknown>
+    analogContract?: { basename: string; metaVersion: number }
   }
   if (validation.version !== 1
       || validation.status !== 'PASS'
@@ -1244,6 +1312,8 @@ export function bindValidateOnlyReceipts(input: {
       || validation.approvalPackageSha256 !== approvalPackageSha256
       || validation.stageCount !== receipt.stages.length
       || validation.sourcePhase !== 'derived_complete'
+      || JSON.stringify(validation.analogContract) !== JSON.stringify(JP_REPAIR_ANALOG_CONTRACT)
+      || !validation.servingCacheIdentity
       || JSON.stringify(validation.source) !== JSON.stringify(receipt.source)) {
     throw new Error('validate-only final validation receipt does not bind the completed execution')
   }
@@ -1263,6 +1333,8 @@ export function bindValidateOnlyReceipts(input: {
     stages: receipt.stages.map(({ name, status }) => ({ name, status })),
     databaseIdentity: validation.databaseIdentity,
     analogIdentity: validation.analogIdentity,
+    servingCacheIdentity: validation.servingCacheIdentity,
+    analogContract: JP_REPAIR_ANALOG_CONTRACT,
   }
   verifyExistingJpRepairFinalValidationReceipt(finalValidationPath, finalValidation)
   return {
@@ -1270,8 +1342,33 @@ export function bindValidateOnlyReceipts(input: {
   }
 }
 
-async function main(): Promise<void> {
-  const cli = parseCli()
+export type JpRepairRehearsalHooks = {
+  // Runs before each stage command that is not already checkpointed.
+  beforeStage?: (name: string) => Promise<void>
+  // Pins the receipt to the execution gate's binding; absent for a plain rehearsal.
+  executorBindingSha256?: string
+}
+
+// The execution gate's workflow: this same rehearsal (its 28 stages and its
+// receipt as the only checkpoint) run on the gate's targets, with the writer
+// hold re-validated before every stage. It never resets or validates-only.
+export function jpRepairRehearsalWorkflow(cli: Cli): (context: JpRepairWorkflowContext) => Promise<void> {
+  return async (context) => {
+    if (cli.reset || cli.validateOnly) throw new Error('the execution gate never resets or validates-only a rehearsal')
+    const same = (left: string, right: string) => path.resolve(left) === path.resolve(right)
+    if (!same(cli.database, context.targets.database) || !same(cli.analog, context.targets.analog)
+        || !same(cli.servingCache, context.targets.servingCache)
+        || !same(path.dirname(cli.receipt), context.checkpointDirectory)) {
+      throw new Error('rehearsal paths are not the execution gate targets and checkpoint directory')
+    }
+    await runJpLocalRepairRehearsal(cli, {
+      beforeStage: () => context.assertHoldValid(),
+      executorBindingSha256: context.bindingSha256,
+    })
+  }
+}
+
+export async function runJpLocalRepairRehearsal(cli: Cli, hooks: JpRepairRehearsalHooks = {}): Promise<void> {
   for (const output of [cli.database, cli.analog, cli.servingCache, cli.receipt]) assertTemporary(output)
   if (!fs.existsSync(cli.base) || !fs.existsSync(cli.metadata) || !fs.existsSync(cli.official)) {
     throw new Error('base, metadata, and official evidence must already exist')
@@ -1286,7 +1383,7 @@ async function main(): Promise<void> {
     throw new Error('official provider envelope is not the sealed repair input')
   }
 
-  if (process.argv.includes('--validate-only')) {
+  if (cli.validateOnly) {
     if (!fs.existsSync(cli.database) || !fs.existsSync(cli.analog) || !fs.existsSync(cli.receipt)) {
       throw new Error('validate-only requires the completed database, analog database, and receipt')
     }
@@ -1305,12 +1402,15 @@ async function main(): Promise<void> {
     assertCompleteStageReceipts(receipt, valuationChunkIdentities(plannedTickers))
     const databaseIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.database)
     const analogIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.analog)
+    const servingCacheIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.servingCache)
     if (JSON.stringify(finalValidation.databaseIdentity) !== JSON.stringify(databaseIdentityBeforeValidation)
-        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(analogIdentityBeforeValidation)) {
+        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(analogIdentityBeforeValidation)
+        || JSON.stringify(finalValidation.servingCacheIdentity) !== JSON.stringify(servingCacheIdentityBeforeValidation)) {
       throw new Error('validate-only database identity changed after final validation')
     }
     assertQuickCheck(cli.database)
     assertQuickCheck(cli.analog)
+    assertQuickCheck(cli.servingCache)
     const finalChecks = validateFinalState(
       cli,
       official,
@@ -1319,7 +1419,8 @@ async function main(): Promise<void> {
       approvalPackageSha256,
     )
     if (JSON.stringify(databaseIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
-        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))
+        || JSON.stringify(servingCacheIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.servingCache))) {
       throw new Error('validate-only database content changed during final validation')
     }
     // Written once after the first PASS; a rerun must reproduce it exactly.
@@ -1328,7 +1429,8 @@ async function main(): Promise<void> {
     // The receipt attests these identities; they must still hold after it lands.
     // On mismatch the receipt is kept as evidence; only --reset clears it.
     if (JSON.stringify(finalValidation.databaseIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
-        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+        || JSON.stringify(finalValidation.analogIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))
+        || JSON.stringify(finalValidation.servingCacheIdentity) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.servingCache))) {
       throw new Error('validate-only database content changed while the final validation receipt was written; rerun with --reset to start a new rehearsal')
     }
     console.log(JSON.stringify({
@@ -1376,6 +1478,7 @@ async function main(): Promise<void> {
   // Every child (schema, lock holder, stages) inherits only the pinned paths.
   const stageEnvironment = jpRepairStageEnvironment(process.env, {
     database: cli.database, servingCache: cli.servingCache, analog: cli.analog,
+    analogMetaVersion: JP_REPAIR_ANALOG_CONTRACT.metaVersion,
   })
   for (const name of JP_REPAIR_STAGE_UNSET_ENVIRONMENT) delete process.env[name]
   Object.assign(process.env, stageEnvironment)
@@ -1399,11 +1502,17 @@ async function main(): Promise<void> {
     hydrateApiServingCache(cli.servingCache)
     checkpointNativeWriter(cli.database)
   }
+  // A stage left in flight holds before the maintenance lock is even taken.
+  if (!fresh) assertNoJpRepairStageInFlight(readReceipt(cli.receipt))
   const parentLock = await startMaintenanceLockHolder(cli.database)
   try {
     let receipt = fs.existsSync(cli.receipt)
       ? readReceipt(cli.receipt)
-      : await initialize(cli, official, sourceTree, head, nodeModulesLockSha256)
+      : { ...await initialize(cli, official, sourceTree, head, nodeModulesLockSha256),
+        executorBindingSha256: hooks.executorBindingSha256 }
+    if (receipt.executorBindingSha256 !== hooks.executorBindingSha256) {
+      throw new Error('rehearsal receipt belongs to another execution-gate binding; rerun with --reset instead of mixing runs')
+    }
     if (fresh) checkpointNativeWriter(cli.database)
     if (receipt.sourceTreeSha256 !== sourceTree) {
       throw new Error('rehearsal source tree changed; rerun with --reset instead of mixing revisions')
@@ -1598,15 +1707,13 @@ async function main(): Promise<void> {
   ): Promise<void> => {
     for (const stage of stages) {
     const sealedFiles = sealedCommandFiles(stage.command)
-    if (receipt.stages.some((item) => (
-      item.name === stage.name && item.status === 'PASS'
-      && JSON.stringify(item.sealedFiles) === JSON.stringify(sealedFiles)
-    ))) continue
+    if (jpRepairStagePassed(receipt, stage.name, sealedFiles)) continue
     if (cli.failBeforeStage === stage.name) {
       receipt.status = 'HOLD'
       writeReceipt(cli.receipt, receipt)
       throw new Error(`injected failure before ${stage.name}`)
     }
+    await hooks.beforeStage?.(stage.name)
     parentLock.assertActive()
     const started = Date.now()
     const databaseBytesBefore = bytes(cli.database)
@@ -1625,6 +1732,7 @@ async function main(): Promise<void> {
     let allocatedBytesPeak = allocatedBytesBefore
     let stdoutTail = ''
     let stderrTail = ''
+    beginJpRepairStage(cli.receipt, receipt, stage.name)
     for (const [index, execution] of executions.entries()) {
       parentLock.assertActive()
       const chunkStarted = Date.now()
@@ -1690,9 +1798,7 @@ async function main(): Promise<void> {
       // Never persist PASS for work performed by a changed checkout or dependency set.
       assertRevisionUnchanged(gitCommitSha, sourceTree, nodeModulesLockSha256)
     }
-    receipt.stages = [...receipt.stages.filter((prior) => prior.name !== stage.name), item]
-    receipt.status = item.status === 'PASS' ? 'DERIVED_PENDING' : 'HOLD'
-    writeReceipt(cli.receipt, receipt)
+    recordJpRepairStage(cli.receipt, receipt, item)
     if (item.status === 'FAIL') throw new Error(`${stage.name} failed: ${item.stderrTail || item.stdoutTail}`)
     }
   }
@@ -1758,6 +1864,8 @@ async function main(): Promise<void> {
       databaseIdentity: databaseBundleIdentity(cli.database),
       databaseIdentityPhase: 'derived_pending_before_single_batch_run_promotion',
       analogIdentity: databaseBundleIdentity(cli.analog),
+      servingCacheIdentity: databaseBundleIdentity(cli.servingCache),
+      analogContract: JP_REPAIR_ANALOG_CONTRACT,
       forwardReturnEvidence,
       finalChecks: pendingChecks,
     }
@@ -1778,10 +1886,13 @@ async function main(): Promise<void> {
     await parentLock.release()
     checkpointWalHandoff(cli.database)
     checkpointWalHandoff(cli.analog)
+    checkpointWalHandoff(cli.servingCache)
     const databaseIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.database)
     const analogIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.analog)
+    const servingCacheIdentityBeforeValidation = identifyJpOhlcvDatabaseContent(cli.servingCache)
     assertQuickCheck(cli.database)
     assertQuickCheck(cli.analog)
+    assertQuickCheck(cli.servingCache)
     const finalChecks = validateFinalState(
       cli,
       official,
@@ -1790,7 +1901,8 @@ async function main(): Promise<void> {
       approvalPackageSha256,
     )
     if (JSON.stringify(databaseIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.database))
-        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))) {
+        || JSON.stringify(analogIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.analog))
+        || JSON.stringify(servingCacheIdentityBeforeValidation) !== JSON.stringify(identifyJpOhlcvDatabaseContent(cli.servingCache))) {
       throw new Error('database content changed during final validation')
     }
     receipt.finalChecks = finalChecks
@@ -1813,6 +1925,8 @@ async function main(): Promise<void> {
       sourcePhase: 'derived_complete',
       databaseIdentity: databaseIdentityBeforeValidation,
       analogIdentity: analogIdentityBeforeValidation,
+      servingCacheIdentity: servingCacheIdentityBeforeValidation,
+      analogContract: JP_REPAIR_ANALOG_CONTRACT,
       finalChecks,
     })
   } catch (error) {
@@ -1832,7 +1946,7 @@ async function main(): Promise<void> {
 // Run only as the entry point; the readiness test imports the validate-only
 // wiring without starting a rehearsal.
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
-  main().catch((error) => {
+  runJpLocalRepairRehearsal(parseCli()).catch((error) => {
     console.error(error)
     process.exitCode = 1
   })

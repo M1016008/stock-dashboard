@@ -41,7 +41,11 @@ import {
   verifyStockboardBuildManifest,
   writeStockboardBuildManifest,
 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
-import { jpRepairStageEnvironment } from '@/lib/jp-ohlcv-repair-stage-environment'
+import {
+  JP_REPAIR_ANALOG_CONTRACT,
+  assertJpRepairAnalogMeta,
+  jpRepairStageEnvironment,
+} from '@/lib/jp-ohlcv-repair-stage-environment'
 import {
   assertLaunchdServiceAbsent,
   createLaunchdWriterHoldDriver,
@@ -210,6 +214,8 @@ function testCoverageSplit(): void {
 
 type Fixture = {
   database: string
+  analog: string
+  servingCache: string
   official: string
   priceBasis: string
   approvalPath: string
@@ -248,6 +254,8 @@ mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
   }))
   const source = { approvalSha256: approval.plan.approvalSha256, approved: 3, inserted: 3, conflictsPreserved: 2, receiptId: 1 }
   const rehearsedDatabase = { realpath: path.join(rehearsal, 'stockboard.db'), inode: 42 }
+  const rehearsedAnalog = { realpath: path.join(rehearsal, JP_REPAIR_ANALOG_CONTRACT.basename), inode: 43 }
+  const rehearsedServingCache = { realpath: path.join(rehearsal, 'stockboard-serving-cache.db'), inode: 44 }
   const repairPlan = { path: path.join(rehearsal, 'repair-plan.json'), sha256: 'b'.repeat(64),
     approvalSha256: approval.plan.approvalSha256 }
   const approvalPackageSha256 = write('approval-package.json', {
@@ -258,6 +266,9 @@ mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
     repairPlan: { ...repairPlan },
     sourceIdentity: source, stages,
     databaseIdentity: { database: { ...rehearsedDatabase, size: 1, mtimeMs: 1 }, wal: null },
+    analogIdentity: { database: { ...rehearsedAnalog, size: 1, mtimeMs: 1 }, wal: null },
+    servingCacheIdentity: { database: { ...rehearsedServingCache, size: 1, mtimeMs: 1 }, wal: null },
+    analogContract: { ...JP_REPAIR_ANALOG_CONTRACT },
   }, mutate.package)
   const executionReceiptSha256 = write('rehearsal-receipt.json', {
     version: 1, status: 'PASS', database: rehearsedDatabase.realpath, gitCommitSha: approval.gitCommitSha,
@@ -265,12 +276,15 @@ mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
     nodeModulesLockSha256: approval.nodeModulesLockSha256, source, stages, approvalPackageSha256,
   }, mutate.execution)
   const databaseIdentity = { database: { ...rehearsedDatabase, size: 1, sha256: 'd'.repeat(64) }, walBytes: 0 }
-  const analogIdentity = { database: { realpath: path.join(rehearsal, 'analog.db'), inode: 43, size: 1, sha256: 'a'.repeat(64) }, walBytes: 0 }
+  const analogIdentity = { database: { ...rehearsedAnalog, size: 1, sha256: 'a'.repeat(64) }, walBytes: 0 }
+  const servingCacheIdentity = { database: { ...rehearsedServingCache, size: 1, sha256: '5'.repeat(64) }, walBytes: 0 }
+  const analogContract = { ...JP_REPAIR_ANALOG_CONTRACT }
   const validationReceiptSha256 = write('validation-receipt.json', {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
     nodeModulesLockSha256: approval.nodeModulesLockSha256,
     executionReceiptSha256, approvalPackageSha256, source, stageCount: stages.length, sourcePhase: 'derived_complete',
     databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
+    servingCacheIdentity: structuredClone(servingCacheIdentity), analogContract: structuredClone(analogContract),
   }, mutate.validation)
   const finalValidationReceiptSha256 = write(JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME, {
     version: 1, status: 'PASS', gitCommitSha: approval.gitCommitSha, sourceTreeSha256: approval.runtimeSourceTreeSha256,
@@ -278,6 +292,7 @@ mutate: RehearsalMutation = {}): JpRepairProductionApproval['rehearsal'] {
     repairPlan: { ...repairPlan }, executionReceiptSha256, validationReceiptSha256, approvalPackageSha256, source,
     sourcePhase: 'derived_complete', stages: structuredClone(stages),
     databaseIdentity: structuredClone(databaseIdentity), analogIdentity: structuredClone(analogIdentity),
+    servingCacheIdentity: structuredClone(servingCacheIdentity), analogContract: structuredClone(analogContract),
   } satisfies JpRepairFinalValidationReceipt, mutate.final)
   return { executionReceiptSha256, validationReceiptSha256, approvalPackageSha256, finalValidationReceiptSha256 }
 }
@@ -320,6 +335,15 @@ function createFixture(name: string): Fixture {
   outbox.run('o-cancelled', originalBatchId, 'CANCELLED')
   outbox.run('o-decoy', '22222222-2222-4222-8222-222222222222', 'PENDING')
   db.close()
+  const analog = path.join(directory, JP_REPAIR_ANALOG_CONTRACT.basename)
+  const analogDb = new DatabaseSync(analog)
+  analogDb.exec(`CREATE TABLE analog_sequence_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO analog_sequence_meta VALUES('version','2'),('completed','1'),('source_date','2026-11-06');`)
+  analogDb.close()
+  const servingCache = path.join(directory, 'stockboard-serving-cache.db')
+  const cacheDb = new DatabaseSync(servingCache)
+  cacheDb.exec('CREATE TABLE api_serving_cache(namespace TEXT NOT NULL, cache_key TEXT NOT NULL)')
+  cacheDb.close()
   const official = path.join(directory, 'official.json')
   fs.writeFileSync(official, JSON.stringify({
     date: targetDate, priceBasis: 'jquants-adjusted-ohlcv-v1',
@@ -417,6 +441,8 @@ function createFixture(name: string): Fixture {
       originalDailyBatch: { id: originalBatchId, status: 'COMPLETED', nonterminalOutboxCount: 0 },
       repairBatchPresent: false,
     },
+    analog: { ...fileBinding(analog), metaVersion: JP_REPAIR_ANALOG_CONTRACT.metaVersion },
+    servingCache: fileBinding(servingCache),
     triggerSchema: { contract: JP_REPAIR_TRIGGER_SCHEMA_CONTRACT, initialState: 'ALREADY_PRESENT' },
     storage: { volumeUuid: 'VOLUME-UUID' },
     rehearsal: writeRehearsal(directory, bound),
@@ -426,9 +452,14 @@ function createFixture(name: string): Fixture {
   const approvalPath = path.join(directory, 'approval.json')
   fs.writeFileSync(approvalPath, JSON.stringify(approval, null, 2))
   return {
-    database, official, priceBasis, approvalPath, approval, services, run, loaded, jobs, heads,
+    database, analog, servingCache, official, priceBasis, approvalPath, approval, services, run, loaded, jobs, heads,
     rehearsalReceipt: path.join(directory, 'rehearsal', 'rehearsal-receipt.json'),
   }
+}
+
+function fileBinding(file: string): { realpath: string; dev: number; inode: number } {
+  const stat = fs.statSync(file)
+  return { realpath: fs.realpathSync(file), dev: Number(stat.dev), inode: Number(stat.ino) }
 }
 
 function inspect(database: string): ReturnType<JpRepairPreflightInput['inspectDatabase']> {
@@ -459,6 +490,8 @@ function preflightInput(fixture: Fixture, overrides: Partial<JpRepairPreflightIn
     approvalPath: fixture.approvalPath,
     expectedApprovalSha256: sha256(fs.readFileSync(fixture.approvalPath)),
     databasePath: fixture.database,
+    analogPath: fixture.analog,
+    servingCachePath: fixture.servingCache,
     officialEvidencePath: fixture.official,
     priceBasisEvidencePath: fixture.priceBasis,
     rehearsalReceiptPath: fixture.rehearsalReceipt,
@@ -653,6 +686,19 @@ async function testContractBindings(): Promise<void> {
   const expect = async (expectedApprovalSha256: string | undefined, codes: string[], note: string) => {
     assert.deepEqual(await holdReasons(preflightInput(fixture, expectedApprovalSha256 ? { expectedApprovalSha256 } : {})),
       codes, note)
+    writeApproval(fixture, fixture.approval)
+  }
+
+  // Approval version 4 is reused: the runtime parser has no schema, and the
+  // analog and serving cache fields are required by the preflight checks. An
+  // approval written before they existed holds instead of being accepted.
+  for (const field of ['analog', 'servingCache'] as const) {
+    const legacy = structuredClone(fixture.approval) as unknown as Record<string, unknown>
+    delete legacy[field]
+    const legacySha256 = writeApproval(fixture, legacy as unknown as JpRepairProductionApproval)
+    const reasons = await holdReasons(preflightInput(fixture, { expectedApprovalSha256: legacySha256 }))
+    assert.ok(reasons.includes(field === 'analog' ? 'ANALOG_IDENTITY_MISMATCH' : 'SERVING_CACHE_IDENTITY_MISMATCH'),
+      `an approval v4 without ${field} holds: ${reasons}`)
     writeApproval(fixture, fixture.approval)
   }
 
@@ -921,6 +967,56 @@ async function testRehearsalReceipts(): Promise<void> {
     (document.databaseIdentity as { database: { inode: number } }).database.inode = 7
   } }, mismatch, 'DB identity disagrees between receipts')
   await rebind({ validation: (document) => { delete document.analogIdentity } }, mismatch, 'missing analog identity')
+  await rebind({ validation: (document) => { delete document.servingCacheIdentity } }, mismatch,
+    'missing serving cache identity')
+  await rebind({ validation: (document) => { (document.servingCacheIdentity as { walBytes: number }).walBytes = 8 } },
+    mismatch, 'an unsealed serving cache WAL')
+  await rebind({ final: (document) => { delete document.servingCacheIdentity } }, mismatch,
+    'final without a serving cache identity')
+  await rebind({ final: (document) => {
+    (document.servingCacheIdentity as { database: { sha256: string } }).database.sha256 = '0'.repeat(64)
+  } }, mismatch, 'final with another serving cache content')
+  await rebind({ final: (document) => {
+    (document.servingCacheIdentity as { database: { inode: number } }).database.inode = 7
+  } }, mismatch, 'final with another serving cache inode')
+  await rebind({ package: (document) => {
+    (document.servingCacheIdentity as { database: { inode: number } }).database.inode = 7
+  } }, mismatch, 'package and validation disagree on the serving cache')
+  await rebind({ package: (document) => { delete document.analogIdentity } }, mismatch, 'package without analog identity')
+  await rebind({ validation: (document) => { (document.analogContract as { metaVersion: number }).metaVersion = 3 } },
+    mismatch, 'validation of an analog v3 contract')
+  await rebind({ final: (document) => { delete document.analogContract } }, mismatch, 'final without an analog contract')
+  await rebind({ package: (document) => { delete document.analogContract } }, mismatch, 'package without an analog contract')
+  await rebind({ package: (document) => { (document.analogContract as { metaVersion: number }).metaVersion = 3 } },
+    mismatch, 'package of an analog v3 contract')
+  await rebind({ final: (document) => {
+    (document.analogContract as { basename: string }).basename = 'analog-sequence-jp-v3.db'
+  } }, mismatch, 'final of another analog path')
+  const otherRole = (document: RehearsalDocument, field: string, basename: string) => {
+    const identity = document[field] as { database: { realpath: string } }
+    identity.database.realpath = path.join(path.dirname(identity.database.realpath), basename)
+  }
+  await rebind({
+    validation: (document) => otherRole(document, 'analogIdentity', 'analog-sequence-jp-v3.db'),
+    final: (document) => otherRole(document, 'analogIdentity', 'analog-sequence-jp-v3.db'),
+    package: (document) => otherRole(document, 'analogIdentity', 'analog-sequence-jp-v3.db'),
+  }, mismatch, 'an analog identity on the v3 path')
+  await rebind({
+    validation: (document) => otherRole(document, 'servingCacheIdentity', 'analog-sequence-jp-v2.db'),
+    final: (document) => otherRole(document, 'servingCacheIdentity', 'analog-sequence-jp-v2.db'),
+    package: (document) => otherRole(document, 'servingCacheIdentity', 'analog-sequence-jp-v2.db'),
+  }, mismatch, 'a serving cache identity that is the analog database')
+  const sameFile = (document: RehearsalDocument) => {
+    (document.servingCacheIdentity as { database: { inode: number } }).database.inode = 43
+  }
+  await rebind({ validation: sameFile, final: sameFile, package: sameFile }, mismatch,
+    'serving cache and analog share an inode')
+  const productionCache = fs.realpathSync(fixture.servingCache)
+  const onProduction = (document: RehearsalDocument) => {
+    (document.servingCacheIdentity as { database: { realpath: string } }).database.realpath = productionCache
+  }
+  await rebind({ validation: onProduction, final: onProduction, package: onProduction }, mismatch,
+    'a rehearsal that ran on the production serving cache')
   const production = fs.realpathSync(fixture.database)
   await rebind({
     package: (document) => {
@@ -988,6 +1084,112 @@ async function testRehearsalReceipts(): Promise<void> {
   }
 }
 
+// Main, Analog, and Serving Cache are each bound by realpath, role basename,
+// device, inode, and (analog) the deployed meta version.
+async function testDatabaseIdentityBindings(): Promise<void> {
+  assert.deepEqual(await holdReasons(preflightInput(createFixture('identity-control'))), [])
+  const copyOver = (file: string) => {
+    const copy = `${file}.copy`
+    fs.copyFileSync(file, copy)
+    fs.renameSync(copy, file)
+  }
+  const cases: Array<[string, (fixture: Fixture) => Promise<string[]> | string[], string[]]> = [
+    ['analog meta version 3 in the file', (fixture) => {
+      sql(fixture.analog, "UPDATE analog_sequence_meta SET value='3' WHERE key='version'")
+      return holdReasons(preflightInput(fixture))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['analog meta not completed', (fixture) => {
+      sql(fixture.analog, "UPDATE analog_sequence_meta SET value='0' WHERE key='completed'")
+      return holdReasons(preflightInput(fixture))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['approval names analog meta version 3', (fixture) => holdReasons(preflightInput(fixture, {
+      expectedApprovalSha256: rewrite(fixture, (approval) => { approval.analog.metaVersion = 3; return approval }),
+    })), ['ANALOG_IDENTITY_MISMATCH', 'REHEARSAL_RECEIPT_MISMATCH']],
+    ['analog path is the v3 file', (fixture) => {
+      const v3 = path.join(path.dirname(fixture.analog), 'analog-sequence-jp-v3.db')
+      fs.copyFileSync(fixture.analog, v3)
+      sql(v3, "UPDATE analog_sequence_meta SET value='3' WHERE key='version'")
+      return holdReasons(preflightInput(fixture, { analogPath: v3 }))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['approval binds the v3 analog path', (fixture) => {
+      const v3 = path.join(path.dirname(fixture.analog), 'analog-sequence-jp-v3.db')
+      fs.copyFileSync(fixture.analog, v3)
+      return holdReasons(preflightInput(fixture, {
+        analogPath: v3,
+        expectedApprovalSha256: rewrite(fixture, (approval) => {
+          approval.analog = { ...fileBinding(v3), metaVersion: 2 }
+          return approval
+        }),
+      }))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['the repair-only analog-jp.db path', (fixture) => {
+      const old = path.join(path.dirname(fixture.analog), 'analog-jp.db')
+      fs.copyFileSync(fixture.analog, old)
+      return holdReasons(preflightInput(fixture, {
+        analogPath: old,
+        expectedApprovalSha256: rewrite(fixture, (approval) => {
+          approval.analog = { ...fileBinding(old), metaVersion: 2 }
+          return approval
+        }),
+      }))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['analog identity missing from the approval', (fixture) => holdReasons(preflightInput(fixture, {
+      expectedApprovalSha256: rewrite(fixture, (approval) => {
+        delete (approval as Partial<JpRepairProductionApproval>).analog
+        return approval
+      }),
+    })), ['ANALOG_IDENTITY_MISMATCH', 'REHEARSAL_RECEIPT_MISMATCH']],
+    ['serving cache identity missing from the approval', (fixture) => holdReasons(preflightInput(fixture, {
+      expectedApprovalSha256: rewrite(fixture, (approval) => {
+        delete (approval as Partial<JpRepairProductionApproval>).servingCache
+        return approval
+      }),
+    })), ['SERVING_CACHE_IDENTITY_MISMATCH']],
+    ['analog replaced by a new inode', (fixture) => {
+      copyOver(fixture.analog)
+      return holdReasons(preflightInput(fixture))
+    }, ['ANALOG_IDENTITY_MISMATCH']],
+    ['serving cache replaced by a new inode', (fixture) => {
+      copyOver(fixture.servingCache)
+      return holdReasons(preflightInput(fixture))
+    }, ['SERVING_CACHE_IDENTITY_MISMATCH']],
+    ['main database replaced by a new inode', (fixture) => {
+      copyOver(fixture.database)
+      return holdReasons(preflightInput(fixture))
+    }, ['DATABASE_IDENTITY_MISMATCH']],
+    ['serving cache path substituted', (fixture) => {
+      const other = path.join(path.dirname(fixture.servingCache), 'other', 'stockboard-serving-cache.db')
+      fs.mkdirSync(path.dirname(other))
+      fs.copyFileSync(fixture.servingCache, other)
+      return holdReasons(preflightInput(fixture, { servingCachePath: other }))
+    }, ['SERVING_CACHE_IDENTITY_MISMATCH']],
+    ['serving cache path is the analog database', (fixture) => holdReasons(preflightInput(fixture, {
+      servingCachePath: fixture.analog,
+    })), ['SERVING_CACHE_IDENTITY_MISMATCH']],
+    ['serving cache and analog are one file', (fixture) => holdReasons(preflightInput(fixture, {
+      servingCachePath: fixture.analog,
+      expectedApprovalSha256: rewrite(fixture, (approval) => {
+        approval.servingCache = { ...approval.analog }
+        return approval
+      }),
+    })), ['SERVING_CACHE_IDENTITY_MISMATCH', 'DATABASE_SET_MISMATCH']],
+    ['analog is a symlink to the approved file', (fixture) => {
+      const link = path.join(path.dirname(fixture.analog), 'analog-sequence-jp-v2.db.link')
+      fs.symlinkSync(fixture.analog, link)
+      // realpath resolves to the approved file, so this is the same identity.
+      return holdReasons(preflightInput(fixture, { analogPath: link }))
+    }, []],
+  ]
+  for (const [note, run, codes] of cases) {
+    assert.deepEqual(await run(createFixture(`identity-${note.replace(/\W+/g, '-')}`)), codes, note)
+  }
+  // The meta reader the rehearsal uses accepts only the deployed contract.
+  const fixture = createFixture('identity-meta')
+  assert.equal(assertJpRepairAnalogMeta(fixture.analog).version, 2)
+  sql(fixture.analog, "UPDATE analog_sequence_meta SET value='3' WHERE key='version'")
+  assert.throws(() => assertJpRepairAnalogMeta(fixture.analog), /completed version 2; found version 3/)
+}
+
 // Rehearsal-side contracts used by resume and validate-only.
 function testRehearsalContracts(): void {
   const commit = 'f'.repeat(40)
@@ -1023,6 +1225,7 @@ function testRehearsalContracts(): void {
     executionReceiptSha256: '2'.repeat(64), validationReceiptSha256: '3'.repeat(64), approvalPackageSha256: '4'.repeat(64),
     source: { approvalSha256 }, sourcePhase: 'derived_complete',
     stages: [{ name: 'snapshots', status: 'PASS' }], databaseIdentity: { walBytes: 0 }, analogIdentity: { walBytes: 0 },
+    servingCacheIdentity: { walBytes: 0 }, analogContract: { ...JP_REPAIR_ANALOG_CONTRACT },
   }
   const finalPath = path.join(directory, JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME)
   assert.equal(verifyExistingJpRepairFinalValidationReceipt(finalPath, receipt), false, 'missing is written once')
@@ -1090,6 +1293,7 @@ function testValidateOnlyWiring(): void {
       executionReceiptSha256: sha256(fs.readFileSync(files.receipt)),
       approvalPackageSha256: execution.approvalPackageSha256, source, stageCount: stages.length,
       sourcePhase: 'derived_complete', databaseIdentity: identity, analogIdentity: identity,
+      servingCacheIdentity: identity, analogContract: { ...JP_REPAIR_ANALOG_CONTRACT },
     }))
     const bind = (head = commit) => bindValidateOnlyReceipts({
       database: files.database, receipt: files.receipt, gitHeadSha: head, sourceTreeSha256: sourceTree,
@@ -1314,13 +1518,14 @@ function testStageEnvironment(): void {
   const paths = {
     database: path.join(directory, 'stockboard.db'),
     servingCache: path.join(directory, 'stockboard-serving-cache.db'),
-    analog: path.join(directory, 'analog-jp.db'),
+    analog: path.join(directory, 'analog-sequence-jp-v2.db'),
+    analogMetaVersion: 2,
   }
   const caller: NodeJS.ProcessEnv = {
     ...process.env, LOCAL_DB_PATH: '/Volumes/production/stockboard.db',
     US_ANALYTICS_DB_PATH: '/Volumes/production/stockboard-us.db', STOCKBOARD_DB_PATH: '/Volumes/production/stockboard.db',
     SERVING_CACHE_DB_PATH: '/Volumes/production/stockboard-serving-cache.db',
-    ANALOG_JP_DB_PATH: '/Volumes/production/analog-jp.db',
+    ANALOG_JP_DB_PATH: '/Volumes/production/analog-sequence-jp-v2.db',
     ANALOG_US_DB_PATH: '/Volumes/production/analog-us.db',
     MA_TRAJECTORY_SHADOW_DB_PATH: '/Volumes/production/ma-trajectory-shadow.db',
     MA_TRAJECTORY_SHADOW_DB_PATH_JP: '/Volumes/production/ma-trajectory-shadow-jp.db',
@@ -1332,8 +1537,8 @@ function testStageEnvironment(): void {
     TURSO_AUTH_TOKEN: 'secret',
   }
   const env = jpRepairStageEnvironment(caller, paths)
-  assert.deepEqual([env.STOCKBOARD_DB_PATH, env.SERVING_CACHE_DB_PATH, env.ANALOG_JP_DB_PATH, env.USE_LOCAL_DB],
-    [paths.database, paths.servingCache, paths.analog, '1'])
+  assert.deepEqual([env.STOCKBOARD_DB_PATH, env.SERVING_CACHE_DB_PATH, env.ANALOG_JP_DB_PATH, env.USE_LOCAL_DB,
+    env.JP_REPAIR_ANALOG_META_VERSION], [paths.database, paths.servingCache, paths.analog, '1', '2'])
   for (const name of ['LOCAL_DB_PATH', 'US_ANALYTICS_DB_PATH', 'ANALOG_US_DB_PATH', 'MA_TRAJECTORY_SHADOW_DB_PATH',
     'MA_TRAJECTORY_SHADOW_DB_PATH_JP', 'STOCKBOARD_SOURCE_DB_PATH', 'READONLY_SQLITE_DB_PATH',
     'PHASE16D_SOURCE_FIXTURE_DB', 'STOCKBOARD_DB_ROLE', 'TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN']) {
@@ -1342,6 +1547,9 @@ function testStageEnvironment(): void {
   assert.equal(caller.LOCAL_DB_PATH, '/Volumes/production/stockboard.db', 'the caller environment is not mutated')
   for (const [change, note] of [
     [{ analog: path.join(directory, 'analog-jp.sqlite') }, 'the old analog basename'],
+    [{ analog: path.join(directory, 'analog-jp.db') }, 'the repair-only v1 analog basename'],
+    [{ analog: path.join(directory, 'analog-sequence-jp-v3.db') }, 'the v3 analog path'],
+    [{ analogMetaVersion: 3 }, 'analog meta version 3'],
     [{ servingCache: path.join(directory, 'api-serving-cache.sqlite') }, 'the old serving cache basename'],
     [{ database: 'stockboard.db' }, 'a relative database path'],
   ] as const) {
@@ -1364,7 +1572,9 @@ function testStageEnvironment(): void {
   assert.doesNotMatch(rehearsal, /api-serving-cache\.sqlite|analog-jp\.sqlite/)
   assert.match(rehearsal, /const common = \{\n {4}\.\.\.stageEnvironment,/)
   assert.match(rehearsal,
-    /if \(item\.status === 'PASS'\)[\s\S]*assertRevisionUnchanged\(gitCommitSha, sourceTree, nodeModulesLockSha256\)[\s\S]*receipt\.stages =/)
+    /if \(item\.status === 'PASS'\)[\s\S]*assertRevisionUnchanged\(gitCommitSha, sourceTree, nodeModulesLockSha256\)[\s\S]*recordJpRepairStage\(cli\.receipt, receipt, item\)/)
+  // Every stage command runs between the in-flight mark and its receipt, after the hold hook.
+  assert.match(rehearsal, /await hooks\.beforeStage\?\.\(stage\.name\)[\s\S]*beginJpRepairStage\(cli\.receipt, receipt, stage\.name\)\n {4}for \(const \[index, execution\] of executions\.entries\(\)\)/)
 }
 
 async function main(): Promise<void> {
@@ -1374,6 +1584,7 @@ async function main(): Promise<void> {
     await testPreflight()
     await testContractBindings()
     await testRehearsalReceipts()
+    await testDatabaseIdentityBindings()
     testRehearsalContracts()
     testValidateOnlyWiring()
     await testApprovedAbsentService()

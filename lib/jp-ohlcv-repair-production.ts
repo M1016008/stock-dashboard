@@ -7,6 +7,12 @@ import {
   jpRepairCompiledTreeSha256,
   verifyStockboardBuildManifest,
 } from '@/lib/jp-ohlcv-repair-runtime-manifest'
+import {
+  JP_REPAIR_ANALOG_CONTRACT,
+  JP_REPAIR_MAIN_BASENAME,
+  JP_REPAIR_SERVING_CACHE_BASENAME,
+  assertJpRepairAnalogMeta,
+} from '@/lib/jp-ohlcv-repair-stage-environment'
 import type { LaunchdRuntimeIdentity } from '@/lib/storage/launchd-writer-hold-driver'
 import { WEEKLY_BACKUP_WRITER_LABELS } from '@/lib/storage/weekly-backup-policy'
 import type { WriterHoldDriver, WriterRuntimeIdentity } from '@/lib/storage/weekly-writer-hold'
@@ -110,6 +116,10 @@ export type JpRepairRuntimeIdentity =
     artifacts: JpRepairArtifact[] }
   | { label: string; kind: 'IMMUTABLE'; workingDirectory: string | null; artifacts: JpRepairArtifact[] }
 
+// Pre-execution identity of one database file: canonical realpath, device and
+// inode. The basename is the role (Main, Analog, Serving Cache).
+export type JpRepairFileBinding = { realpath: string; dev: number; inode: number }
+
 export type JpRepairProductionApproval = {
   version: typeof JP_REPAIR_APPROVAL_VERSION
   action: typeof JP_REPAIR_PRODUCTION_PREFLIGHT_ACTION
@@ -132,6 +142,10 @@ export type JpRepairProductionApproval = {
     originalDailyBatch: { id: string; status: string; nonterminalOutboxCount: 0 }
     repairBatchPresent: false
   }
+  // The deployed JP analog index (analog-sequence-jp-v2.db, meta version 2)
+  // and the serving cache the deployed reader and the repair purge target.
+  analog: JpRepairFileBinding & { metaVersion: number }
+  servingCache: JpRepairFileBinding
   triggerSchema: {
     contract: typeof JP_REPAIR_TRIGGER_SCHEMA_CONTRACT
     initialState: 'APPLY_ALL_MISSING' | 'ALREADY_PRESENT'
@@ -163,6 +177,8 @@ export type JpRepairPreflightInput = {
   approvalPath: string
   expectedApprovalSha256: string
   databasePath: string
+  analogPath: string
+  servingCachePath: string
   officialEvidencePath: string
   priceBasisEvidencePath: string
   // validation-receipt.json, approval-package.json, and
@@ -233,6 +249,33 @@ export function inspectJpRepairDatabaseLogicalState(db: SqliteReader): JpRepairD
   }
 }
 
+// The path must resolve to exactly the approved file: realpath, basename (role),
+// device, inode, single link, and single-link companions on the same device.
+export function assertBoundFile(
+  filePath: string,
+  bound: JpRepairFileBinding | undefined,
+  basename: string,
+  owner: string,
+): void {
+  if (!bound?.realpath || !Number.isInteger(bound.dev) || !Number.isInteger(bound.inode)) {
+    throw new Error(`${owner} identity is missing from the approval`)
+  }
+  const realpath = fs.realpathSync(filePath)
+  const stat = fs.lstatSync(realpath)
+  if (realpath !== bound.realpath || path.basename(realpath) !== basename || !stat.isFile() || stat.nlink !== 1
+      || Number(stat.dev) !== bound.dev || Number(stat.ino) !== bound.inode) {
+    throw new Error(`${owner} file identity differs from the approval`)
+  }
+  for (const suffix of ['-wal', '-shm']) {
+    // lstat, not exists: a dangling symlink must fail rather than be skipped.
+    const companionStat = fs.lstatSync(`${realpath}${suffix}`, { throwIfNoEntry: false })
+    if (!companionStat) continue
+    if (!companionStat.isFile() || companionStat.nlink !== 1 || Number(companionStat.dev) !== bound.dev) {
+      throw new Error(`${owner} ${suffix} is not a single-link regular file on the approved device`)
+    }
+  }
+}
+
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
@@ -263,6 +306,8 @@ export type JpRepairFinalValidationReceipt = {
   stages: Array<{ name: string; status: string }>
   databaseIdentity: unknown
   analogIdentity: unknown
+  servingCacheIdentity: unknown
+  analogContract: { basename: string; metaVersion: number }
 }
 
 // The rehearsal captures HEAD once, in the execution receipt at
@@ -419,19 +464,23 @@ export async function preflightJpRepairProduction(input: JpRepairPreflightInput)
   })
   // Identity only: mtime/size of a live WAL database are volatile and not bound.
   await check('DATABASE_IDENTITY_MISMATCH', () => {
-    const realpath = fs.realpathSync(input.databasePath)
-    const stat = fs.lstatSync(realpath)
-    if (realpath !== approved.database?.realpath || !stat.isFile() || stat.nlink !== 1
-        || Number(stat.dev) !== approved.database.dev || Number(stat.ino) !== approved.database.inode) {
-      throw new Error('database file identity differs from the approval')
+    assertBoundFile(input.databasePath, approved.database, JP_REPAIR_MAIN_BASENAME, 'main database')
+  })
+  await check('ANALOG_IDENTITY_MISMATCH', () => {
+    assertBoundFile(input.analogPath, approved.analog, JP_REPAIR_ANALOG_CONTRACT.basename, 'analog')
+    if (approved.analog.metaVersion !== JP_REPAIR_ANALOG_CONTRACT.metaVersion) {
+      throw new Error('the approval does not name the deployed analog meta version')
     }
-    for (const suffix of ['-wal', '-shm']) {
-      // lstat, not exists: a dangling symlink must fail rather than be skipped.
-      const companionStat = fs.lstatSync(`${realpath}${suffix}`, { throwIfNoEntry: false })
-      if (!companionStat) continue
-      if (!companionStat.isFile() || companionStat.nlink !== 1 || Number(companionStat.dev) !== approved.database.dev) {
-        throw new Error(`${suffix} is not a single-link regular file on the approved device`)
-      }
+    assertJpRepairAnalogMeta(input.analogPath)
+  })
+  await check('SERVING_CACHE_IDENTITY_MISMATCH', () => {
+    assertBoundFile(input.servingCachePath, approved.servingCache, JP_REPAIR_SERVING_CACHE_BASENAME, 'serving cache')
+  })
+  await check('DATABASE_SET_MISMATCH', () => {
+    const files = [approved.database, approved.analog, approved.servingCache]
+    if (new Set(files.map((file) => file?.realpath)).size !== 3
+        || new Set(files.map((file) => `${file?.dev}:${file?.inode}`)).size !== 3) {
+      throw new Error('main, analog, and serving cache must be three distinct files')
     }
   })
   await check('STORAGE_GUARD', () => {
@@ -692,6 +741,8 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     sourcePhase?: string
     databaseIdentity?: DatabaseContentIdentity
     analogIdentity?: DatabaseContentIdentity
+    servingCacheIdentity?: DatabaseContentIdentity
+    analogContract?: { basename?: string; metaVersion?: number }
   }>(path.join(directory, 'validation-receipt.json'), bound?.validationReceiptSha256)
   const approvalPackage = read<{
     version?: number
@@ -705,6 +756,9 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     sourceIdentity?: RehearsalSource
     stages?: RehearsalStage[]
     databaseIdentity?: { database?: { realpath?: string; inode?: number } }
+    analogIdentity?: { database?: { realpath?: string; inode?: number } }
+    servingCacheIdentity?: { database?: { realpath?: string; inode?: number } }
+    analogContract?: { basename?: string; metaVersion?: number }
   }>(path.join(directory, 'approval-package.json'), bound?.approvalPackageSha256)
   const final = read<{
     version?: number
@@ -721,6 +775,8 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
     stages?: RehearsalStage[]
     databaseIdentity?: unknown
     analogIdentity?: unknown
+    servingCacheIdentity?: unknown
+    analogContract?: { basename?: string; metaVersion?: number }
   }>(path.join(directory, JP_REPAIR_FINAL_VALIDATION_RECEIPT_NAME), bound?.finalValidationReceiptSha256)
 
   const names = assertPassingStages(execution.value.stages, 'execution receipt')
@@ -775,14 +831,47 @@ function verifyRehearsalReceipts(input: JpRepairPreflightInput, approved: JpRepa
   }
   assertContentIdentity(validation.value.databaseIdentity, 'validation')
   assertContentIdentity(validation.value.analogIdentity, 'validation analog')
-  const rehearsed = validation.value.databaseIdentity!.database!
-  const packaged = approvalPackage.value.databaseIdentity?.database
-  if (!packaged || packaged.realpath !== rehearsed.realpath || packaged.inode !== rehearsed.inode
-      || JSON.stringify(final.value.databaseIdentity) !== JSON.stringify(validation.value.databaseIdentity)
-      || JSON.stringify(final.value.analogIdentity) !== JSON.stringify(validation.value.analogIdentity)) {
+  assertContentIdentity(validation.value.servingCacheIdentity, 'validation serving cache')
+  const contract = JSON.stringify(JP_REPAIR_ANALOG_CONTRACT)
+  if (JSON.stringify(approvalPackage.value.analogContract) !== contract
+      || JSON.stringify(validation.value.analogContract) !== contract
+      || JSON.stringify(final.value.analogContract) !== contract
+      || approved.analog?.metaVersion !== JP_REPAIR_ANALOG_CONTRACT.metaVersion) {
+    throw new Error('rehearsal receipts do not bind the approved analog contract')
+  }
+  const rehearsed = {
+    database: validation.value.databaseIdentity!.database!,
+    analog: validation.value.analogIdentity!.database!,
+    servingCache: validation.value.servingCacheIdentity!.database!,
+  }
+  if (path.basename(rehearsed.analog.realpath!) !== JP_REPAIR_ANALOG_CONTRACT.basename
+      || path.basename(rehearsed.servingCache.realpath!) !== JP_REPAIR_SERVING_CACHE_BASENAME) {
+    throw new Error('rehearsal analog or serving cache identity is of another database role')
+  }
+  const packaged = {
+    database: approvalPackage.value.databaseIdentity?.database,
+    analog: approvalPackage.value.analogIdentity?.database,
+    servingCache: approvalPackage.value.servingCacheIdentity?.database,
+  }
+  for (const role of ['database', 'analog', 'servingCache'] as const) {
+    const sealed = packaged[role]
+    if (!sealed || sealed.realpath !== rehearsed[role].realpath || sealed.inode !== rehearsed[role].inode) {
+      throw new Error(`rehearsal receipts disagree on the rehearsal ${role} identity`)
+    }
+  }
+  if (JSON.stringify(final.value.databaseIdentity) !== JSON.stringify(validation.value.databaseIdentity)
+      || JSON.stringify(final.value.analogIdentity) !== JSON.stringify(validation.value.analogIdentity)
+      || JSON.stringify(final.value.servingCacheIdentity) !== JSON.stringify(validation.value.servingCacheIdentity)) {
     throw new Error('rehearsal receipts disagree on the rehearsal database identity')
   }
-  if (rehearsed.realpath === fs.realpathSync(input.databasePath)) {
+  const rehearsedFiles = Object.values(rehearsed)
+  if (new Set(rehearsedFiles.map((file) => file.realpath)).size !== 3
+      || new Set(rehearsedFiles.map((file) => file.inode)).size !== 3) {
+    throw new Error('rehearsal main, analog, and serving cache must be three distinct files')
+  }
+  const productionPaths = [input.databasePath, input.analogPath, input.servingCachePath]
+    .map((file) => fs.realpathSync(file))
+  if (rehearsedFiles.some((file) => productionPaths.includes(file.realpath!))) {
     throw new Error('the rehearsal ran on the production database, not an isolated copy')
   }
 }

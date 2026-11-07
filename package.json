@@ -84,6 +84,7 @@
     "test:trigger-daily-evaluations": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-trigger-daily-evaluations.ts",
     "test:trigger-repair-reevaluation": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-trigger-repair-reevaluation.ts",
     "test:jp-local-repair-production": "tsx scripts/test-jp-local-repair-production.ts",
+    "test:jp-local-repair-executor": "tsx scripts/test-jp-local-repair-executor.ts",
     "trigger:daily-evaluate": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/run-trigger-daily-evaluations.ts",
     "trigger:ml-monitor-status": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/run-trigger-ml-monitor.ts status",
     "trigger:ml-monitor-weekly": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/run-trigger-ml-monitor.ts weekly",
