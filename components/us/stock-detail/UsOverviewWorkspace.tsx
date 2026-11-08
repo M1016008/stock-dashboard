@@ -18,24 +18,26 @@ import {
   angleDirectionColor,
   angleDirectionLabel,
   buildMaFieldInsight,
-  buildUsShortTermEvidence,
   directionColor,
   directionGlyph,
   directionWord,
-  fmtCount,
   fmtDeg,
-  fmtMoney,
   fmtPct,
-  fmtUsd,
   MA_FIELD_THRESHOLD_DEG,
   maAngleSet,
   maFieldChangeConditions,
   maFieldInputs,
   previousMomentumRow,
-  shortTermToneColor,
   type MaAngleSet,
-  type UsStageEntry,
-} from './technical-view'
+  type StageEntry,
+} from '@/components/stock/technical-view'
+import {
+  buildUsShortTermEvidence,
+  fmtCount,
+  fmtMoney,
+  fmtUsd,
+  shortTermToneColor,
+} from './us-technical-view'
 import type { UsPhysicalMomentumState } from './useUsPhysicalMomentum'
 
 /** 傾き(physical のMA角度)と終値の位置(stage-history のMA値)を同じ列で読む列定義。長期列だけ両者の期間が異なる */
@@ -68,7 +70,7 @@ export function UsOverviewWorkspace({
   nextEarnings: NextUsEarnings | null
   momentum: UsPhysicalMomentumState
 }) {
-  const [latestStage, setLatestStage] = useState<UsStageEntry | null>(null)
+  const [latestStage, setLatestStage] = useState<StageEntry | null>(null)
   const [stageLoading, setStageLoading] = useState(true)
   const [showSignalDetails, setShowSignalDetails] = useState(false)
 
@@ -85,7 +87,7 @@ export function UsOverviewWorkspace({
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((payload) => {
         if (cancelled) return
-        const history = Array.isArray(payload?.history) ? payload.history as UsStageEntry[] : []
+        const history = Array.isArray(payload?.history) ? payload.history as StageEntry[] : []
         setLatestStage(history[history.length - 1] ?? null)
       })
       .catch(() => {

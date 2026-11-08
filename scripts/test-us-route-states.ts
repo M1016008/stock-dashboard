@@ -330,9 +330,12 @@ const ENTRYPOINTS: Entry[] = [
     id: 'stock-chart',
     path: '/us/stock/AAPL#chart',
     pages: [STOCK_PAGE],
-    loading: [{ file: 'components/us/stock-detail/UsChartWorkspace.tsx', patterns: [/'6ステージを読み込み中'/, /'MAの角度を読み込み中'/] }],
-    empty: [{ file: 'components/us/stock-detail/UsChartWorkspace.tsx', patterns: [/'6ステージの履歴がありません'/, /'未算出'/] }],
-    error: [{ file: 'components/us/stock-detail/UsChartWorkspace.tsx', patterns: [/stage\.status === 'error'/, /6ステージを取得できませんでした/] }],
+    loading: [
+      { file: 'components/us/stock-detail/UsChartWorkspace.tsx', patterns: [/<TechnicalChartSnapshot\s+market="US"/] },
+      { file: 'components/stock/TechnicalChartSnapshot.tsx', patterns: [/'6ステージを読み込み中'/, /'MAの角度を読み込み中'/] },
+    ],
+    empty: [{ file: 'components/stock/TechnicalChartSnapshot.tsx', patterns: [/'6ステージの履歴がありません'/, /'未算出'/] }],
+    error: [{ file: 'components/stock/TechnicalChartSnapshot.tsx', patterns: [/stage\.status === 'error'/, /6ステージを取得できませんでした/] }],
     sharedBoundary: [{ file: STOCK_PAGE, patterns: [/await Promise\.all\(\[\s*getUsQuote\(normalized\)/] }],
   },
 ]

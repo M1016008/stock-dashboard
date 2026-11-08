@@ -132,6 +132,19 @@ const stockDetailSource = readFileSync(
   new URL('../app/stock/[ticker]/StockDetailClient.tsx', import.meta.url),
   'utf8',
 )
+// JP/US 共通のテクニカル表示(現在構造スナップショット・3スコアのバー・表示ヘルパー)
+const technicalSnapshotSource = readFileSync(
+  new URL('../components/stock/TechnicalChartSnapshot.tsx', import.meta.url),
+  'utf8',
+)
+const scoreThresholdBarSource = readFileSync(
+  new URL('../components/stock/ScoreThresholdBar.tsx', import.meta.url),
+  'utf8',
+)
+const technicalViewSource = readFileSync(
+  new URL('../components/stock/technical-view.ts', import.meta.url),
+  'utf8',
+)
 const summarySource = readFileSync(
   new URL('../components/stock/StockDecisionSummary.tsx', import.meta.url),
   'utf8',
@@ -209,22 +222,51 @@ assert.match(chartWorkspace, /onSnapshotChange=\{handleMomentumSnapshot\}/)
 assert.equal((chartWorkspace.match(/<StageTimeline\n/g) ?? []).length, 1, 'Chart workspace must mount StageTimeline once')
 assert.equal((chartWorkspace.match(/<PhysicalMomentumSection/g) ?? []).length, 1, 'Chart workspace must mount PhysicalMomentumSection once')
 assert.equal((chartWorkspace.match(/<CandlestickChart/g) ?? []).length, 1, 'Chart workspace must mount CandlestickChart once')
-const chartStageAxes = stockDetailSource.slice(
-  stockDetailSource.indexOf('const CHART_STAGE_AXES'),
-  stockDetailSource.indexOf('function ChartWorkspace'),
+const chartStageAxes = technicalSnapshotSource.slice(
+  technicalSnapshotSource.indexOf('const CHART_STAGE_AXES'),
+  technicalSnapshotSource.indexOf('function useChartHeight'),
 )
 for (const label of ['日A', '日B', '週A', '週B', '月A', '月B']) {
   assert.match(chartStageAxes, new RegExp(`label: '${label}'`))
 }
-assert.match(chartWorkspace, /Technical snapshot/)
+// JP のチャートタブは共通の現在構造スナップショットを JP として描く(US との差は market で分岐)
+assert.match(chartWorkspace, /<TechnicalChartSnapshot\s+market="JP"/)
+assert.match(technicalSnapshotSource, /Technical snapshot/)
 assert.match(chartWorkspace, /Price &amp; moving averages/)
-assert.match(chartWorkspace, /formatTechnicalSnapshotDateLabel/)
-assert.match(chartWorkspace, /scoreDate: momentum\.scoreDate/)
-assert.match(chartWorkspace, /maDate: momentum\.maDate/)
-const technicalSnapshot = stockDetailSource.slice(
-  stockDetailSource.indexOf('function TechnicalChartSnapshot'),
-  stockDetailSource.indexOf('function FundamentalWorkspace'),
+assert.match(technicalSnapshotSource, /formatTechnicalSnapshotDateLabel/)
+assert.match(technicalSnapshotSource, /scoreDate: momentum\.scoreDate/)
+assert.match(technicalSnapshotSource, /maDate: momentum\.maDate/)
+// 市場差の契約: 見出しIDは US だけ us- 接頭辞、比較対象の文言、スコア鮮度の注記
+assert.match(technicalSnapshotSource, /return market === 'US' \? `us-\$\{id\}` : id/, 'US technicalId has the us- prefix; JP keeps the bare id')
+assert.match(
+  technicalSnapshotSource,
+  /\{market === 'US' \? 'US市場全体との差\(日足\)' : '市場全体との差\(日足\)'\}/,
+  'Score caption: US market difference label vs JP market difference label',
 )
+{
+  const usNoticeStart = technicalSnapshotSource.indexOf(") : market === 'US' ? (")
+  assert.ok(usNoticeStart >= 0, 'Score panel branches the freshness notice by market')
+  const notice = technicalSnapshotSource.slice(usNoticeStart, technicalSnapshotSource.indexOf('</section>', usNoticeStart))
+  const jpNoticeStart = notice.indexOf(') : (momentum.message || (momentum.isScoreFresh === false && momentum.scoreDate)) && (')
+  assert.ok(jpNoticeStart > 0, 'JP notice follows the US branch')
+  const usNotice = notice.slice(0, jpNoticeStart)
+  const jpNotice = notice.slice(jpNoticeStart)
+  assert.match(usNotice, /text-amber-800/, 'US uses the amber freshness notice')
+  assert.match(usNotice, /`スコア算出日 \$\{momentum\.scoreDate\}\(MAは \$\{momentum\.maDate\}\)`/)
+  assert.match(usNotice, /標準化済みスコアはまだありません/)
+  assert.doesNotMatch(jpNotice, /amber/, 'JP notice is not the amber freshness notice')
+  assert.match(jpNotice, /text-\[var\(--color-text-tertiary\)\]/)
+  assert.match(jpNotice, /momentum\.message \?\? `スコア算出日 \$\{momentum\.scoreDate\}`/, 'JP uses the score-date notice derived from momentum.scoreDate')
+}
+// 旧来の JP 範囲(TechnicalChartSnapshot〜JP の指標の見方)を、共通部品 + 3スコアのバー + JP の指標の見方として読む
+const technicalSnapshot = [
+  technicalSnapshotSource.slice(technicalSnapshotSource.indexOf('function TechnicalChartSnapshot')),
+  scoreThresholdBarSource,
+  stockDetailSource.slice(
+    stockDetailSource.indexOf('function TechnicalSnapshotGuide'),
+    stockDetailSource.indexOf('function FundamentalWorkspace'),
+  ),
+].join('\n')
 assert.match(technicalSnapshot, /background: value \? STAGE_BG_COLORS\[value\]/)
 assert.match(technicalSnapshot, /borderColor: value \? STAGE_BORDER_COLORS\[value\]/)
 assert.match(technicalSnapshot, /<strong className="font-mono text-\[14px\] leading-tight text-\[var\(--color-text-primary\)\]">/)
@@ -290,7 +332,7 @@ assert.doesNotMatch(chartWorkspace, /<PhysicalMaFieldMap|<PhysicalActionPoints/)
 
 const physicalMomentumSection = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalMomentumSection'),
-  stockDetailSource.indexOf('function trendText'),
+  stockDetailSource.indexOf('function PhysicalStateSummary'),
 )
 assert.equal((physicalMomentumSection.match(/\/api\/physical-momentum\//g) ?? []).length, 1)
 assert.equal((physicalMomentumSection.match(/\/api\/stock-physical-plan\//g) ?? []).length, 1)
@@ -309,7 +351,7 @@ assert.doesNotMatch(stockDetailSource, /function PhysicalActionPoints|function P
 assert.doesNotMatch(physicalMomentumSection, /Physical Momentum<\/div>|section-header/, 'Physical Momentum uses the shared section header, not the global gray header bar')
 const physicalStateSummary = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalStateSummary'),
-  stockDetailSource.indexOf('function scoreTone'),
+  stockDetailSource.indexOf('function PhysicalTimeframeConclusionPanel'),
 )
 assert.match(physicalStateSummary, /運動状態\(日足・20営業日\)/)
 assert.doesNotMatch(physicalStateSummary, /現在の状態|主要指標|MA角度幅/, 'The Physical conclusion must not compete with the Current State hero')
@@ -318,7 +360,7 @@ assert.match(physicalStateSummary, /20日変化/)
 assert.doesNotMatch(physicalStateSummary, /borderLeft/, 'Only the Current State hero carries the colored left rule')
 const physicalPlanCards = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalTradePlanCards'),
-  stockDetailSource.indexOf('interface PhysicalMaFieldInsight'),
+  stockDetailSource.indexOf('function MaAngleStrip'),
 )
 assert.doesNotMatch(physicalPlanCards, /tone\.background|rgba\(245, 158, 11/, 'Observation plans do not use an amber/tone fill')
 assert.doesNotMatch(physicalPlanCards, /<details|<summary/, 'The plan row toggles candidates inline instead of spending a separate row on a <details> summary')
@@ -497,8 +539,10 @@ assert.ok(
 assert.match(overview, /hash !== 'overview' && hash !== 'company' && hash !== 'shikiho'/)
 assert.match(overview, /window\.clearTimeout\(requestTimer\)/)
 assert.match(stockDetailSource, /shortTerm\.reading/)
-assert.match(stockDetailSource, /function shortTermSideReading/)
-assert.match(stockDetailSource, /何が支え、何が逆向き・中立か/)
+// 短期/中期の根拠の一文化は JP/US 共通の technical-view に移った(JP はそれを呼んで reading を作る)
+assert.match(stockDetailSource, /shortTermSideReading\('短期', shortSide\)/)
+assert.match(technicalViewSource, /export function shortTermSideReading/)
+assert.match(technicalViewSource, /何が支え、何が逆向き・中立か/)
 const basicInfoCard = stockDetailSource.slice(
   stockDetailSource.indexOf('function BasicInfoCard'),
   stockDetailSource.indexOf('function buildBasicDecisionSummary'),
@@ -620,9 +664,11 @@ assert.match(stockDetailSource, /url\.hash = 'overview'/)
 assert.match(stockDetailSource, /getElementById\('company-basic-info'\)/)
 
 const stageLabels = ['日A', '日B', '週A', '週B', '月A', '月B']
-const stageKeys = stockDetailSource.slice(
-  stockDetailSource.indexOf('const SUMMARY_STAGE_KEYS'),
-  stockDetailSource.indexOf('function MarketSnapshotCard'),
+// 6軸の並びは JP/US 共通の STAGE_KEYS(JP の StageRibbon もこれを使う)
+assert.match(stockDetailSource, /STAGE_KEYS\.slice\(start, start \+ 2\)/)
+const stageKeys = technicalViewSource.slice(
+  technicalViewSource.indexOf('export const STAGE_KEYS'),
+  technicalViewSource.indexOf('export const STAGE_TIMEFRAME_LABELS'),
 )
 previousIndex = -1
 for (const label of stageLabels) {

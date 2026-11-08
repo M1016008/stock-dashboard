@@ -65,7 +65,7 @@ assert.match(SMA_DYNAMICS_PREMISE, /現在の傾きの延長ではなく、株�
 // Placement and identity: right after "価格と移動平均", before StageTimeline, in both markets.
 {
   const jp = read('app/stock/[ticker]/StockDetailClient.tsx')
-  const workspace = jp.slice(jp.indexOf('function ChartWorkspace'), jp.indexOf('function useChartHeight'))
+  const workspace = jp.slice(jp.indexOf('function ChartWorkspace'), jp.indexOf('function TechnicalSnapshotGuide'))
   const chartTitle = workspace.indexOf('id="main-chart-title"')
   const chartSectionEnd = workspace.indexOf('</section>', chartTitle)
   const tag = '<SmaDynamicsSection market="JP" ticker={ticker.replace(\'.T\', \'\')} name={companyName} analysisDate={analysisDate} linkIntent={smaLinkIntent} />'
@@ -84,7 +84,7 @@ assert.match(SMA_DYNAMICS_PREMISE, /現在の傾きの延長ではなく、株�
   assert.match(jp, /companyName=\{name === '---' \? null : name\}/, 'JP page hands the security name to the workspace')
 
   const us = read('components/us/stock-detail/UsChartWorkspace.tsx')
-  const usWorkspace = us.slice(us.indexOf('export function UsChartWorkspace'), us.indexOf('function useChartHeight'))
+  const usWorkspace = us.slice(us.indexOf('export function UsChartWorkspace'), us.indexOf('function TechnicalSnapshotGuide'))
   const usTitle = usWorkspace.indexOf('id="us-main-chart-title"')
   const usSectionEnd = usWorkspace.indexOf('</section>', usTitle)
   const usSection = usWorkspace.indexOf('<SmaDynamicsSection market="US" ticker={ticker} name={companyName} analysisDate={analysisDate} linkIntent={smaLinkIntent} />')
