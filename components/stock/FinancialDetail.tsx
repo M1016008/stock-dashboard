@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   ArrowDown,
   ArrowRight,
@@ -57,6 +57,7 @@ import {
   UnavailableNote,
   type BarRow,
 } from '@/components/stock/fundamentals/primitives'
+import { useFundamentalReadModel } from '@/components/stock/fundamentals/useFundamentalReadModel'
 
 interface FinancialDetailProps {
   ticker: string
@@ -138,11 +139,6 @@ const METRIC_GROUPS: Array<{
 ]
 const METRIC_COLUMNS = METRIC_GROUPS.flatMap((group) => group.columns)
 
-function detailUrl(ticker: string, analysisDate: string | null): string {
-  const query = analysisDate ? `?as_of=${encodeURIComponent(analysisDate)}` : ''
-  return `/api/financial-detail/${encodeURIComponent(ticker)}${query}`
-}
-
 function valueText(value: FinancialDetailValue): string {
   return formatUnitValue(value.value, value.unit, value.availability).text
 }
@@ -164,33 +160,14 @@ function firstPeriodLabel(...values: FinancialDetailValue[]): string | null {
 }
 
 export function FinancialDetail({ ticker, analysisDate }: FinancialDetailProps) {
-  const [model, setModel] = useState<FinancialDetailReadModel | null>(null)
+  const { model, loading, error, retry } = useFundamentalReadModel<FinancialDetailReadModel>(
+    '/api/financial-detail/', ticker, analysisDate,
+  )
   const [subtab, setSubtab] = useState<FinancialSubtab>('summary')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [reloadKey, setReloadKey] = useState(0)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError('')
-    fetch(detailUrl(ticker, analysisDate), { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((payload: FinancialDetailReadModel) => {
-        if (!controller.signal.aborted) setModel(payload)
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [analysisDate, ticker, reloadKey])
 
   if (loading) return <LoadingBlock label="財務詳細を読み込んでいます..." />
   if (error || !model) {
-    return <ErrorBlock label="財務詳細を取得できませんでした。" onRetry={() => setReloadKey((value) => value + 1)} />
+    return <ErrorBlock label="財務詳細を取得できませんでした。" onRetry={retry} />
   }
 
   return (

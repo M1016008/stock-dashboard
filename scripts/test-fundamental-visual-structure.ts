@@ -15,6 +15,7 @@ const performance = source('components/stock/FinancialPerformanceDetail.tsx')
 const financial = source('components/stock/FinancialDetail.tsx')
 const valuation = source('components/stock/ValuationDetail.tsx')
 const returns = source('components/stock/ShareholderReturnsDetail.tsx')
+const readModelHook = source('components/stock/fundamentals/useFundamentalReadModel.ts')
 const measuredChart = source('components/charts/MeasuredChartFrame.tsx')
 const overviewReadModel = source('lib/server/financial-overview-read-model.ts')
 const metricRegistry = source('lib/financial-metrics.ts')
@@ -68,10 +69,22 @@ components.forEach((component, index) => {
     1,
     `${endpoints[index]} must be fetched by one component path`,
   )
-  assert.match(component, /as_of=/, `${endpoints[index]} must preserve analysisDate`)
+  assert.ok(
+    component.includes(`useFundamentalReadModel<`) && component.includes(`'${endpoints[index]}', ticker, analysisDate`),
+    `${endpoints[index]} must be fetched through the shared read model hook with analysisDate`,
+  )
   assert.doesNotMatch(component, /text-\[(?:7|8)px\]/, `${endpoints[index]} must avoid 7px/8px UI text`)
   assert.doesNotMatch(component, /fontSize:\s*(?:7|8)\b/, `${endpoints[index]} chart ticks must remain readable`)
 })
+assert.match(readModelHook, /\?as_of=\$\{encodeURIComponent\(analysisDate\)\}/, 'read model hook must preserve analysisDate')
+assert.match(readModelHook, /\$\{endpoint\}\$\{encodeURIComponent\(ticker\)\}/)
+assert.match(readModelHook, /cache: 'no-store', signal: controller\.signal/)
+assert.match(readModelHook, /\}, \[analysisDate, endpoint, ticker, reloadKey\]\)/, 'read model hook must refetch on analysisDate/endpoint/ticker/retry')
+assert.match(
+  source('components/stock/FinancialPerformanceTimeline.tsx'),
+  /useFundamentalReadModel<FinancialPerformanceTimelineReadModel>\(\s*'\/api\/financial-performance-timeline\/', ticker, analysisDate,/,
+  'financial performance timeline must be fetched through the shared read model hook with analysisDate',
+)
 
 assert.match(performance, /業績グラフ/)
 assert.match(performance, /実績と会社予想を同じ尺度で並べ/)

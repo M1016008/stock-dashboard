@@ -324,7 +324,7 @@ assert.match(performance, /hidden overflow-x-auto[^"]*md:block/, 'Tables are des
 assert.match(performance, /ErrorBlock/)
 assert.match(performance, /window\.matchMedia\('\(min-width: 1024px\)'\)/)
 assert.equal(count(performance, /\/api\/financial-performance-detail\//g), 1)
-assert.match(performance, /as_of=/)
+assert.match(performance, /'\/api\/financial-performance-detail\/', ticker, analysisDate/)
 
 // ---------------------------------------------------------------------------
 // 5. Financials: Safety / Profitability / Capital efficiency / Cash generation
@@ -379,7 +379,7 @@ assert.doesNotMatch(financial, /#1d4ed8|#0f766e|#7c3aed/, 'CF chart uses tokens,
 assert.match(financial, /md:hidden/)
 assert.match(financial, /hidden overflow-x-auto md:block/)
 assert.equal(count(financial, /\/api\/financial-detail\//g), 1)
-assert.match(financial, /as_of=/)
+assert.match(financial, /'\/api\/financial-detail\/', ticker, analysisDate/)
 
 // ---------------------------------------------------------------------------
 // 6. Valuation: one view for current / own history / peers, never a verdict
@@ -412,7 +412,7 @@ assert.match(valuation, /観測期間が限定的/)
 assert.match(valuation, /percentage_point/)
 assert.doesNotMatch(valuation, /filter\(\(value\) => value\.availability !== 'missing'\)/)
 assert.equal(count(valuation, /\/api\/valuation-detail\//g), 1)
-assert.match(valuation, /as_of=/)
+assert.match(valuation, /'\/api\/valuation-detail\/', ticker, analysisDate/)
 
 // ---------------------------------------------------------------------------
 // 7. Shareholder return: continuity + capacity, compact buyback state
@@ -443,7 +443,7 @@ assert.match(returns, /fcfDividendCoverage/)
 assert.match(returns, /stackId=\{overlap \? undefined : 'dps'\}/, 'DPS bars stay centered when actual/forecast never share a year')
 assert.doesNotMatch(returns, /--color-market-red|--color-price-up/, 'Forecast bars use brand tokens, not market colors')
 assert.equal(count(returns, /\/api\/shareholder-returns\//g), 1)
-assert.match(returns, /as_of=/)
+assert.match(returns, /'\/api\/shareholder-returns\/', ticker, analysisDate/)
 
 // ---------------------------------------------------------------------------
 // 8. Cross-cutting quality gates
@@ -467,7 +467,12 @@ for (const text of [performance, financial, valuation, returns]) {
   assert.match(text, /flow=\{\[/, 'each subtab declares its reading order')
   assert.match(text, /LoadingBlock/)
   assert.match(text, /ErrorBlock/)
-  assert.match(text, /setReloadKey/, 'error states can retry')
+  assert.match(text, /onRetry=\{retry\}/, 'error states can retry')
+}
+{
+  const hook = source('components/stock/fundamentals/useFundamentalReadModel.ts')
+  assert.match(hook, /\?as_of=\$\{encodeURIComponent\(analysisDate\)\}/)
+  assert.match(hook, /retry: \(\) => setReloadKey/, 'retry refetches through reloadKey')
 }
 assert.match(source('components/stock/fundamentals/primitives.tsx'), /pointer-coarse:h-9/, 'Definition tips get a larger touch target')
 assert.match(source('components/stock/fundamentals/primitives.tsx'), /aria-expanded=\{open\}/)
