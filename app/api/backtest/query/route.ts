@@ -46,29 +46,126 @@ type BacktestRow = {
   hit_40: number | null
 }
 
-const STAGE_PARAMS: Record<string, string> = {
-  daily_a: 'mf.daily_a_stage',
-  daily_b: 'mf.daily_b_stage',
-  weekly_a: 'mf.weekly_a_stage',
-  weekly_b: 'mf.weekly_b_stage',
-  monthly_a: 'mf.monthly_a_stage',
-  monthly_b: 'mf.monthly_b_stage',
-}
+const STAGE_PARAMS = ['daily_a', 'daily_b', 'weekly_a', 'weekly_b', 'monthly_a', 'monthly_b']
 
-const SORTS: Record<string, string> = {
-  maxReturn: 'fe.max_return_pct DESC, mf.ticker ASC',
-  return: 'fe.return_pct DESC, mf.ticker ASC',
-  drawdown: 'fe.min_return_pct ASC, mf.ticker ASC',
-  volume: 'mf.volume_ratio_20 DESC, mf.ticker ASC',
-  ticker: 'mf.ticker ASC',
-}
-
-const SERVING_SORTS: Record<string, string> = {
-  maxReturn: 'sr.max_return_pct DESC, sr.ticker ASC',
-  return: 'sr.return_pct DESC, sr.ticker ASC',
-  drawdown: 'sr.min_return_pct ASC, sr.ticker ASC',
-  volume: 'sr.volume_ratio_20 DESC, sr.ticker ASC',
-  ticker: 'sr.ticker ASC',
+// serving / fallback は同じフィルタ・集計・レスポンスを共有し、実際の差分 (FROM, SELECT, sort,
+// エイリアス, sector 列) だけをここで持つ。feature = stage/signal 列, outcome = horizon/return/hit 列。
+const QUERY_PATHS = {
+  serving: {
+    source: 'serving_backtest_results',
+    feature: 'sr',
+    outcome: 'sr',
+    sectorFilter: '(sr.sector_large = ? OR sr.sector_small = ? OR u.sector17_name = ? OR u.sector33_name = ?)',
+    sectorArgCount: 4,
+    sorts: {
+      maxReturn: 'sr.max_return_pct DESC, sr.ticker ASC',
+      return: 'sr.return_pct DESC, sr.ticker ASC',
+      drawdown: 'sr.min_return_pct ASC, sr.ticker ASC',
+      volume: 'sr.volume_ratio_20 DESC, sr.ticker ASC',
+      ticker: 'sr.ticker ASC',
+    } as Record<string, string>,
+    select: `
+      sr.date,
+      sr.ticker,
+      sr.name,
+      COALESCE(sr.sector_large, u.sector17_name) AS sector_large,
+      COALESCE(sr.sector_small, u.sector33_name) AS sector_small,
+      u.sector17_name,
+      u.sector33_name,
+      COALESCE(sr.market_segment, u.market_segment) AS market_segment,
+      u.margin_type,
+      sr.pattern_code,
+      sr.daily_a_stage,
+      sr.daily_b_stage,
+      sr.weekly_a_stage,
+      sr.weekly_b_stage,
+      sr.monthly_a_stage,
+      sr.monthly_b_stage,
+      sr.open,
+      sr.high,
+      sr.low,
+      sr.close,
+      sr.volume,
+      sr.volume_ratio_20,
+      sr.range_pct,
+      sr.atr20_pct,
+      sr.ma5_pos_pct,
+      sr.ma25_pos_pct,
+      sr.ma75_pos_pct,
+      sr.signal_codes,
+      sr.horizon_days,
+      sr.return_pct,
+      sr.max_return_pct,
+      sr.max_return_date,
+      sr.days_to_max,
+      sr.min_return_pct,
+      sr.min_return_date,
+      sr.days_to_min,
+      sr.hit_10,
+      sr.hit_20,
+      sr.hit_40`,
+    from: `serving_backtest_results sr
+      LEFT JOIN ticker_universe u ON u.ticker = sr.ticker`,
+  },
+  fallback: {
+    source: null,
+    feature: 'mf',
+    outcome: 'fe',
+    sectorFilter: '(sm.sector_large = ? OR sm.sector_small = ? OR sm.sector33 = ? OR u.sector17_name = ? OR u.sector33_name = ?)',
+    sectorArgCount: 5,
+    sorts: {
+      maxReturn: 'fe.max_return_pct DESC, mf.ticker ASC',
+      return: 'fe.return_pct DESC, mf.ticker ASC',
+      drawdown: 'fe.min_return_pct ASC, mf.ticker ASC',
+      volume: 'mf.volume_ratio_20 DESC, mf.ticker ASC',
+      ticker: 'mf.ticker ASC',
+    } as Record<string, string>,
+    select: `
+      mf.date,
+      mf.ticker,
+      u.name,
+      COALESCE(sm.sector_large, u.sector17_name) AS sector_large,
+      COALESCE(sm.sector_small, u.sector33_name) AS sector_small,
+      u.sector17_name,
+      u.sector33_name,
+      COALESCE(sm.market_segment, u.market_segment) AS market_segment,
+      u.margin_type,
+      mf.pattern_code,
+      mf.daily_a_stage,
+      mf.daily_b_stage,
+      mf.weekly_a_stage,
+      mf.weekly_b_stage,
+      mf.monthly_a_stage,
+      mf.monthly_b_stage,
+      o.open,
+      o.high,
+      o.low,
+      COALESCE(mf.close, o.close) AS close,
+      COALESCE(mf.volume, o.volume) AS volume,
+      mf.volume_ratio_20,
+      mf.range_pct,
+      mf.atr20_pct,
+      mf.ma5_pos_pct,
+      mf.ma25_pos_pct,
+      mf.ma75_pos_pct,
+      mf.signal_codes,
+      fe.horizon_days,
+      fe.return_pct,
+      fe.max_return_pct,
+      fe.max_return_date,
+      fe.days_to_max,
+      fe.min_return_pct,
+      fe.min_return_date,
+      fe.days_to_min,
+      fe.hit_10,
+      fe.hit_20,
+      fe.hit_40`,
+    from: `model_features mf
+      INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
+      LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
+      LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
+      LEFT JOIN sector_master sm ON sm.ticker = mf.ticker`,
+  },
 }
 
 function numParam(params: URLSearchParams, key: string): number | null {
@@ -169,7 +266,6 @@ export async function GET(request: NextRequest) {
     const returnMin = numParam(searchParams, 'returnMin')
     const returnMax = numParam(searchParams, 'returnMax')
     const returnMetric = searchParams.get('returnMetric') === 'period' ? 'period' : 'max'
-    const returnColumn = returnMetric === 'period' ? 'fe.return_pct' : 'fe.max_return_pct'
     const targetPct = numParam(searchParams, 'targetPct')
     const sector = searchParams.get('sector')?.trim()
     const sector17 = searchParams.get('sector17')?.trim()
@@ -178,11 +274,13 @@ export async function GET(request: NextRequest) {
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean)
-    const sortKey = searchParams.get('sort') ?? ''
-    const sort = SORTS[sortKey] ?? SORTS.maxReturn
-    const servingSort = SERVING_SORTS[sortKey] ?? SERVING_SORTS.maxReturn
+    const useServing = await hasServingResults(date, safeHorizon)
+    const path = useServing || isCloud ? QUERY_PATHS.serving : QUERY_PATHS.fallback
+    const { feature: featureAlias, outcome: outcomeAlias } = path
+    const returnColumn = returnMetric === 'period' ? `${outcomeAlias}.return_pct` : `${outcomeAlias}.max_return_pct`
+    const sort = path.sorts[searchParams.get('sort') ?? ''] ?? path.sorts.maxReturn
 
-    const where: string[] = ['mf.date = ?', 'fe.horizon_days = ?']
+    const where: string[] = [`${featureAlias}.date = ?`, `${outcomeAlias}.horizon_days = ?`]
     const args: Args = [date, safeHorizon]
 
     if (returnMin != null) {
@@ -194,11 +292,11 @@ export async function GET(request: NextRequest) {
       ;(args as unknown[]).push(returnMax)
     }
     if (targetPct === 10 || targetPct === 20 || targetPct === 40) {
-      where.push(`fe.hit_${targetPct} = 1`)
+      where.push(`${outcomeAlias}.hit_${targetPct} = 1`)
     }
     if (sector) {
-      where.push('(sm.sector_large = ? OR sm.sector_small = ? OR sm.sector33 = ? OR u.sector17_name = ? OR u.sector33_name = ?)')
-      ;(args as unknown[]).push(sector, sector, sector, sector, sector)
+      where.push(path.sectorFilter)
+      ;(args as unknown[]).push(...Array<string>(path.sectorArgCount).fill(sector))
     }
     if (sector17) {
       where.push('u.sector17_name = ?')
@@ -208,201 +306,22 @@ export async function GET(request: NextRequest) {
       where.push('u.sector33_name = ?')
       ;(args as unknown[]).push(sector33)
     }
-    for (const [param, col] of Object.entries(STAGE_PARAMS)) {
+    for (const param of STAGE_PARAMS) {
       const vals = intList(searchParams.get(param))
       if (vals.length > 0) {
-        where.push(`${col} IN (${vals.map(() => '?').join(', ')})`)
+        where.push(`${featureAlias}.${param}_stage IN (${vals.map(() => '?').join(', ')})`)
         ;(args as unknown[]).push(...vals)
       }
     }
     for (const signal of signalFilter) {
-      where.push(`(',' || COALESCE(mf.signal_codes, '') || ',') LIKE ?`)
+      where.push(`(',' || COALESCE(${featureAlias}.signal_codes, '') || ',') LIKE ?`)
       ;(args as unknown[]).push(`%,${signal},%`)
-    }
-
-    const useServing = await hasServingResults(date, safeHorizon)
-    if (useServing || isCloud) {
-      const servingWhere: string[] = ['sr.date = ?', 'sr.horizon_days = ?']
-      const servingArgs: Args = [date, safeHorizon]
-
-      if (returnMin != null) {
-        servingWhere.push(`${returnMetric === 'period' ? 'sr.return_pct' : 'sr.max_return_pct'} >= ?`)
-        ;(servingArgs as unknown[]).push(returnMin)
-      }
-      if (returnMax != null) {
-        servingWhere.push(`${returnMetric === 'period' ? 'sr.return_pct' : 'sr.max_return_pct'} <= ?`)
-        ;(servingArgs as unknown[]).push(returnMax)
-      }
-      if (targetPct === 10 || targetPct === 20 || targetPct === 40) {
-        servingWhere.push(`sr.hit_${targetPct} = 1`)
-      }
-      if (sector) {
-        servingWhere.push('(sr.sector_large = ? OR sr.sector_small = ? OR u.sector17_name = ? OR u.sector33_name = ?)')
-        ;(servingArgs as unknown[]).push(sector, sector, sector, sector)
-      }
-      if (sector17) {
-        servingWhere.push('u.sector17_name = ?')
-        ;(servingArgs as unknown[]).push(sector17)
-      }
-      if (sector33) {
-        servingWhere.push('u.sector33_name = ?')
-        ;(servingArgs as unknown[]).push(sector33)
-      }
-      const servingStageCols: Record<string, string> = {
-        daily_a: 'sr.daily_a_stage',
-        daily_b: 'sr.daily_b_stage',
-        weekly_a: 'sr.weekly_a_stage',
-        weekly_b: 'sr.weekly_b_stage',
-        monthly_a: 'sr.monthly_a_stage',
-        monthly_b: 'sr.monthly_b_stage',
-      }
-      for (const [param, col] of Object.entries(servingStageCols)) {
-        const vals = intList(searchParams.get(param))
-        if (vals.length > 0) {
-          servingWhere.push(`${col} IN (${vals.map(() => '?').join(', ')})`)
-          ;(servingArgs as unknown[]).push(...vals)
-        }
-      }
-      for (const signal of signalFilter) {
-        servingWhere.push(`(',' || COALESCE(sr.signal_codes, '') || ',') LIKE ?`)
-        ;(servingArgs as unknown[]).push(`%,${signal},%`)
-      }
-
-      const [rows, summaryRow] = await Promise.all([
-        execAll<BacktestRow>(`
-        SELECT
-          sr.date,
-          sr.ticker,
-          sr.name,
-          COALESCE(sr.sector_large, u.sector17_name) AS sector_large,
-          COALESCE(sr.sector_small, u.sector33_name) AS sector_small,
-          u.sector17_name,
-          u.sector33_name,
-          COALESCE(sr.market_segment, u.market_segment) AS market_segment,
-          u.margin_type,
-          sr.pattern_code,
-          sr.daily_a_stage,
-          sr.daily_b_stage,
-          sr.weekly_a_stage,
-          sr.weekly_b_stage,
-          sr.monthly_a_stage,
-          sr.monthly_b_stage,
-          sr.open,
-          sr.high,
-          sr.low,
-          sr.close,
-          sr.volume,
-          sr.volume_ratio_20,
-          sr.range_pct,
-          sr.atr20_pct,
-          sr.ma5_pos_pct,
-          sr.ma25_pos_pct,
-          sr.ma75_pos_pct,
-          sr.signal_codes,
-          sr.horizon_days,
-          sr.return_pct,
-          sr.max_return_pct,
-          sr.max_return_date,
-          sr.days_to_max,
-          sr.min_return_pct,
-          sr.min_return_date,
-          sr.days_to_min,
-          sr.hit_10,
-          sr.hit_20,
-          sr.hit_40
-        FROM serving_backtest_results sr
-        LEFT JOIN ticker_universe u ON u.ticker = sr.ticker
-        WHERE ${servingWhere.join(' AND ')}
-        ORDER BY ${servingSort}
-        LIMIT ?
-        `,
-        [...servingArgs, limit],
-        ),
-        execGet<BacktestSummaryRow>(`
-          SELECT
-            COUNT(*) AS count,
-            SUM(CASE WHEN sr.max_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS withOutcome,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_10 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit10Rate,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_20 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit20Rate,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_40 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit40Rate,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN sr.max_return_pct END) AS avgMaxReturnPct,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN COALESCE(sr.min_return_pct, 0) END) AS avgMinReturnPct,
-            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN COALESCE(sr.days_to_max, 0) END) AS avgDaysToMax
-          FROM serving_backtest_results sr
-          LEFT JOIN ticker_universe u ON u.ticker = sr.ticker
-          WHERE ${servingWhere.join(' AND ')}
-        `, servingArgs),
-      ])
-
-      return NextResponse.json({
-        date,
-        horizon: safeHorizon,
-        source: 'serving_backtest_results',
-        results: rows.map((row) => ({
-          ...row,
-          signal_codes: compactSignals(row.signal_codes),
-        })),
-        summary: summaryFromQuery(summaryRow),
-        filters: {
-          returnMin,
-          returnMax,
-          returnMetric,
-          targetPct,
-          sector,
-          sector17,
-          sector33,
-          signals: signalFilter,
-        },
-      })
     }
 
     const [rows, summaryRow] = await Promise.all([
       execAll<BacktestRow>(`
-      SELECT
-        mf.date,
-        mf.ticker,
-        u.name,
-        COALESCE(sm.sector_large, u.sector17_name) AS sector_large,
-        COALESCE(sm.sector_small, u.sector33_name) AS sector_small,
-        u.sector17_name,
-        u.sector33_name,
-        COALESCE(sm.market_segment, u.market_segment) AS market_segment,
-        u.margin_type,
-        mf.pattern_code,
-        mf.daily_a_stage,
-        mf.daily_b_stage,
-        mf.weekly_a_stage,
-        mf.weekly_b_stage,
-        mf.monthly_a_stage,
-        mf.monthly_b_stage,
-        o.open,
-        o.high,
-        o.low,
-        COALESCE(mf.close, o.close) AS close,
-        COALESCE(mf.volume, o.volume) AS volume,
-        mf.volume_ratio_20,
-        mf.range_pct,
-        mf.atr20_pct,
-        mf.ma5_pos_pct,
-        mf.ma25_pos_pct,
-        mf.ma75_pos_pct,
-        mf.signal_codes,
-        fe.horizon_days,
-        fe.return_pct,
-        fe.max_return_pct,
-        fe.max_return_date,
-        fe.days_to_max,
-        fe.min_return_pct,
-        fe.min_return_date,
-        fe.days_to_min,
-        fe.hit_10,
-        fe.hit_20,
-        fe.hit_40
-      FROM model_features mf
-      INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
-      LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
-      LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
-      LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
+      SELECT${path.select}
+      FROM ${path.from}
       WHERE ${where.join(' AND ')}
       ORDER BY ${sort}
       LIMIT ?
@@ -412,18 +331,14 @@ export async function GET(request: NextRequest) {
       execGet<BacktestSummaryRow>(`
         SELECT
           COUNT(*) AS count,
-          SUM(CASE WHEN fe.max_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS withOutcome,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_10 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit10Rate,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_20 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit20Rate,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_40 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit40Rate,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN fe.max_return_pct END) AS avgMaxReturnPct,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN COALESCE(fe.min_return_pct, 0) END) AS avgMinReturnPct,
-          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN COALESCE(fe.days_to_max, 0) END) AS avgDaysToMax
-        FROM model_features mf
-        INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
-        LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
-        LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
-        LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
+          SUM(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS withOutcome,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN CASE WHEN ${outcomeAlias}.hit_10 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit10Rate,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN CASE WHEN ${outcomeAlias}.hit_20 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit20Rate,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN CASE WHEN ${outcomeAlias}.hit_40 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit40Rate,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN ${outcomeAlias}.max_return_pct END) AS avgMaxReturnPct,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN COALESCE(${outcomeAlias}.min_return_pct, 0) END) AS avgMinReturnPct,
+          AVG(CASE WHEN ${outcomeAlias}.max_return_pct IS NOT NULL THEN COALESCE(${outcomeAlias}.days_to_max, 0) END) AS avgDaysToMax
+        FROM ${path.from}
         WHERE ${where.join(' AND ')}
       `, args),
     ])
@@ -431,6 +346,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       date,
       horizon: safeHorizon,
+      ...(path.source ? { source: path.source } : {}),
       results: rows.map((row) => ({
         ...row,
         signal_codes: compactSignals(row.signal_codes),
