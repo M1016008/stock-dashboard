@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseEnv } from 'node:util'
 import {
   calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
 } from './lib/launchagent-install'
@@ -32,12 +33,9 @@ function clampMinute(value: number): number {
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
 
-// Dotenv value of KEY in one line, with surrounding quotes removed ('' when absent or empty).
+// Value of KEY in one line, parsed exactly as `node --env-file` does (quotes, # comments).
 function dotenvValue(line: string | undefined, key: string): string {
-  const match = line?.trim().match(new RegExp(`^${key}=(.*)$`))
-  const raw = match ? match[1].trim() : ''
-  const quoted = raw.match(/^(["'])(.*)\1$/)
-  return (quoted ? quoted[2] : raw).trim()
+  return (line ? parseEnv(line)[key] ?? '' : '').trim()
 }
 
 // Keep the scoped file in sync with the canonical runtime.env (owner-only, values never printed).
