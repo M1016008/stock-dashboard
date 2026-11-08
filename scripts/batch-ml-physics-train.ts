@@ -11,7 +11,22 @@ import {
   ML_PHYSICS_VERSION,
   type PhysicsDirection,
 } from '@/lib/backtest/ml-physics'
-import { dot, sigmoid } from '@/lib/backtest/ml'
+import {
+  createModelState,
+  evaluateModelState,
+  finalizeModelState,
+  labelMapKey,
+  minDate,
+  modelInsertStatement,
+  parseVector,
+  resetMetrics,
+  timestampVersion,
+  trainInMemory,
+  trainingYears,
+  updateModelState,
+  type ModelState,
+  type TrainedModel,
+} from '@/lib/ml/online-logistic'
 
 type TrainRow = {
   date: string
@@ -52,17 +67,7 @@ const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_TRAIN_PAGE_DATES ??
 const MODEL_VERSION = process.env.ML_PHYSICS_MODEL_VERSION?.trim() || timestampVersion()
 const FAST_YEARLY_SAMPLE = (process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_SAMPLE ?? '1') !== '0'
 const FAST_YEARLY_MODULO = Number(process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO ?? 50)
-
-function timestampVersion(): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return [d.getFullYear(), pad(d.getMonth() + 1), pad(d.getDate()), pad(d.getHours()), pad(d.getMinutes())].join('')
-}
-
-function minDate(...dates: Array<string | null | undefined>): string | null {
-  const values = dates.filter((date): date is string => !!date)
-  return values.length ? values.sort()[0] : null
-}
+const DIRECTIONS: PhysicsDirection[] = ['up', 'down', 'wait']
 
 async function latestFeatureDate(): Promise<string | null> {
   return (await execGet<{ date: string | null }>(
@@ -94,36 +99,11 @@ async function confirmedCutoffDate(horizon: number): Promise<string | null> {
   return minDate(END_DATE, marketCutoff, labelCutoff)
 }
 
-function trainingYears(trainEndDate: string): number[] {
-  const startYear = Number(START_DATE.slice(0, 4))
-  const endYear = Number(trainEndDate.slice(0, 4))
-  const years: number[] = []
-  for (let year = startYear; year <= endYear; year += 1) years.push(year)
-  return years
-}
-
-function parseVector(value: string): number[] {
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed.map((item) => Number(item) || 0) : []
-  } catch {
-    return []
-  }
-}
-
 type ParsedTrainRow = {
   vector: number[]
   up: number
   down: number
   wait: number
-}
-
-type ModelState = {
-  weights: number[]
-  intercept: number
-  samples: number
-  positives: number
-  correct: number
 }
 
 type PagedHorizonState = {
@@ -144,90 +124,23 @@ function parseTrainRow(row: TrainRow): ParsedTrainRow | null {
   }
 }
 
-function createModelState(): ModelState {
+function createDirectionStates(): Record<PhysicsDirection, ModelState> {
   return {
-    weights: Array.from({ length: ML_PHYSICS_FEATURE_NAMES.length }, () => 0),
-    intercept: 0,
-    samples: 0,
-    positives: 0,
-    correct: 0,
+    up: createModelState(ML_PHYSICS_FEATURE_NAMES.length),
+    down: createModelState(ML_PHYSICS_FEATURE_NAMES.length),
+    wait: createModelState(ML_PHYSICS_FEATURE_NAMES.length),
   }
 }
 
-function updateModelState(state: ModelState, vector: number[], label: number): void {
-  const pred = sigmoid(state.intercept + dot(state.weights, vector))
-  const error = pred - label
-  state.intercept -= LR * error
-  for (let i = 0; i < state.weights.length; i += 1) {
-    state.weights[i] -= LR * error * (vector[i] ?? 0)
-  }
-}
-
-function resetMetrics(state: ModelState): void {
-  state.samples = 0
-  state.positives = 0
-  state.correct = 0
-}
-
-function evaluateModelState(state: ModelState, vector: number[], label: number): void {
-  state.samples += 1
-  state.positives += label
-  const pred = sigmoid(state.intercept + dot(state.weights, vector)) >= 0.5 ? 1 : 0
-  if (pred === label) state.correct += 1
-}
-
-function finalizeModelState(state: ModelState, metrics: Record<string, number | string | null>): {
-  weights: number[]
-  intercept: number
-  metrics: Record<string, number | string | null>
-} {
-  return {
-    weights: state.weights.map((value) => Number(value.toFixed(6))),
-    intercept: Number(state.intercept.toFixed(6)),
-    metrics: {
-      ...metrics,
-      samples: state.samples,
-      positiveRate: state.samples ? Number((state.positives / state.samples).toFixed(4)) : 0,
-      accuracy: state.samples ? Number((state.correct / state.samples).toFixed(4)) : 0,
-      epochs: EPOCHS,
-      lr: LR,
-    },
-  }
-}
-
-function train(rows: Array<{ vector: number[]; label: number }>): { weights: number[]; intercept: number; metrics: Record<string, number> } {
-  const size = ML_PHYSICS_FEATURE_NAMES.length
-  const weights = Array.from({ length: size }, () => 0)
-  let intercept = 0
-  if (rows.length === 0) return { weights, intercept, metrics: { samples: 0, positiveRate: 0, accuracy: 0 } }
-
-  for (let epoch = 0; epoch < EPOCHS; epoch += 1) {
-    for (const row of rows) {
-      const pred = sigmoid(intercept + dot(weights, row.vector))
-      const error = pred - row.label
-      intercept -= LR * error
-      for (let i = 0; i < size; i += 1) weights[i] -= LR * error * (row.vector[i] ?? 0)
-    }
-  }
-
-  let correct = 0
-  let positives = 0
-  for (const row of rows) {
-    positives += row.label
-    const pred = sigmoid(intercept + dot(weights, row.vector)) >= 0.5 ? 1 : 0
-    if (pred === row.label) correct += 1
-  }
-  return {
-    weights: weights.map((value) => Number(value.toFixed(6))),
-    intercept: Number(intercept.toFixed(6)),
-    metrics: {
-      samples: rows.length,
-      positiveRate: Number((positives / rows.length).toFixed(4)),
-      accuracy: Number((correct / rows.length).toFixed(4)),
-      epochs: EPOCHS,
-      lr: LR,
-    },
-  }
+function modelStatement(direction: PhysicsDirection, horizon: number, model: TrainedModel) {
+  return modelInsertStatement({
+    modelName: `ma_physics_v${ML_PHYSICS_VERSION}_${direction}_h${horizon}_${MODEL_VERSION}`,
+    modelType: ML_PHYSICS_MODEL_TYPE,
+    direction,
+    horizon,
+    featureNames: ML_PHYSICS_FEATURE_NAMES,
+    ...model,
+  })
 }
 
 async function loadRecentRows(horizon: number, trainEndDate: string): Promise<TrainRow[]> {
@@ -251,7 +164,7 @@ async function loadRecentRows(horizon: number, trainEndDate: string): Promise<Tr
 }
 
 async function loadYearlyRows(horizon: number, trainEndDate: string): Promise<TrainRow[]> {
-  const years = trainingYears(trainEndDate)
+  const years = trainingYears(START_DATE, trainEndDate)
   const perYear = PER_YEAR_LIMIT > 0
     ? PER_YEAR_LIMIT
     : LIMIT > 0
@@ -405,10 +318,6 @@ async function forEachTrainingPage(
   return parsedRows
 }
 
-function labelMapKey(ticker: string, date: string): string {
-  return `${ticker}\u0000${date}`
-}
-
 async function forEachMultiHorizonPage(
   horizonStates: PagedHorizonState[],
   dates: string[],
@@ -474,26 +383,18 @@ async function trainHorizonAllPaged(horizon: number, trainEndDate: string): Prom
     return
   }
 
-  const states: Record<PhysicsDirection, ModelState> = {
-    up: createModelState(),
-    down: createModelState(),
-    wait: createModelState(),
-  }
+  const states = createDirectionStates()
 
   let trainRows = 0
   for (let epoch = 0; epoch < EPOCHS; epoch += 1) {
     trainRows = await forEachTrainingPage(horizon, dates, `epoch=${epoch + 1}/${EPOCHS}`, (row) => {
-      updateModelState(states.up, row.vector, row.up)
-      updateModelState(states.down, row.vector, row.down)
-      updateModelState(states.wait, row.vector, row.wait)
+      for (const direction of DIRECTIONS) updateModelState(states[direction], row.vector, row[direction], LR)
     })
   }
 
-  for (const direction of ['up', 'down', 'wait'] as PhysicsDirection[]) resetMetrics(states[direction])
+  for (const direction of DIRECTIONS) resetMetrics(states[direction])
   await forEachTrainingPage(horizon, dates, 'evaluate', (row) => {
-    evaluateModelState(states.up, row.vector, row.up)
-    evaluateModelState(states.down, row.vector, row.down)
-    evaluateModelState(states.wait, row.vector, row.wait)
+    for (const direction of DIRECTIONS) evaluateModelState(states[direction], row.vector, row[direction])
   })
 
   const baseMetrics = {
@@ -510,26 +411,9 @@ async function trainHorizonAllPaged(horizon: number, trainEndDate: string): Prom
     featureCount: ML_PHYSICS_FEATURE_NAMES.length,
   }
   const statements: Array<{ sql: string; args: Array<string | number> }> = []
-  for (const direction of ['up', 'down', 'wait'] as PhysicsDirection[]) {
-    const model = finalizeModelState(states[direction], baseMetrics)
-    const modelName = `ma_physics_v${ML_PHYSICS_VERSION}_${direction}_h${horizon}_${MODEL_VERSION}`
-    statements.push({
-      sql: `
-        INSERT OR REPLACE INTO ml_models
-          (model_name, model_type, direction, horizon_days, feature_names_json, weights_json, intercept, metrics_json, trained_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-      `,
-      args: [
-        modelName,
-        ML_PHYSICS_MODEL_TYPE,
-        direction,
-        horizon,
-        JSON.stringify(ML_PHYSICS_FEATURE_NAMES),
-        JSON.stringify(model.weights),
-        model.intercept,
-        JSON.stringify(model.metrics),
-      ],
-    })
+  for (const direction of DIRECTIONS) {
+    const model = finalizeModelState(states[direction], baseMetrics, EPOCHS, LR)
+    statements.push(modelStatement(direction, horizon, model))
     console.log(`ml physics train horizon=${horizon} direction=${direction}: rows=${Number(model.metrics.samples).toLocaleString()} cutoff=${trainEndDate} acc=${model.metrics.accuracy}`)
   }
   await execBatch(statements)
@@ -543,16 +427,7 @@ async function trainAllHorizonsPaged(): Promise<void> {
       console.log(`ml physics train horizon=${horizon}: skipped, no confirmed cutoff`)
       continue
     }
-    horizonStates.push({
-      horizon,
-      trainEndDate,
-      states: {
-        up: createModelState(),
-        down: createModelState(),
-        wait: createModelState(),
-      },
-      trainRows: 0,
-    })
+    horizonStates.push({ horizon, trainEndDate, states: createDirectionStates(), trainRows: 0 })
   }
   if (horizonStates.length === 0) return
 
@@ -566,20 +441,16 @@ async function trainAllHorizonsPaged(): Promise<void> {
 
   for (let epoch = 0; epoch < EPOCHS; epoch += 1) {
     const counts = await forEachMultiHorizonPage(horizonStates, dates, `epoch=${epoch + 1}/${EPOCHS}`, (horizonState, row) => {
-      updateModelState(horizonState.states.up, row.vector, row.up)
-      updateModelState(horizonState.states.down, row.vector, row.down)
-      updateModelState(horizonState.states.wait, row.vector, row.wait)
+      for (const direction of DIRECTIONS) updateModelState(horizonState.states[direction], row.vector, row[direction], LR)
     })
     for (const horizonState of horizonStates) horizonState.trainRows = counts.get(horizonState.horizon) ?? 0
   }
 
   for (const horizonState of horizonStates) {
-    for (const direction of ['up', 'down', 'wait'] as PhysicsDirection[]) resetMetrics(horizonState.states[direction])
+    for (const direction of DIRECTIONS) resetMetrics(horizonState.states[direction])
   }
   await forEachMultiHorizonPage(horizonStates, dates, 'evaluate', (horizonState, row) => {
-    evaluateModelState(horizonState.states.up, row.vector, row.up)
-    evaluateModelState(horizonState.states.down, row.vector, row.down)
-    evaluateModelState(horizonState.states.wait, row.vector, row.wait)
+    for (const direction of DIRECTIONS) evaluateModelState(horizonState.states[direction], row.vector, row[direction])
   })
 
   const statements: Array<{ sql: string; args: Array<string | number> }> = []
@@ -598,26 +469,9 @@ async function trainAllHorizonsPaged(): Promise<void> {
       featureVersion: ML_PHYSICS_VERSION,
       featureCount: ML_PHYSICS_FEATURE_NAMES.length,
     }
-    for (const direction of ['up', 'down', 'wait'] as PhysicsDirection[]) {
-      const model = finalizeModelState(horizonState.states[direction], baseMetrics)
-      const modelName = `ma_physics_v${ML_PHYSICS_VERSION}_${direction}_h${horizonState.horizon}_${MODEL_VERSION}`
-      statements.push({
-        sql: `
-          INSERT OR REPLACE INTO ml_models
-            (model_name, model_type, direction, horizon_days, feature_names_json, weights_json, intercept, metrics_json, trained_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-        `,
-        args: [
-          modelName,
-          ML_PHYSICS_MODEL_TYPE,
-          direction,
-          horizonState.horizon,
-          JSON.stringify(ML_PHYSICS_FEATURE_NAMES),
-          JSON.stringify(model.weights),
-          model.intercept,
-          JSON.stringify(model.metrics),
-        ],
-      })
+    for (const direction of DIRECTIONS) {
+      const model = finalizeModelState(horizonState.states[direction], baseMetrics, EPOCHS, LR)
+      statements.push(modelStatement(direction, horizonState.horizon, model))
       console.log(`ml physics train horizon=${horizonState.horizon} direction=${direction}: rows=${Number(model.metrics.samples).toLocaleString()} cutoff=${horizonState.trainEndDate} acc=${model.metrics.accuracy}`)
     }
   }
@@ -635,14 +489,7 @@ async function trainHorizon(horizon: number): Promise<void> {
     return
   }
   const rows = await loadRows(horizon, trainEndDate)
-  const parsed = rows
-    .map((row) => ({
-      vector: parseVector(row.vector_json),
-      up: row.up_label ? 1 : 0,
-      down: row.down_label ? 1 : 0,
-      wait: row.wait_label ? 1 : 0,
-    }))
-    .filter((row) => row.vector.length === ML_PHYSICS_FEATURE_NAMES.length)
+  const parsed = rows.map(parseTrainRow).filter((row): row is ParsedTrainRow => row !== null)
   if (parsed.length === 0) {
     console.log(`ml physics train horizon=${horizon}: skipped, no rows before ${trainEndDate}`)
     return
@@ -659,26 +506,9 @@ async function trainHorizon(horizon: number): Promise<void> {
     featureCount: ML_PHYSICS_FEATURE_NAMES.length,
   }
   const statements: Array<{ sql: string; args: Array<string | number> }> = []
-  for (const direction of ['up', 'down', 'wait'] as PhysicsDirection[]) {
-    const model = train(parsed.map((row) => ({ vector: row.vector, label: row[direction] })))
-    const modelName = `ma_physics_v${ML_PHYSICS_VERSION}_${direction}_h${horizon}_${MODEL_VERSION}`
-    statements.push({
-      sql: `
-        INSERT OR REPLACE INTO ml_models
-          (model_name, model_type, direction, horizon_days, feature_names_json, weights_json, intercept, metrics_json, trained_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-      `,
-      args: [
-        modelName,
-        ML_PHYSICS_MODEL_TYPE,
-        direction,
-        horizon,
-        JSON.stringify(ML_PHYSICS_FEATURE_NAMES),
-        JSON.stringify(model.weights),
-        model.intercept,
-        JSON.stringify({ ...baseMetrics, ...model.metrics }),
-      ],
-    })
+  for (const direction of DIRECTIONS) {
+    const model = trainInMemory(parsed.map((row) => ({ vector: row.vector, label: row[direction] })), ML_PHYSICS_FEATURE_NAMES.length, EPOCHS, LR)
+    statements.push(modelStatement(direction, horizon, { ...model, metrics: { ...baseMetrics, ...model.metrics } }))
     console.log(`ml physics train horizon=${horizon} direction=${direction}: rows=${parsed.length.toLocaleString()} cutoff=${trainEndDate} acc=${model.metrics.accuracy}`)
   }
   await execBatch(statements)
