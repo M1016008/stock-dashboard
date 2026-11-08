@@ -3,6 +3,7 @@ import fs from 'node:fs'
 
 const page = fs.readFileSync('app/us/analysis/transitions/page.tsx', 'utf8')
 const route = fs.readFileSync('app/api/us/hex/transitions/route.ts', 'utf8')
+const routeFlow = fs.readFileSync('lib/server/stage-transition-route.ts', 'utf8')
 const scanner = fs.readFileSync('components/hex/StageTransitionScanner.tsx', 'utf8')
 const executor = fs.readFileSync('lib/server/us-stage-transition-scanner.ts', 'utf8')
 const sharedQuery = fs.readFileSync('lib/queries/stage-transition-scanner.ts', 'utf8')
@@ -13,14 +14,15 @@ assert.match(page, /\/us\/analysis\/transitions\?view=scanner/, 'US local naviga
 
 assert.match(route, /export async function GET/, 'US transition scanner must remain read-only GET')
 assert.doesNotMatch(route, /export async function (POST|PUT|PATCH|DELETE)/, 'US transition scanner must not expose mutations')
-assert.match(route, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagination must use the documented defaults')
-assert.match(route, /universeFilter: null/, 'JP-only universe filters must not leak into the US query')
+assert.match(route, /stageTransitionRouteResponse\(request,/, 'US transition scanner must use the shared transition route flow')
+assert.match(routeFlow, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagination must use the documented defaults')
+assert.match(route, /universeFilter: \(\) => null/, 'JP-only universe filters must not leak into the US query')
 assert.match(route, /usStageTransitionExecutor/, 'US route must use the isolated US analytics database')
 assert.match(route, /CURRENT_US_TICKER_UNIVERSE/, 'US classification basis must be explicit')
 assert.match(route, /CURRENT_DATE_ONLY/, 'Current-only US classification filters must be limited to today')
 assert.match(route, /historical_classification_filter_unavailable/, 'Historical US classification filters must fail closed')
 assert.match(route, /requireActiveTicker: false/, 'Historical US transitions must not be filtered by the current active universe')
-assert.match(route, /Cache-Control': 'no-store'/, 'PIT scanner results must not use a stale shared cache')
+assert.match(routeFlow, /Cache-Control': 'no-store'/, 'PIT scanner results must not use a stale shared cache')
 
 assert.match(executor, /execUsAnalyticsAll/, 'US executor must use US analytics reads')
 assert.match(executor, /execUsAnalyticsGet/, 'US executor must use US analytics point reads')
