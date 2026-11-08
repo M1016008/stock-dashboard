@@ -643,6 +643,8 @@ assert.match(jpAutoUpdateInstaller, /runtimeEnvPath/)
 assert.match(jpAutoUpdateInstaller, /productionEnvPath/)
 assert.match(jpAutoUpdateInstaller, /--env-file=.*runtimeEnvPath/)
 assert.match(jpAutoUpdateInstaller, /Canonical runtime env is missing JQUANTS_API_KEY/)
+assert.match(jpAutoUpdateInstaller, /--env-file=.*edinetEnvPath/)
+assert.match(jpAutoUpdateInstaller, /edinet\.env must contain exactly one key: EDINET_API_KEY/)
 
 const jpMlInstaller = read('scripts/install-local-ml-learning.ts')
 assert.match(jpMlInstaller, /ML_LEARNING_HOUR \?\? '22'/)

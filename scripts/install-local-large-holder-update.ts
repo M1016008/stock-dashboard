@@ -10,7 +10,9 @@ const home = homedir()
 const agents = join(home, 'Library', 'LaunchAgents')
 const logs = join(home, 'Library', 'Logs', 'StockBoard')
 const configDir = join(home, 'Library', 'Application Support', 'StockBoard', 'config')
-const runtimeEnv = join(configDir, 'runtime.env')
+// Scoped credential files: this job needs J-Quants and EDINET only.
+const jquantsEnv = join(configDir, 'jquants.env')
+const edinetEnv = join(configDir, 'edinet.env')
 const productionEnv = join(configDir, 'production.env')
 const plistPath = join(agents, `${label}.plist`)
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
@@ -33,17 +35,18 @@ const envKeys = (path: string) => new Set(readFileSync(path, 'utf8').split('\n')
   .map((line) => line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/))
   .filter((match) => match && match[2].trim() && !['""', "''"].includes(match[2].trim()))
   .map((match) => match![1]))
-const runtimeMode = statSync(runtimeEnv).mode & 0o777
-const productionMode = statSync(productionEnv).mode & 0o777
-if ((runtimeMode & 0o077) !== 0 || (productionMode & 0o077) !== 0) {
+const modes = [jquantsEnv, edinetEnv, productionEnv].map((path) => statSync(path).mode & 0o777)
+if (modes.some((mode) => (mode & 0o077) !== 0)) {
   throw new Error('Canonical machine env permissions must be owner-only')
 }
-const runtimeEnvKeys = envKeys(runtimeEnv)
 const productionEnvKeys = envKeys(productionEnv)
 for (const key of requiredMachineKeys) {
   if (!productionEnvKeys.has(key)) throw new Error(`Canonical production env is missing ${key}`)
 }
-if (!runtimeEnvKeys.has('JQUANTS_API_KEY')) throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
+for (const [path, key] of [[jquantsEnv, 'JQUANTS_API_KEY'], [edinetEnv, 'EDINET_API_KEY']] as const) {
+  const keys = [...envKeys(path)]
+  if (keys.length !== 1 || keys[0] !== key) throw new Error(`${path} must contain exactly one key: ${key}`)
+}
 const schedule = [1, 2, 3, 4, 5].flatMap((weekday) => scheduleTimes.map((time) => {
   const [hour, minute] = time.split(':').map(Number)
   return calendar(hour, minute, weekday)
@@ -56,7 +59,8 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 ${launchAgentStorageEnvironmentXml('')}
 <key>ProgramArguments</key><array>
 <string>${escape(node)}</string>
-<string>--env-file=${escape(runtimeEnv)}</string>
+<string>--env-file=${escape(jquantsEnv)}</string>
+<string>--env-file=${escape(edinetEnv)}</string>
 <string>--env-file=${escape(productionEnv)}</string>
 <string>--import</string><string>tsx</string>
 <string>${escape(script)}</string>
@@ -73,10 +77,10 @@ ${launchAgentStorageEnvironmentXml('')}
 
 if (process.argv.includes('--dry-run')) {
   console.log(JSON.stringify({ label, plistPath, machineEnv: 'PRESENT',
-    machineEnvModes: `${runtimeMode.toString(8)}/${productionMode.toString(8)}`,
+    machineEnvModes: modes.map((mode) => mode.toString(8)).join('/'),
     requiredMachineKeys: 'PRESENT',
     jquantsApiKey: 'PRESENT',
-    edinetApiKey: runtimeEnvKeys.has('EDINET_API_KEY') ? 'PRESENT' : 'OPTIONAL_NOT_SET',
+    edinetApiKey: 'PRESENT',
     schedule: `Mon-Fri ${scheduleTimes.join(', ')} JST + RunAtLoad catch-up`,
     command: 'run-large-holder-daily-current.ts', writes: 0 }, null, 2))
 } else {

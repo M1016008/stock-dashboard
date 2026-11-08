@@ -14,6 +14,8 @@ const label = 'com.stockboard.update-latest'
 const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
 const productionEnvPath = path.join(configDir, 'production.env')
+// EDINET is not in runtime.env; it is read from its own one-key file.
+const edinetEnvPath = path.join(configDir, 'edinet.env')
 
 function marketDayRetrySchedule(): string {
   // launchd Weekday: 1=Monday ... 5=Friday.
@@ -32,7 +34,7 @@ function marketDayRetrySchedule(): string {
 
 ensureLaunchAgentDirs()
 
-for (const envPath of [runtimeEnvPath, productionEnvPath]) {
+for (const envPath of [runtimeEnvPath, productionEnvPath, edinetEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
   if ((fs.statSync(envPath).mode & 0o077) !== 0) {
     throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
@@ -40,6 +42,12 @@ for (const envPath of [runtimeEnvPath, productionEnvPath]) {
 }
 if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
   throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
+}
+const edinetEnvKeys = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
+  .map((line) => line.trim()).filter((line) => line && !line.startsWith('#'))
+  .map((line) => line.split('=', 1)[0])
+if (edinetEnvKeys.length !== 1 || edinetEnvKeys[0] !== 'EDINET_API_KEY') {
+  throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY')
 }
 
 const command = [
@@ -81,6 +89,7 @@ const command = [
     JSON.stringify(process.execPath),
     `--env-file=${JSON.stringify(runtimeEnvPath)}`,
     `--env-file=${JSON.stringify(productionEnvPath)}`,
+    `--env-file=${JSON.stringify(edinetEnvPath)}`,
     '--import tsx scripts/update-latest.ts',
   ].join(' '),
 ].join(' && ')
