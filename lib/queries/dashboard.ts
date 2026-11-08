@@ -714,6 +714,85 @@ interface EarningsCalendarQueryOptions {
   signalMode?: 'none' | 'labels' | 'details'
 }
 
+// Shared SQL fragments for the JP earnings calendar queries below.
+// Placeholders: CAL_COLUMNS (1: daysLeft base), MARKET_CTES (3: px, py, st), ROW_COLUMNS (3: avg volume as-of).
+const EARNINGS_CAL_COLUMNS_SQL = `
+      SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
+             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
+             e.prediction_sample_count, e.prediction_mode_count,
+             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
+             CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
+      FROM earnings_calendar e`
+
+const EARNINGS_MARKET_CTES_SQL = `
+    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
+    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
+    st AS (SELECT * FROM daily_snapshots WHERE date = ?)`
+
+const EARNINGS_ROW_COLUMNS_SQL = `
+           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
+           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
+           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
+           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
+           cal.time_bucket AS timeBucket,
+           tu.sector17_name AS sector17Name,
+           COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
+           COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
+           COALESCE(tu.margin_type, sml.margin_type) AS marginType,
+           sml.as_of_date AS marginAsOfDate,
+           sml.long_margin AS longMargin,
+           sml.short_margin AS shortMargin,
+           sml.long_change AS longChange,
+           sml.short_change AS shortChange,
+           sml.credit_ratio AS creditRatio,
+           sml.short_ratio AS shortRatio,
+           st.daily_a_stage,
+           st.daily_b_stage,
+           st.weekly_a_stage,
+           st.weekly_b_stage,
+           st.monthly_a_stage,
+           st.monthly_b_stage,
+           px.close AS price,
+           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC LIMIT 10
+             )
+           ) AS avgVolume10,
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC LIMIT 30
+             )
+           ) AS avgVolume30,
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC LIMIT 60
+             )
+           ) AS avgVolume60`
+
+const EARNINGS_ROW_JOINS_SQL = `
+    FROM cal
+    LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
+    LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
+    LEFT JOIN px USING (ticker)
+    LEFT JOIN py USING (ticker)
+    LEFT JOIN st USING (ticker)`
+
+const EARNINGS_NO_POST_COLUMNS_SQL = `
+           ,NULL AS postEarningsBaseDate,
+           NULL AS postEarningsBasePrice,
+           NULL AS postEarningsChangePct,
+           NULL AS postEarningsTradingDays`
+
 export async function getEarningsCalendar(
   daysAhead = 14,
   date?: string | null,
@@ -735,83 +814,10 @@ export async function getEarningsCalendar(
   const limitArgs: Array<string | number> = queryOptions.limit == null ? [] : [queryOptions.limit]
   const rows = await execAll<EarningsRowBase>(
     `
-    WITH cal AS (
-      SELECT ticker, announce_date, company_name, sector_name, market_segment, source,
-             scheduled_time, scheduled_time_kind, predicted_time, prediction_confidence,
-             prediction_sample_count, prediction_mode_count,
-             actual_disclosed_date, actual_disclosed_time, time_bucket,
-             CAST(julianday(announce_date) - julianday(?) AS INTEGER) AS daysLeft
-      FROM earnings_calendar
+    WITH cal AS (${EARNINGS_CAL_COLUMNS_SQL}
       WHERE ${calWhere}
-    ),
-    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    st AS (SELECT * FROM daily_snapshots WHERE date = ?)
-    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
-           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
-           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
-           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
-           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
-           cal.time_bucket AS timeBucket,
-           tu.sector17_name AS sector17Name,
-           COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
-           COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
-           COALESCE(tu.margin_type, sml.margin_type) AS marginType,
-           sml.as_of_date AS marginAsOfDate,
-           sml.long_margin AS longMargin,
-           sml.short_margin AS shortMargin,
-           sml.long_change AS longChange,
-           sml.short_change AS shortChange,
-           sml.credit_ratio AS creditRatio,
-           sml.short_ratio AS shortRatio,
-           st.daily_a_stage,
-           st.daily_b_stage,
-           st.weekly_a_stage,
-           st.weekly_b_stage,
-           st.monthly_a_stage,
-           st.monthly_b_stage,
-           px.close AS price,
-           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume
-               FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC
-               LIMIT 10
-             )
-           ) AS avgVolume10,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume
-               FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC
-               LIMIT 30
-             )
-           ) AS avgVolume30,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume
-               FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC
-               LIMIT 60
-             )
-           ) AS avgVolume60
-           ,NULL AS postEarningsBaseDate,
-           NULL AS postEarningsBasePrice,
-           NULL AS postEarningsChangePct,
-           NULL AS postEarningsTradingDays
-    FROM cal
-    LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
-    LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
-    LEFT JOIN px USING (ticker)
-    LEFT JOIN py USING (ticker)
-    LEFT JOIN st USING (ticker)
+    ),${EARNINGS_MARKET_CTES_SQL}
+    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,${EARNINGS_ROW_COLUMNS_SQL}${EARNINGS_NO_POST_COLUMNS_SQL}${EARNINGS_ROW_JOINS_SQL}
     ORDER BY cal.daysLeft ASC
     ${limitSql}
     `,
@@ -832,79 +838,12 @@ async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string 
     WITH latest_cal AS (
       SELECT MAX(announce_date) AS announce_date FROM earnings_calendar
     ),
-    cal AS (
-      SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
-             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
-             e.prediction_sample_count, e.prediction_mode_count,
-             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
-             CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
-      FROM earnings_calendar e
+    cal AS (${EARNINGS_CAL_COLUMNS_SQL}
       JOIN latest_cal lc ON lc.announce_date = e.announce_date
       ORDER BY e.ticker
       LIMIT ?
-    ),
-    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    st AS (SELECT * FROM daily_snapshots WHERE date = ?)
-    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
-           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
-           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
-           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
-           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
-           cal.time_bucket AS timeBucket,
-           tu.sector17_name AS sector17Name,
-           COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
-           COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
-           COALESCE(tu.margin_type, sml.margin_type) AS marginType,
-           sml.as_of_date AS marginAsOfDate,
-           sml.long_margin AS longMargin,
-           sml.short_margin AS shortMargin,
-           sml.long_change AS longChange,
-           sml.short_change AS shortChange,
-           sml.credit_ratio AS creditRatio,
-           sml.short_ratio AS shortRatio,
-           st.daily_a_stage,
-           st.daily_b_stage,
-           st.weekly_a_stage,
-           st.weekly_b_stage,
-           st.monthly_a_stage,
-           st.monthly_b_stage,
-           px.close AS price,
-           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 10
-             )
-           ) AS avgVolume10,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 30
-             )
-           ) AS avgVolume30,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 60
-             )
-           ) AS avgVolume60
-           ,NULL AS postEarningsBaseDate,
-           NULL AS postEarningsBasePrice,
-           NULL AS postEarningsChangePct,
-           NULL AS postEarningsTradingDays
-    FROM cal
-    LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
-    LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
-    LEFT JOIN px USING (ticker)
-    LEFT JOIN py USING (ticker)
-    LEFT JOIN st USING (ticker)
+    ),${EARNINGS_MARKET_CTES_SQL}
+    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,${EARNINGS_ROW_COLUMNS_SQL}${EARNINGS_NO_POST_COLUMNS_SQL}${EARNINGS_ROW_JOINS_SQL}
     ORDER BY cal.announce_date DESC, cal.ticker
     `,
     [baseDate, limit, baseDate, prevDate ?? baseDate, baseDate, baseDate, baseDate, baseDate],
@@ -921,81 +860,14 @@ async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate:
     WITH latest_import AS (
       SELECT MAX(imported_at) AS imported_at FROM earnings_calendar
     ),
-    cal AS (
-      SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
-             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
-             e.prediction_sample_count, e.prediction_mode_count,
-             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
-             CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
-      FROM earnings_calendar e
+    cal AS (${EARNINGS_CAL_COLUMNS_SQL}
       JOIN latest_import li ON li.imported_at = e.imported_at
       WHERE e.announce_date IS NOT NULL AND e.announce_date <> ''
         AND e.announce_date >= ?
       ORDER BY e.announce_date ASC, e.ticker
       LIMIT ?
-    ),
-    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    st AS (SELECT * FROM daily_snapshots WHERE date = ?)
-    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
-           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
-           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
-           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
-           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
-           cal.time_bucket AS timeBucket,
-           tu.sector17_name AS sector17Name,
-           COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
-           COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
-           COALESCE(tu.margin_type, sml.margin_type) AS marginType,
-           sml.as_of_date AS marginAsOfDate,
-           sml.long_margin AS longMargin,
-           sml.short_margin AS shortMargin,
-           sml.long_change AS longChange,
-           sml.short_change AS shortChange,
-           sml.credit_ratio AS creditRatio,
-           sml.short_ratio AS shortRatio,
-           st.daily_a_stage,
-           st.daily_b_stage,
-           st.weekly_a_stage,
-           st.weekly_b_stage,
-           st.monthly_a_stage,
-           st.monthly_b_stage,
-           px.close AS price,
-           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 10
-             )
-           ) AS avgVolume10,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 30
-             )
-           ) AS avgVolume30,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 60
-             )
-           ) AS avgVolume60
-           ,NULL AS postEarningsBaseDate,
-           NULL AS postEarningsBasePrice,
-           NULL AS postEarningsChangePct,
-           NULL AS postEarningsTradingDays
-    FROM cal
-    LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
-    LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
-    LEFT JOIN px USING (ticker)
-    LEFT JOIN py USING (ticker)
-    LEFT JOIN st USING (ticker)
+    ),${EARNINGS_MARKET_CTES_SQL}
+    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,${EARNINGS_ROW_COLUMNS_SQL}${EARNINGS_NO_POST_COLUMNS_SQL}${EARNINGS_ROW_JOINS_SQL}
     ORDER BY cal.announce_date ASC, cal.ticker
     `,
     [baseDate, baseDate, limit, baseDate, prevDate ?? baseDate, baseDate, baseDate, baseDate, baseDate],
@@ -1015,20 +887,11 @@ async function getCompletedEarningsCalendarRows(
 ): Promise<EarningsRow[]> {
   const rows = await execAll<EarningsRowBase>(
     `
-    WITH cal AS (
-      SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
-             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
-             e.prediction_sample_count, e.prediction_mode_count,
-             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
-             CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
-      FROM earnings_calendar e
+    WITH cal AS (${EARNINGS_CAL_COLUMNS_SQL}
       WHERE e.announce_date BETWEEN date(?, '-' || ? || ' days') AND date(?, '-1 day')
       ORDER BY e.announce_date DESC, e.ticker
       LIMIT ?
-    ),
-    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    st AS (SELECT * FROM daily_snapshots WHERE date = ?),
+    ),${EARNINGS_MARKET_CTES_SQL},
     first_trade AS (
       SELECT cal.ticker, MIN(od.date) AS base_date
       FROM cal
@@ -1040,55 +903,7 @@ async function getCompletedEarningsCalendarRows(
       FROM first_trade ft
       LEFT JOIN ohlcv_daily od ON od.ticker = ft.ticker AND od.date = ft.base_date
     )
-    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'completed' AS kind, cal.source,
-           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
-           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
-           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
-           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
-           cal.time_bucket AS timeBucket,
-           tu.sector17_name AS sector17Name,
-           COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
-           COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
-           COALESCE(tu.margin_type, sml.margin_type) AS marginType,
-           sml.as_of_date AS marginAsOfDate,
-           sml.long_margin AS longMargin,
-           sml.short_margin AS shortMargin,
-           sml.long_change AS longChange,
-           sml.short_change AS shortChange,
-           sml.credit_ratio AS creditRatio,
-           sml.short_ratio AS shortRatio,
-           st.daily_a_stage,
-           st.daily_b_stage,
-           st.weekly_a_stage,
-           st.weekly_b_stage,
-           st.monthly_a_stage,
-           st.monthly_b_stage,
-           px.close AS price,
-           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 10
-             )
-           ) AS avgVolume10,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 30
-             )
-           ) AS avgVolume30,
-           (
-             SELECT AVG(volume)
-             FROM (
-               SELECT volume FROM ohlcv_daily od
-               WHERE od.ticker = cal.ticker AND od.date <= ?
-               ORDER BY od.date DESC LIMIT 60
-             )
-           ) AS avgVolume60,
+    SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'completed' AS kind, cal.source,${EARNINGS_ROW_COLUMNS_SQL},
            fp.base_date AS postEarningsBaseDate,
            fp.base_close AS postEarningsBasePrice,
            CASE WHEN fp.base_close > 0 THEN 100.0 * (px.close - fp.base_close) / fp.base_close END AS postEarningsChangePct,
@@ -1096,13 +911,7 @@ async function getCompletedEarningsCalendarRows(
              SELECT COUNT(*) - 1
              FROM ohlcv_daily od
              WHERE od.ticker = cal.ticker AND fp.base_date IS NOT NULL AND od.date BETWEEN fp.base_date AND ?
-           ) AS postEarningsTradingDays
-    FROM cal
-    LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
-    LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
-    LEFT JOIN px USING (ticker)
-    LEFT JOIN py USING (ticker)
-    LEFT JOIN st USING (ticker)
+           ) AS postEarningsTradingDays${EARNINGS_ROW_JOINS_SQL}
     LEFT JOIN first_px fp USING (ticker)
     ORDER BY cal.announce_date DESC, cal.ticker
     `,
