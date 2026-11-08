@@ -32,15 +32,31 @@ function clampMinute(value: number): number {
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
 
-// Provision the scoped file once from the canonical runtime.env (owner-only, value never printed).
+// Dotenv value of KEY in one line, with surrounding quotes removed ('' when absent or empty).
+function dotenvValue(line: string | undefined, key: string): string {
+  const match = line?.trim().match(new RegExp(`^${key}=(.*)$`))
+  const raw = match ? match[1].trim() : ''
+  const quoted = raw.match(/^(["'])(.*)\1$/)
+  return (quoted ? quoted[2] : raw).trim()
+}
+
+// Keep the scoped file in sync with the canonical runtime.env (owner-only, values never printed).
+// A reissued key in runtime.env is propagated here on every install.
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
-if (!fs.existsSync(jquantsEnvPath)) {
-  const line = fs.existsSync(runtimeEnvPath)
-    ? fs.readFileSync(runtimeEnvPath, 'utf8').split('\n').find((entry) => /^JQUANTS_API_KEY=\S/.test(entry.trim()))
-    : undefined
-  if (!line) throw new Error(`Cannot provision ${jquantsEnvPath}: runtime.env has no non-empty JQUANTS_API_KEY`)
-  fs.writeFileSync(jquantsEnvPath, `${line.trim()}\n`, { mode: 0o600, flag: 'wx' })
-  console.log(`provisioned ${jquantsEnvPath} (key: JQUANTS_API_KEY)`)
+const runtimeLine = fs.existsSync(runtimeEnvPath)
+  ? fs.readFileSync(runtimeEnvPath, 'utf8').split('\n').find((entry) => entry.trim().startsWith('JQUANTS_API_KEY='))
+  : undefined
+if (runtimeLine && dotenvValue(runtimeLine, 'JQUANTS_API_KEY')) {
+  const current = fs.existsSync(jquantsEnvPath) ? fs.readFileSync(jquantsEnvPath, 'utf8') : null
+  const desired = `${runtimeLine.trim()}\n`
+  if (current !== desired) {
+    const temporary = `${jquantsEnvPath}.${process.pid}.tmp`
+    fs.writeFileSync(temporary, desired, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, jquantsEnvPath)
+    console.log(`${current === null ? 'provisioned' : 'synchronized'} ${jquantsEnvPath} from runtime.env (key: JQUANTS_API_KEY)`)
+  }
+} else if (!fs.existsSync(jquantsEnvPath)) {
+  throw new Error(`Cannot provision ${jquantsEnvPath}: runtime.env has no non-empty JQUANTS_API_KEY`)
 }
 for (const envPath of [jquantsEnvPath, productionEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
@@ -52,7 +68,7 @@ const jquantsEnvLines = fs.readFileSync(jquantsEnvPath, 'utf8')
   .split('\n')
   .map((line) => line.trim())
   .filter((line) => line && !line.startsWith('#'))
-if (jquantsEnvLines.length !== 1 || !/^JQUANTS_API_KEY=\S+/.test(jquantsEnvLines[0])) {
+if (jquantsEnvLines.length !== 1 || !dotenvValue(jquantsEnvLines[0], 'JQUANTS_API_KEY')) {
   throw new Error('jquants.env must contain exactly one key: JQUANTS_API_KEY (non-empty)')
 }
 
