@@ -1,27 +1,16 @@
 import { cache } from 'react'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import {
-  getDashboardIndices,
   getLatestDate,
   getMarketMovers,
   getPatternStatsTopBottom,
-  getStageDistribution,
-  getStereoscopicSignals,
-  getTodayTransitionCounts,
-  type CreditShortDashboard,
-  type IndexQuote,
   type MarketMovers,
   type PatternRankRow,
-  type StageCountRow,
-  type StereoscopicRow,
-  type TransitionCount,
 } from '@/lib/queries/dashboard'
 
 export type DashboardCachePayload = {
   latestDate: string
-  stereoscopicSignals: StereoscopicRow[]
   marketMovers: MarketMovers
-  creditShortDashboard?: CreditShortDashboard
   patternStatsTopBottom: PatternRankRow[]
   computedAt: string
 }
@@ -59,18 +48,15 @@ export async function buildDashboardCache(date?: string): Promise<DashboardCache
   if (!latestDate) return null
 
   const [
-    stereoscopicSignals,
     marketMovers,
     patternStatsTopBottom,
   ] = await Promise.all([
-    getStereoscopicSignals(12, latestDate),
     getMarketMovers(latestDate),
     getPatternStatsTopBottom(),
   ])
 
   const payload: DashboardCachePayload = {
     latestDate,
-    stereoscopicSignals,
     marketMovers,
     patternStatsTopBottom,
     computedAt: new Date().toISOString(),
@@ -101,10 +87,6 @@ export async function getDashboardPayload(date?: string | null): Promise<Dashboa
   return getDashboardPayloadForRequest(date ?? null)
 }
 
-export async function getCachedLatestDate(date?: string | null): Promise<string | null> {
-  return (await getDashboardPayload(date))?.latestDate ?? null
-}
-
 export async function getDashboardAvailableDates(limit = 5000): Promise<DashboardAvailableDate[]> {
   return execAll<DashboardAvailableDate>(
     `SELECT date, NULL AS tickers
@@ -118,42 +100,8 @@ export async function getDashboardAvailableDates(limit = 5000): Promise<Dashboar
   )
 }
 
-export async function getDashboardDateOption(date: string | null | undefined): Promise<DashboardAvailableDate | null> {
-  if (!date) return null
-  const row = await execGet<DashboardAvailableDate>(
-    `
-      SELECT date, NULL AS tickers
-      FROM daily_snapshots
-      WHERE date = ?
-      LIMIT 1
-    `,
-    [date],
-  )
-  return row ?? null
-}
-
-export async function getCachedDashboardIndices(): Promise<IndexQuote[]> {
-  return getDashboardIndices()
-}
-
-export async function getCachedStageDistributionDailyA(date?: string | null): Promise<StageCountRow[]> {
-  return getStageDistribution('daily_a_stage', date)
-}
-
-export async function getCachedTodayTransitionCounts(date?: string | null): Promise<TransitionCount | null> {
-  return getTodayTransitionCounts(date)
-}
-
-export async function getCachedStereoscopicSignals(date?: string | null): Promise<StereoscopicRow[]> {
-  return (await getDashboardPayload(date))?.stereoscopicSignals ?? []
-}
-
 export async function getCachedMarketMovers(date?: string | null): Promise<MarketMovers> {
   return (await getDashboardPayload(date))?.marketMovers ?? { newHighs: [], newLows: [], volumeSpikes: [] }
-}
-
-export async function getCachedCreditShortDashboard(date?: string | null): Promise<CreditShortDashboard> {
-  return (await getDashboardPayload(date))?.creditShortDashboard ?? { asOf: null, sectorRows: [], stockRows: [] }
 }
 
 export async function getCachedPatternStatsTopBottom(date?: string | null): Promise<PatternRankRow[]> {

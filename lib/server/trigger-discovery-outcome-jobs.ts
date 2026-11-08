@@ -5,10 +5,20 @@ import { once } from 'node:events'
 import { createInterface } from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
-import type { Transaction } from '@libsql/client'
 import { client, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
 import { historicalScanResultPaths, isHistoricalScanJobResultCurrent } from '@/lib/server/trigger-discovery-historical-scan-jobs'
-import { recoverWorkerJobs } from '@/lib/server/trigger-historical-worker-ownership'
+import {
+  JOB_ID_PATTERN,
+  beginWriteTransaction,
+  boundedIntegerEnv,
+  cancelWorkerJob,
+  claimWorkerJob,
+  cleanupExpiredWorkerJobs,
+  isoDateTime,
+  nowSeconds,
+  recoverWorkerJobs,
+  stableJson,
+} from '@/lib/server/trigger-historical-worker-ownership'
 import {
   aggregateOutcomeRows,
   calculateEventOutcome,
@@ -44,7 +54,6 @@ const DEFAULT_REUSE_SECONDS = 15 * 60
 const DEFAULT_STALE_SECONDS = 3 * 60
 const OHLCV_TICKER_BATCH_SIZE = 200
 const MAX_RESULT_PAGE_SIZE = 1_000
-const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export type TriggerOutcomeJobRow = {
   id: string
@@ -97,51 +106,6 @@ export class TriggerOutcomeSourceError extends Error {
   ) {
     super(code)
     this.name = 'TriggerOutcomeSourceError'
-  }
-}
-
-function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(process.env[name])
-  if (!Number.isInteger(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
-function nowSeconds(now: () => number = Date.now): number {
-  return Math.floor(now() / 1_000)
-}
-
-function isoDateTime(epochSeconds: number | null): string | null {
-  return epochSeconds == null ? null : new Date(Number(epochSeconds) * 1_000).toISOString()
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue)
-  if (!value || typeof value !== 'object') return value
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableValue(child)]),
-  )
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(stableValue(value))
-}
-
-function isDatabaseBusy(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /SQLITE_BUSY|database is locked/i.test(message)
-}
-
-async function beginWriteTransaction(): Promise<Transaction> {
-  const retries = boundedIntegerEnv('SQLITE_BUSY_RETRIES', 8, 0, 20)
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await client.transaction('write')
-    } catch (error) {
-      if (!isDatabaseBusy(error) || attempt >= retries) throw error
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2_500, 120 * 2 ** attempt)))
-    }
   }
 }
 
@@ -482,42 +446,8 @@ export async function listRecentCompletedOutcomeJobs(limit = 20): Promise<Trigge
 }
 
 export async function cancelOutcomeAnalysisJob(id: string): Promise<TriggerOutcomeJobSummary | null> {
-  if (!JOB_ID_PATTERN.test(id)) return null
-  await ensureReady()
-  const tx = await beginWriteTransaction()
-  try {
-    const selected = await tx.execute({
-      sql: 'SELECT * FROM trigger_outcome_analysis_jobs WHERE id=?', args: [id],
-    })
-    const row = selected.rows[0] as unknown as TriggerOutcomeJobRow | undefined
-    if (!row) {
-      await tx.commit()
-      return null
-    }
-    if (row.status === 'QUEUED') {
-      await tx.execute({
-        sql: `UPDATE trigger_outcome_analysis_jobs SET status='CANCELLED', cancel_requested=1,
-          completed_at=unixepoch(), heartbeat_at=unixepoch(), owner_token=NULL, error_category=NULL
-          WHERE id=? AND status='QUEUED'`, args: [id],
-      })
-    } else if (row.status === 'RUNNING') {
-      await tx.execute({
-        sql: `UPDATE trigger_outcome_analysis_jobs SET status='CANCEL_REQUESTED', cancel_requested=1,
-          heartbeat_at=unixepoch() WHERE id=? AND status='RUNNING'`, args: [id],
-      })
-    }
-    const updated = await tx.execute({
-      sql: 'SELECT * FROM trigger_outcome_analysis_jobs WHERE id=?', args: [id],
-    })
-    await tx.commit()
-    const result = updated.rows[0] as unknown as TriggerOutcomeJobRow | undefined
-    return result ? jobSummary(result) : null
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  const updated = await cancelWorkerJob<TriggerOutcomeJobRow>('trigger_outcome_analysis_jobs', id, 'transaction')
+  return updated ? jobSummary(updated) : null
 }
 
 function staleSeconds(): number {
@@ -540,32 +470,14 @@ export async function claimNextOutcomeJob(
   now: () => number = Date.now,
 ): Promise<TriggerOutcomeJobRow | null> {
   const current = nowSeconds(now)
-  const candidate = await execGet<{ id: string }>(`SELECT id FROM trigger_outcome_analysis_jobs
-    WHERE status='QUEUED'
-      AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-      AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-      AND NOT EXISTS (SELECT 1 FROM trigger_path_research_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-      AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-    ORDER BY created_at, id LIMIT 1`)
-  if (!candidate) return null
-  const claimed = await client.execute({
-    sql: `UPDATE trigger_outcome_analysis_jobs SET status='RUNNING', started_at=?, completed_at=NULL,
-      heartbeat_at=?, owner_token=?, cancel_requested=0, processed_events=0, processed_tickers=0,
-      result_location=NULL, result_size_bytes=0, duration_ms=0, sql_ms=0, calculation_ms=0,
-      aggregation_ms=0, serialization_ms=0, save_ms=0, error_category=NULL,
-      attempt_count=attempt_count+1
-      WHERE id=? AND status='QUEUED'
-        AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs
-          WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND id<>?)
-        AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs
-          WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-        AND NOT EXISTS (SELECT 1 FROM trigger_path_research_jobs
-          WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-        AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs
-          WHERE status IN ('RUNNING','CANCEL_REQUESTED')) RETURNING *`,
-    args: [current, current, ownerToken, candidate.id, candidate.id],
-  })
-  return (claimed.rows[0] as unknown as TriggerOutcomeJobRow | undefined) ?? null
+  return claimWorkerJob<TriggerOutcomeJobRow>('trigger_outcome_analysis_jobs',
+    `started_at=?, completed_at=NULL,
+    heartbeat_at=?, owner_token=?, cancel_requested=0, processed_events=0, processed_tickers=0,
+    result_location=NULL, result_size_bytes=0, duration_ms=0, sql_ms=0, calculation_ms=0,
+    aggregation_ms=0, serialization_ms=0, save_ms=0, error_category=NULL,
+    attempt_count=attempt_count+1`,
+    () => [current, current, ownerToken],
+    { guardLookup: true, ensureReadyBeforeClaim: false })
 }
 
 async function selectedEvents(
@@ -911,15 +823,7 @@ export async function executeOutcomeAnalysisJob(
 }
 
 export async function cleanupExpiredOutcomeJobs(now: () => number = Date.now): Promise<number> {
-  const current = nowSeconds(now)
-  const rows = await execAll<{ id: string }>(`SELECT id FROM trigger_outcome_analysis_jobs
-    WHERE expires_at<=? AND status IN ('COMPLETED','FAILED','CANCELLED')`, [current])
-  for (const row of rows) await removeOutcomeFiles(row.id).catch(() => undefined)
-  if (rows.length > 0) {
-    await execRun(`DELETE FROM trigger_outcome_analysis_jobs
-      WHERE expires_at<=? AND status IN ('COMPLETED','FAILED','CANCELLED')`, [current])
-  }
-  return rows.length
+  return cleanupExpiredWorkerJobs('trigger_outcome_analysis_jobs', removeOutcomeFiles, nowSeconds(now))
 }
 
 export interface OutcomeResultQuery {

@@ -2,49 +2,16 @@
 //
 // ローカルMacのlaunchdに、米国株Tiingo差分更新とUS日次ML更新を登録する。
 
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import {
+  calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.us-update-latest'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
 const productionEnvPath = path.join(configDir, 'production.env')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-function calendar(hour: number, minute: number, weekday: number): string {
-  return [
-    '    <dict>',
-    `      <key>Weekday</key><integer>${weekday}</integer>`,
-    `      <key>Hour</key><integer>${hour}</integer>`,
-    `      <key>Minute</key><integer>${minute}</integer>`,
-    '    </dict>',
-  ].join('\n')
-}
 
 function marketCloseRetrySchedule(): string {
   // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
@@ -57,11 +24,10 @@ function marketCloseRetrySchedule(): string {
     [6, 30],
     [10, 30],
   ] as const
-  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
+  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendarXml(hour, minute, weekday))).join('\n')
 }
 
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 const command = [
   `cd ${JSON.stringify(cwd)}`,
@@ -109,47 +75,19 @@ const command = [
   ].join(' '),
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <array>
 ${marketCloseRetrySchedule()}
   </array>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'us-update-latest.log'))}</string>
+  <string>${xmlEscape(logPath('us-update-latest.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'us-update-latest.err'))}</string>
+  <string>${xmlEscape(logPath('us-update-latest.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
-</dict>
-</plist>
-`
+  <false/>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // 未登録なら問題なし。
-}
-
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist)
 
 console.log(`launchd registered: ${plistPath}`)
 console.log('schedule: Tue-Sat 06:30, 10:30 JST')
-console.log(`logs: ${path.join(logDir, 'us-update-latest.log')}`)
+console.log(`logs: ${logPath('us-update-latest.log')}`)

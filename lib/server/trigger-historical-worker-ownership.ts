@@ -1,12 +1,169 @@
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
+import { createReadStream } from 'node:fs'
+import { createInterface } from 'node:readline'
+import type { InValue, Transaction } from '@libsql/client'
+import { client, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
 
 const LOCK_TYPE = 'trigger_historical_worker'
 const LOCK_SECONDS = 10 * 365 * 86_400
 const MAX_ATTEMPTS = 2
-type JobTable = 'historical_trigger_scan_jobs' | 'trigger_outcome_analysis_jobs' | 'trigger_path_research_jobs' | 'trigger_ml_dataset_jobs'
+const JOB_TABLES = ['historical_trigger_scan_jobs', 'trigger_outcome_analysis_jobs', 'trigger_path_research_jobs', 'trigger_ml_dataset_jobs'] as const
+type JobTable = typeof JOB_TABLES[number]
 type RecoveryMode = 'startup' | 'stale'
+
+export const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+export function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name])
+  if (!Number.isInteger(parsed)) return fallback
+  return Math.max(min, Math.min(max, parsed))
+}
+
+export function nowSeconds(now: () => number = Date.now): number {
+  return Math.floor(now() / 1_000)
+}
+
+export function isoDateTime(epochSeconds: number | null): string | null {
+  return epochSeconds == null ? null : new Date(Number(epochSeconds) * 1_000).toISOString()
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stableValue(child)]),
+  )
+}
+
+export function stableJson(value: unknown): string {
+  return JSON.stringify(stableValue(value))
+}
+
+export async function hashFile(file: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(/* turbopackIgnore: true */ file)) hash.update(chunk)
+  return hash.digest('hex')
+}
+
+export async function readLines<T>(file: string): Promise<T[]> {
+  const rows: T[] = []
+  const stream = createReadStream(/* turbopackIgnore: true */ file, { encoding: 'utf8' })
+  const lines = createInterface({ input: stream, crlfDelay: Infinity })
+  try { for await (const line of lines) if (line) rows.push(JSON.parse(line) as T) }
+  finally { lines.close(); stream.destroy() }
+  return rows
+}
+
+// Historical/outcome match busy errors on Error.message; path research matches on String(error).
+function isDatabaseBusy(error: unknown, busyText: 'message' | 'string'): boolean {
+  const message = busyText === 'message' && error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
+export async function beginWriteTransaction(busyText: 'message' | 'string' = 'message'): Promise<Transaction> {
+  const retries = boundedIntegerEnv('SQLITE_BUSY_RETRIES', 8, 0, 20)
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client.transaction('write')
+    } catch (error) {
+      if (!isDatabaseBusy(error, busyText) || attempt >= retries) throw error
+      await new Promise((resolve) => setTimeout(resolve, Math.min(2_500, 120 * 2 ** attempt)))
+    }
+  }
+}
+
+// One heavy research job at a time across every worker table. The claimed table is checked first
+// (excluding its own row on update), then the others in JOB_TABLES order, as in the original SQL.
+function noActiveJobs(table: JobTable, excludeClaimed: boolean): string {
+  return [table, ...JOB_TABLES.filter((other) => other !== table)].map((other) => ` AND NOT EXISTS (SELECT 1 FROM ${other}`
+    + ` WHERE status IN ('RUNNING','CANCEL_REQUESTED')${excludeClaimed && other === table ? ' AND id<>?' : ''})`).join('')
+}
+
+// `reset` is the table-specific SET list after status='RUNNING'; its args are read after the candidate lookup.
+// Historical/outcome also guard the candidate lookup; path/ML guard only the claim update.
+// Only historical called ensureReady() between lookup and claim.
+export async function claimWorkerJob<Row>(
+  table: JobTable,
+  reset: string,
+  resetArgs: () => InValue[],
+  policy: { guardLookup: boolean; ensureReadyBeforeClaim: boolean },
+): Promise<Row | null> {
+  const candidate = await execGet<{ id: string }>(`SELECT id FROM ${table}
+    WHERE status='QUEUED'${policy.guardLookup ? noActiveJobs(table, false) : ''} ORDER BY created_at, id LIMIT 1`)
+  if (!candidate) return null
+  if (policy.ensureReadyBeforeClaim) await ensureReady()
+  const claimed = await client.execute({
+    sql: `UPDATE ${table} SET status='RUNNING', ${reset}
+      WHERE id=? AND status='QUEUED'${noActiveJobs(table, true)} RETURNING *`,
+    args: [...resetArgs(), candidate.id, candidate.id],
+  })
+  return (claimed.rows[0] as unknown as Row | undefined) ?? null
+}
+
+// Historical/outcome cancel inside a write transaction and also touch heartbeat/owner/error;
+// path research and ML datasets keep their plain single-statement updates.
+export async function cancelWorkerJob<Row>(
+  table: JobTable,
+  id: string,
+  mode: 'transaction' | 'direct',
+): Promise<Row | null> {
+  if (!JOB_ID_PATTERN.test(id)) return null
+  const select = `SELECT * FROM ${table} WHERE id=?`
+  const queued = mode === 'transaction'
+    ? `UPDATE ${table} SET status='CANCELLED', cancel_requested=1, completed_at=unixepoch(),
+      heartbeat_at=unixepoch(), owner_token=NULL, error_category=NULL WHERE id=? AND status='QUEUED'`
+    : `UPDATE ${table} SET status='CANCELLED', cancel_requested=1, completed_at=unixepoch()
+      WHERE id=? AND status='QUEUED'`
+  const running = `UPDATE ${table} SET status='CANCEL_REQUESTED', cancel_requested=1`
+    + `${mode === 'transaction' ? ', heartbeat_at=unixepoch()' : ''} WHERE id=? AND status='RUNNING'`
+  if (mode === 'direct') {
+    const row = await execGet<{ status: string }>(select, [id])
+    if (!row) return null
+    if (row.status === 'QUEUED') await execRun(queued, [id])
+    else if (row.status === 'RUNNING') await execRun(running, [id])
+    return (await execGet<Row>(select, [id])) ?? null
+  }
+  await ensureReady()
+  const tx = await beginWriteTransaction()
+  try {
+    const row = (await tx.execute({ sql: select, args: [id] })).rows[0] as unknown as { status: string } | undefined
+    if (!row) {
+      await tx.commit()
+      return null
+    }
+    if (row.status === 'QUEUED') await tx.execute({ sql: queued, args: [id] })
+    else if (row.status === 'RUNNING') await tx.execute({ sql: running, args: [id] })
+    const updated = (await tx.execute({ sql: select, args: [id] })).rows[0] as unknown as Row | undefined
+    await tx.commit()
+    return updated ?? null
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+}
+
+// ML dataset jobs deliberately have no expiry cleanup. Path research passes no `current` and keeps SQL unixepoch().
+export async function cleanupExpiredWorkerJobs(
+  table: Exclude<JobTable, 'trigger_ml_dataset_jobs'>,
+  removeFiles: (id: string) => Promise<void>,
+  current?: number,
+): Promise<number> {
+  const expiry = current == null ? 'unixepoch()' : '?'
+  const args = current == null ? [] : [current]
+  const rows = await execAll<{ id: string }>(`SELECT id FROM ${table}
+    WHERE expires_at<=${expiry} AND status IN ('COMPLETED','FAILED','CANCELLED')`, args)
+  for (const row of rows) await removeFiles(row.id).catch(() => undefined)
+  if (rows.length > 0) {
+    await execRun(`DELETE FROM ${table}
+      WHERE expires_at<=${expiry} AND status IN ('COMPLETED','FAILED','CANCELLED')`, args)
+  }
+  return rows.length
+}
 
 export type WorkerIdentity = { owner: string; jobOwner: () => string }
 type ActiveJob = {

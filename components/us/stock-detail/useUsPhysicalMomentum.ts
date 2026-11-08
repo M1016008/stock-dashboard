@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { UsPhysicalMomentumResponse } from './technical-view'
+import type { UsPhysicalMomentumResponse } from './us-technical-view'
 
 export interface UsPhysicalMomentumState {
   status: 'idle' | 'loading' | 'ready' | 'error'

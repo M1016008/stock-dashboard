@@ -1,41 +1,16 @@
 // FinnhubのUS決算予定を毎日同期するlaunchdジョブを登録する。
 
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import {
+  cwd, ensureLaunchAgentDirs, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 
 const label = 'com.stockboard.us-earnings'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
 
 if (!process.env.FINNHUB_API_KEY?.trim()) {
   throw new Error('FINNHUB_API_KEY is required before installing the US earnings schedule')
 }
 
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 const command = [
   `cd ${JSON.stringify(cwd)}`,
@@ -46,47 +21,21 @@ const command = [
   'npm run batch:us-earnings',
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
+// No EnvironmentVariables dict: this job has never carried the storage environment.
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key><integer>18</integer>
     <key>Minute</key><integer>30</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'us-earnings.log'))}</string>
+  <string>${xmlEscape(logPath('us-earnings.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'us-earnings.err'))}</string>
+  <string>${xmlEscape(logPath('us-earnings.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
-</dict>
-</plist>
-`
+  <false/>`)
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // 未登録なら問題なし。
-}
-
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist)
 
 console.log(`launchd registered: ${plistPath}`)
 console.log('schedule: daily 18:30 JST')
-console.log(`logs: ${path.join(logDir, 'us-earnings.log')}`)
+console.log(`logs: ${logPath('us-earnings.log')}`)

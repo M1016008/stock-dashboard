@@ -2,14 +2,16 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import {
   buildMaFieldInsight,
+  normalizeStage,
+  type StageEntry,
+} from '../components/stock/technical-view'
+import {
   buildUsShortTermEvidence,
   fmtUsd,
-  normalizeStage,
   technicalMomentumSnapshot,
   type UsPhysicalMomentumResponse,
   type UsPhysicalMomentumRow,
-  type UsStageEntry,
-} from '../components/us/stock-detail/technical-view'
+} from '../components/us/stock-detail/us-technical-view'
 
 const root = new URL('../', import.meta.url)
 
@@ -36,7 +38,7 @@ function momentumRow(overrides: Partial<UsPhysicalMomentumRow> = {}): UsPhysical
   }
 }
 
-function stageEntry(overrides: Partial<UsStageEntry> = {}): UsStageEntry {
+function stageEntry(overrides: Partial<StageEntry> = {}): StageEntry {
   return {
     date: '2026-10-09',
     close: 100,

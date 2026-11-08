@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { createInterface } from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
 import { client, ensureReady, execGet, execRun } from '@/lib/db/client'
@@ -10,7 +8,9 @@ import { outcomeResultPaths } from '@/lib/server/trigger-discovery-outcome-jobs'
 import { loadSegmentationSource } from '@/lib/server/trigger-discovery-outcome-segmentation'
 import { getPathResearchArtifact, pathResearchResultPaths } from '@/lib/server/trigger-path-research-jobs'
 import { generateMlDataset } from '@/lib/server/trigger-ml-dataset-batch'
-import { recoverWorkerJobs } from '@/lib/server/trigger-historical-worker-ownership'
+import {
+  JOB_ID_PATTERN as UUID, cancelWorkerJob, claimWorkerJob, hashFile, readLines, recoverWorkerJobs,
+} from '@/lib/server/trigger-historical-worker-ownership'
 import type { TriggerHistoricalScanEvent, TriggerHistoricalScanRequest } from '@/lib/trigger-discovery-historical-scan-contract'
 import type { TriggerOutcomeRow } from '@/lib/trigger-discovery-outcome-contract'
 import { TRIGGER_ML_CHECKPOINTS, TRIGGER_ML_FEATURE_REGISTRY, TRIGGER_ML_FEATURE_SCHEMA_VERSION,
@@ -19,7 +19,6 @@ import { TRIGGER_ML_CHECKPOINTS, TRIGGER_ML_FEATURE_REGISTRY, TRIGGER_ML_FEATURE
 import type { PathResearchRow } from '@/lib/trigger-path-research-contract'
 import { TRIGGER_PATH_CONTRACT_VERSION } from '@/lib/trigger-path-contract'
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const TABLE = 'trigger_ml_dataset_jobs'
 type Row = {
   id: string; status: string; path_research_job_id: string; outcome_job_id: string
@@ -41,12 +40,6 @@ export function mlDatasetPaths(id: string) {
   const base = path.join(root(), id)
   return { rows: `${base}.ndjson`, manifest: `${base}.json`,
     rowsTemp: `${base}.ndjson.tmp`, manifestTemp: `${base}.json.tmp` }
-}
-
-async function hashFile(file: string): Promise<string> {
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(/* turbopackIgnore: true */ file)) hash.update(chunk)
-  return hash.digest('hex')
 }
 
 async function hashArtifact(manifest: string, rows: string): Promise<string> {
@@ -84,15 +77,6 @@ async function source(pathJobId: string) {
   return { pathArtifact, outcome, scan, hashes, fingerprint, sourceRequest }
 }
 
-async function readLines<T>(file: string): Promise<T[]> {
-  const result: T[] = []
-  const stream = createReadStream(/* turbopackIgnore: true */ file, 'utf8')
-  const reader = createInterface({ input: stream, crlfDelay: Infinity })
-  try { for await (const line of reader) if (line) result.push(JSON.parse(line) as T) }
-  finally { reader.close(); stream.destroy() }
-  return result
-}
-
 async function rowFor(id: string): Promise<Row | null> {
   return UUID.test(id) ? (await execGet<Row>(`SELECT * FROM ${TABLE} WHERE id=?`, [id])) ?? null : null
 }
@@ -119,13 +103,19 @@ export async function createMlDatasetJob(input: {
   return id
 }
 
-export async function getMlDatasetJob(id: string): Promise<{
+export async function getMlDatasetJob(id: string): Promise<MlDatasetJobView | null> {
+  const row = await rowFor(id)
+  return row ? jobView(row) : null
+}
+
+type MlDatasetJobView = {
   datasetId: string; status: string; progress: { processedEvents: number; totalEvents: number }
   resultAvailable: boolean; errorCategory: string | null; artifactBytes: number
   manifest: TriggerMlDatasetManifest | null
-} | null> {
-  const row = await rowFor(id)
-  if (!row) return null
+}
+
+async function jobView(row: Row): Promise<MlDatasetJobView> {
+  const id = row.id
   let manifest: TriggerMlDatasetManifest | null = null
   if (row.status === 'COMPLETED' && row.result_location === id) {
     try {
@@ -140,28 +130,16 @@ export async function getMlDatasetJob(id: string): Promise<{
 }
 
 export async function cancelMlDatasetJob(id: string) {
-  const row = await rowFor(id)
-  if (!row) return null
-  if (row.status === 'QUEUED') await execRun(`UPDATE ${TABLE} SET status='CANCELLED',cancel_requested=1,
-    completed_at=unixepoch() WHERE id=? AND status='QUEUED'`, [id])
-  if (row.status === 'RUNNING') await execRun(`UPDATE ${TABLE} SET status='CANCEL_REQUESTED',cancel_requested=1
-    WHERE id=? AND status='RUNNING'`, [id])
-  return getMlDatasetJob(id)
+  const row = await cancelWorkerJob<Row>(TABLE, id, 'direct')
+  return row ? jobView(row) : null
 }
 
 export async function claimNextMlDatasetJob(ownerToken: string = randomUUID()): Promise<Row | null> {
-  const candidate = await execGet<{ id: string }>(`SELECT id FROM ${TABLE} WHERE status='QUEUED'
-    ORDER BY created_at,id LIMIT 1`)
-  if (!candidate) return null
-  const result = await client.execute({ sql: `UPDATE ${TABLE} SET status='RUNNING',started_at=unixepoch(),
+  // ML keeps its narrower reset: completed_at, cancel_requested and result columns are left untouched.
+  return claimWorkerJob<Row>(TABLE, `started_at=unixepoch(),
     heartbeat_at=unixepoch(),owner_token=?,attempt_count=attempt_count+1,processed_events=0,
-    processed_tickers=0,error_category=NULL WHERE id=? AND status='QUEUED'
-    AND NOT EXISTS (SELECT 1 FROM ${TABLE} WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND id<>?)
-    AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-    AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-    AND NOT EXISTS (SELECT 1 FROM trigger_path_research_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-    RETURNING *`, args: [ownerToken, candidate.id, candidate.id] })
-  return (result.rows[0] as unknown as Row | undefined) ?? null
+    processed_tickers=0,error_category=NULL`, () => [ownerToken],
+    { guardLookup: false, ensureReadyBeforeClaim: false })
 }
 
 async function progress(row: Row, processedEvents: number, totalEvents: number,

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const root = process.cwd()
-const evidenceRevision = '9d5a95bb054d2ad4b2b37ed9a49768976a8e9919'
+const evidenceRevision = '91a7886330d4384858d4b20c41cf1bec0e16e4a7'
 const statusFields = ['jp', 'us', 'functional', 'visual', 'data', 'historical', 'responsive', 'performance'] as const
 type Status = 'IMPLEMENTED' | 'PARTIAL' | 'MISSING' | 'NOT_APPLICABLE' | 'BLOCKED' | 'UNVERIFIED'
 type StatusField = (typeof statusFields)[number]

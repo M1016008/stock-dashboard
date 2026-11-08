@@ -19,6 +19,7 @@ import {
   type FinancialTimelinePeriod,
   type FinancialTimelineValue,
 } from '@/lib/financial-performance-timeline'
+import { useFundamentalReadModel } from '@/components/stock/fundamentals/useFundamentalReadModel'
 
 interface FinancialPerformanceTimelineProps {
   ticker: string
@@ -54,11 +55,6 @@ const METRIC_LABELS: Record<FinancialTimelineMetric, string> = {
   revenue: '売上高',
   operating_profit: '営業利益',
   eps_basic: 'EPS',
-}
-
-function timelineUrl(ticker: string, analysisDate: string | null): string {
-  const query = analysisDate ? `?as_of=${encodeURIComponent(analysisDate)}` : ''
-  return `/api/financial-performance-timeline/${encodeURIComponent(ticker)}${query}`
 }
 
 function visiblePeriods(periods: FinancialTimelinePeriod[], range: TimelineRange): FinancialTimelinePeriod[] {
@@ -125,30 +121,12 @@ function pointTypeLabel(period: FinancialTimelinePeriod): string {
 }
 
 export function FinancialPerformanceTimeline({ ticker, analysisDate }: FinancialPerformanceTimelineProps) {
-  const [model, setModel] = useState<FinancialPerformanceTimelineReadModel | null>(null)
+  const { model, loading, error } = useFundamentalReadModel<FinancialPerformanceTimelineReadModel>(
+    '/api/financial-performance-timeline/', ticker, analysisDate,
+  )
   const [mode, setMode] = useState<FinancialTimelineMode>('FY')
   const [range, setRange] = useState<TimelineRange>('5')
   const [mobileMetric, setMobileMetric] = useState<FinancialTimelineMetric>('revenue')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError('')
-    fetch(timelineUrl(ticker, analysisDate), { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((payload: FinancialPerformanceTimelineReadModel) => {
-        if (!controller.signal.aborted) setModel(payload)
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [analysisDate, ticker])
 
   const series = model?.modes[mode] ?? null
   const periods = useMemo(() => visiblePeriods(series?.periods ?? [], range), [range, series?.periods])

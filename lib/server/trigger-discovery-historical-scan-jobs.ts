@@ -5,7 +5,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { once } from 'node:events'
 import { createInterface } from 'node:readline'
-import type { Transaction } from '@libsql/client'
 import { client, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
 import { TRIGGER_ENGINE_VERSION, type TriggerStatus } from '@/lib/trigger-discovery-engine'
 import {
@@ -32,13 +31,22 @@ import {
   type TriggerHistoricalScanJobSummary,
 } from '@/lib/trigger-discovery-historical-scan-job'
 import { TRIGGER_SCORE_VERSION } from '@/lib/trigger-score'
-import { recoverWorkerJobs } from '@/lib/server/trigger-historical-worker-ownership'
+import {
+  JOB_ID_PATTERN,
+  beginWriteTransaction,
+  boundedIntegerEnv,
+  cancelWorkerJob,
+  claimWorkerJob,
+  cleanupExpiredWorkerJobs,
+  isoDateTime,
+  nowSeconds,
+  recoverWorkerJobs,
+  stableJson,
+} from '@/lib/server/trigger-historical-worker-ownership'
 
 const DEFAULT_JOB_TTL_DAYS = 7
 const DEFAULT_REUSE_SECONDS = 15 * 60
 const DEFAULT_STALE_SECONDS = 3 * 60
-const DEFAULT_POLL_MS = 2_000
-const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export type TriggerHistoricalScanJobRow = {
   id: string
@@ -82,51 +90,6 @@ export interface HistoricalScanWorkerDependencies {
   scan?: ScanRunner
   now?: () => number
   shutdownSignal?: AbortSignal
-}
-
-function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(process.env[name])
-  if (!Number.isInteger(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
-function nowSeconds(now: () => number = Date.now): number {
-  return Math.floor(now() / 1_000)
-}
-
-function isDatabaseBusy(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /SQLITE_BUSY|database is locked/i.test(message)
-}
-
-async function beginWriteTransaction(): Promise<Transaction> {
-  const retries = boundedIntegerEnv('SQLITE_BUSY_RETRIES', 8, 0, 20)
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await client.transaction('write')
-    } catch (error) {
-      if (!isDatabaseBusy(error) || attempt >= retries) throw error
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2_500, 120 * 2 ** attempt)))
-    }
-  }
-}
-
-function isoDateTime(epochSeconds: number | null): string | null {
-  return epochSeconds == null ? null : new Date(Number(epochSeconds) * 1_000).toISOString()
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue)
-  if (!value || typeof value !== 'object') return value
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableValue(child)]),
-  )
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(stableValue(value))
 }
 
 function jobRequest(request: TriggerHistoricalScanRequest): Omit<
@@ -180,14 +143,6 @@ async function tradingDayCount(startDate: string, endDate: string): Promise<numb
     [startDate, endDate],
   )
   return Number(row?.count ?? 0)
-}
-
-async function transactionJob(tx: Transaction, id: string): Promise<TriggerHistoricalScanJobRow | null> {
-  const result = await tx.execute({
-    sql: 'SELECT * FROM historical_trigger_scan_jobs WHERE id=?',
-    args: [id],
-  })
-  return (result.rows[0] as unknown as TriggerHistoricalScanJobRow | undefined) ?? null
 }
 
 async function jobRow(id: string): Promise<TriggerHistoricalScanJobRow | null> {
@@ -361,40 +316,8 @@ export async function listHistoricalScanJobs(limit = 20): Promise<TriggerHistori
 }
 
 export async function cancelHistoricalScanJob(id: string): Promise<TriggerHistoricalScanJobSummary | null> {
-  if (!JOB_ID_PATTERN.test(id)) return null
-  await ensureReady()
-  const tx = await beginWriteTransaction()
-  try {
-    const row = await transactionJob(tx, id)
-    if (!row) {
-      await tx.commit()
-      return null
-    }
-    if (row.status === 'QUEUED') {
-      await tx.execute({
-        sql: `UPDATE historical_trigger_scan_jobs SET
-          status='CANCELLED', cancel_requested=1, completed_at=unixepoch(),
-          heartbeat_at=unixepoch(), owner_token=NULL, error_category=NULL
-          WHERE id=? AND status='QUEUED'`,
-        args: [id],
-      })
-    } else if (row.status === 'RUNNING') {
-      await tx.execute({
-        sql: `UPDATE historical_trigger_scan_jobs SET
-          status='CANCEL_REQUESTED', cancel_requested=1, heartbeat_at=unixepoch()
-          WHERE id=? AND status='RUNNING'`,
-        args: [id],
-      })
-    }
-    const updated = await transactionJob(tx, id)
-    await tx.commit()
-    return updated ? jobSummary(updated) : null
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  const updated = await cancelWorkerJob<TriggerHistoricalScanJobRow>('historical_trigger_scan_jobs', id, 'transaction')
+  return updated ? jobSummary(updated) : null
 }
 
 function staleSeconds(): number {
@@ -419,48 +342,13 @@ export async function claimNextHistoricalScanJob(
   now: () => number = Date.now,
 ): Promise<TriggerHistoricalScanJobRow | null> {
   const current = nowSeconds(now)
-  const candidate = await execGet<{ id: string }>(`SELECT id FROM historical_trigger_scan_jobs
-    WHERE status='QUEUED'
-      AND NOT EXISTS (
-        SELECT 1 FROM historical_trigger_scan_jobs
-        WHERE status IN ('RUNNING','CANCEL_REQUESTED')
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM trigger_outcome_analysis_jobs
-        WHERE status IN ('RUNNING','CANCEL_REQUESTED')
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM trigger_path_research_jobs
-        WHERE status IN ('RUNNING','CANCEL_REQUESTED')
-      )
-      AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-    ORDER BY created_at, id LIMIT 1`)
-  if (!candidate) return null
-  await ensureReady()
-  const claimed = await client.execute({
-    sql: `UPDATE historical_trigger_scan_jobs SET
-        status='RUNNING', started_at=?, completed_at=NULL, heartbeat_at=?, owner_token=?,
-        cancel_requested=0, processed_trading_days=0, result_location=NULL,
-        result_size_bytes=0, duration_ms=0, serialization_ms=0, error_category=NULL,
-        attempt_count=attempt_count+1
-        WHERE id=? AND status='QUEUED'
-          AND NOT EXISTS (
-            SELECT 1 FROM historical_trigger_scan_jobs
-            WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND id<>?
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM trigger_outcome_analysis_jobs
-            WHERE status IN ('RUNNING','CANCEL_REQUESTED')
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM trigger_path_research_jobs
-            WHERE status IN ('RUNNING','CANCEL_REQUESTED')
-          )
-          AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-        RETURNING *`,
-    args: [current, current, ownerToken, candidate.id, candidate.id],
-  })
-  return (claimed.rows[0] as unknown as TriggerHistoricalScanJobRow | undefined) ?? null
+  return claimWorkerJob<TriggerHistoricalScanJobRow>('historical_trigger_scan_jobs',
+    `started_at=?, completed_at=NULL, heartbeat_at=?, owner_token=?,
+    cancel_requested=0, processed_trading_days=0, result_location=NULL,
+    result_size_bytes=0, duration_ms=0, serialization_ms=0, error_category=NULL,
+    attempt_count=attempt_count+1`,
+    () => [current, current, ownerToken],
+    { guardLookup: true, ensureReadyBeforeClaim: true })
 }
 
 function errorCategory(error: unknown): string {
@@ -681,57 +569,7 @@ export async function runHistoricalScanWorkerOnce(
 export async function cleanupExpiredHistoricalScanJobs(
   now: () => number = Date.now,
 ): Promise<number> {
-  const current = nowSeconds(now)
-  const rows = await execAll<{ id: string }>(`SELECT id FROM historical_trigger_scan_jobs
-    WHERE expires_at<=? AND status IN ('COMPLETED','FAILED','CANCELLED')`, [current])
-  for (const row of rows) await removeJobFiles(row.id).catch(() => undefined)
-  if (rows.length > 0) {
-    await execRun(`DELETE FROM historical_trigger_scan_jobs
-      WHERE expires_at<=? AND status IN ('COMPLETED','FAILED','CANCELLED')`, [current])
-  }
-  return rows.length
-}
-
-export async function runHistoricalScanWorkerLoop(): Promise<void> {
-  const pollMs = boundedIntegerEnv('TRIGGER_HISTORICAL_SCAN_POLL_MS', DEFAULT_POLL_MS, 250, 30_000)
-  let stopping = false
-  const stop = () => { stopping = true }
-  process.once('SIGTERM', stop)
-  process.once('SIGINT', stop)
-  let recovered: Awaited<ReturnType<typeof recoverStaleHistoricalScanJobs>> | null = null
-  while (!stopping && !recovered) {
-    try {
-      await cleanupExpiredHistoricalScanJobs()
-      recovered = await recoverStaleHistoricalScanJobs()
-    } catch (error) {
-      console.error(
-        `[trigger-historical-scan-worker] startup retry category=${errorCategory(error)}`
-        + ` message=${error instanceof Error ? error.message : String(error)}`,
-      )
-      await new Promise((resolve) => setTimeout(resolve, pollMs))
-    }
-  }
-  if (stopping) {
-    console.log('[trigger-historical-scan-worker] stopped')
-    return
-  }
-  console.log(`[trigger-historical-scan-worker] started concurrency=1 recovered=${JSON.stringify(recovered)}`)
-  while (!stopping) {
-    try {
-      const result = await runHistoricalScanWorkerOnce()
-      if (result) {
-        console.log(`[trigger-historical-scan-worker] job=${result.jobId} status=${result.status}`)
-        continue
-      }
-    } catch (error) {
-      console.error(
-        `[trigger-historical-scan-worker] poll retry category=${errorCategory(error)}`
-        + ` message=${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollMs))
-  }
-  console.log('[trigger-historical-scan-worker] stopped')
+  return cleanupExpiredWorkerJobs('historical_trigger_scan_jobs', removeJobFiles, nowSeconds(now))
 }
 
 const HISTORICAL_SCAN_EVENT_TYPES = new Set<TriggerHistoricalScanEventType>([

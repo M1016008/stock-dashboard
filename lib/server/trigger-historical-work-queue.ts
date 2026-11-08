@@ -21,6 +21,7 @@ import {
 import { claimNextMlDatasetJob, executeMlDatasetJob, recoverStaleMlDatasetJobs } from '@/lib/server/trigger-ml-dataset-jobs'
 import {
   acquireHistoricalWorker,
+  boundedIntegerEnv,
   createWorkerIdentity,
   recoverWorkerJobs,
   releaseHistoricalWorker,
@@ -43,12 +44,6 @@ async function withJobSleepProtection<T>(operation: () => Promise<T>): Promise<T
   assertion.on('error', (error) => console.error('[trigger-historical-worker] caffeinate unavailable', error))
   try { return await operation() }
   finally { assertion.kill('SIGTERM') }
-}
-
-function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
-  const parsed = Number(process.env[name])
-  if (!Number.isInteger(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
 }
 
 async function nextWorkType(): Promise<WorkType | null> {

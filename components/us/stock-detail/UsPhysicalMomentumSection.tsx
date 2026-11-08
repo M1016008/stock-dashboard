@@ -9,7 +9,7 @@ import {
 } from '@/lib/physical-momentum-view'
 import { physicalPlanDirectionLabel, physicalPlanStatisticsLabel } from '@/lib/physical-plan'
 import { selectPhysicalMomentumScoreRow } from '@/lib/stock-decision-summary'
-import { ScoreThresholdBar } from './ScoreThresholdBar'
+import { ScoreThresholdBar } from '@/components/stock/ScoreThresholdBar'
 import {
   buildMaFieldInsight,
   directionLabelJa,
@@ -17,7 +17,6 @@ import {
   fmtPct,
   fmtRate,
   fmtScore,
-  fmtUsd,
   formatDelta,
   PHYSICAL_BOUNDARIES,
   PHYSICAL_FORCE_THRESHOLD,
@@ -26,18 +25,21 @@ import {
   previousMomentumRow,
   scoreLevelLabel,
   scoreTone,
-  tradePlanToneColor,
   trendArrow,
   trendLabelFromDelta,
   trendText,
   type MaFieldInsight,
+} from '@/components/stock/technical-view'
+import {
+  fmtUsd,
+  tradePlanToneColor,
   type UsPhysicalMomentumResponse,
   type UsPhysicalMomentumRow,
   type UsPhysicalMomentumTimeframeView,
   type UsPhysicalPlanHorizon,
   type UsPhysicalPlanLevel,
   type UsPhysicalPlanResponse,
-} from './technical-view'
+} from './us-technical-view'
 import type { UsPhysicalMomentumState } from './useUsPhysicalMomentum'
 
 const CAVEAT_CLASS = 'mb-3 grid gap-1 rounded-[4px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-medium leading-5 text-amber-900'

@@ -3,27 +3,12 @@
 // Register a weekday launchd safety net that verifies and repairs JP ML
 // freshness after the regular daily learning job.
 
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import {
+  calendarXml, cwd, ensureLaunchAgentDirs, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.ml-freshness-guard'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
 
 type GuardTime = {
   hour: number
@@ -38,15 +23,6 @@ const DEFAULT_GUARD_TIMES: GuardTime[] = [
   { hour: 5, minute: 15 },
   { hour: 8, minute: 15 },
 ]
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
 
 function parseGuardTimes(): GuardTime[] {
   const raw = process.env.ML_FRESHNESS_GUARD_TIMES
@@ -65,28 +41,17 @@ function parseGuardTimes(): GuardTime[] {
     : DEFAULT_GUARD_TIMES
 }
 
-function calendar(hour: number, minute: number, weekday: number): string {
-  return [
-    '    <dict>',
-    `      <key>Weekday</key><integer>${weekday}</integer>`,
-    `      <key>Hour</key><integer>${hour}</integer>`,
-    `      <key>Minute</key><integer>${minute}</integer>`,
-    '    </dict>',
-  ].join('\n')
-}
-
 function recoverySchedule(times: GuardTime[]): string {
   // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday. Saturday is
   // required to repair a Friday post-close run without waiting for Monday.
   // The guard checks the latest available JP price date, so exchange holidays
   // naturally become no-op checks when no new price date exists.
   return [1, 2, 3, 4, 5, 6]
-    .flatMap((weekday) => times.map((time) => calendar(time.hour, time.minute, weekday)))
+    .flatMap((weekday) => times.map((time) => calendarXml(time.hour, time.minute, weekday)))
     .join('\n')
 }
 
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 const command = [
   `cd ${JSON.stringify(cwd)}`,
@@ -110,47 +75,19 @@ const command = [
 ].join(' && ')
 
 const times = parseGuardTimes()
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <array>
 ${recoverySchedule(times)}
   </array>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-freshness-guard.log'))}</string>
+  <string>${xmlEscape(logPath('ml-freshness-guard.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-freshness-guard.err'))}</string>
+  <string>${xmlEscape(logPath('ml-freshness-guard.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
-</dict>
-</plist>
-`
+  <false/>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // Not registered yet.
-}
-
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist)
 
 console.log(`launchd registered: ${plistPath}`)
 console.log(`schedule: Mon-Sat ${times.map((time) => `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`).join(', ')} JST`)
-console.log(`logs: ${path.join(logDir, 'ml-freshness-guard.log')}`)
+console.log(`logs: ${logPath('ml-freshness-guard.log')}`)

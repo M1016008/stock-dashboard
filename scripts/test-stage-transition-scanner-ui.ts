@@ -4,6 +4,7 @@ import fs from 'node:fs'
 const page = fs.readFileSync('app/hex-stage/page.tsx', 'utf8')
 const scanner = fs.readFileSync('components/hex/StageTransitionScanner.tsx', 'utf8')
 const route = fs.readFileSync('app/api/hex/transitions/route.ts', 'utf8')
+const routeFlow = fs.readFileSync('lib/server/stage-transition-route.ts', 'utf8')
 
 assert.match(page, /view === 'scanner'/, 'Market 6 Stage must render the scanner as a normal page view')
 assert.match(page, />遷移スキャナー</, 'Market 6 Stage local navigation must expose the scanner')
@@ -22,7 +23,8 @@ assert.match(scanner, /20日平均売買代金/, 'Average-turnover filtering mus
 
 assert.match(route, /export async function GET/, 'Transition search must use a read-only GET route')
 assert.doesNotMatch(route, /export async function (POST|PUT|PATCH|DELETE)/, 'Transition search must not expose a mutation method')
-assert.match(route, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagination must use the documented defaults')
-assert.match(route, /Cache-Control': 'no-store'/, 'Live transition responses must not be served from a stale shared cache')
+assert.match(route, /stageTransitionRouteResponse\(request,/, 'Transition search must use the shared transition route flow')
+assert.match(routeFlow, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagination must use the documented defaults')
+assert.match(routeFlow, /Cache-Control': 'no-store'/, 'Live transition responses must not be served from a stale shared cache')
 
 console.log('stage transition scanner UI contract tests passed')

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   CircleDollarSign,
   History,
@@ -44,6 +44,7 @@ import {
   TabBanner,
   UnavailableNote,
 } from '@/components/stock/fundamentals/primitives'
+import { useFundamentalReadModel } from '@/components/stock/fundamentals/useFundamentalReadModel'
 
 interface ShareholderReturnsDetailProps {
   ticker: string
@@ -59,10 +60,6 @@ const WINDOWS: Array<{ id: HistoryWindow; label: string; years: number | null }>
   { id: 'all', label: '全期間', years: null },
 ]
 const WINDOW_OPTIONS = WINDOWS.map((item) => ({ value: item.id, label: item.label }))
-
-function returnsUrl(ticker: string, analysisDate: string | null): string {
-  return `/api/shareholder-returns/${encodeURIComponent(ticker)}${analysisDate ? `?as_of=${encodeURIComponent(analysisDate)}` : ''}`
-}
 
 function compactCurrency(value: number): string {
   const absolute = Math.abs(value)
@@ -131,30 +128,11 @@ function yen(value: number): string {
 }
 
 export function ShareholderReturnsDetail({ ticker, analysisDate }: ShareholderReturnsDetailProps) {
-  const [model, setModel] = useState<ShareholderReturnsReadModel | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [reloadKey, setReloadKey] = useState(0)
+  const { model, loading, error, retry } = useFundamentalReadModel<ShareholderReturnsReadModel>(
+    '/api/shareholder-returns/', ticker, analysisDate,
+  )
   const [window, setWindow] = useState<HistoryWindow>('5y')
   const [showAllRevisions, setShowAllRevisions] = useState(false)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError('')
-    fetch(returnsUrl(ticker, analysisDate), { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((payload: ShareholderReturnsReadModel) => {
-        if (!controller.signal.aborted) setModel(payload)
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [analysisDate, ticker, reloadKey])
 
   const visibleRows = useMemo(() => {
     if (!model) return []
@@ -173,7 +151,7 @@ export function ShareholderReturnsDetail({ ticker, analysisDate }: ShareholderRe
 
   if (loading) return <LoadingBlock label="株主還元を読み込んでいます..." />
   if (error || !model) {
-    return <ErrorBlock label="株主還元データを取得できませんでした。" onRetry={() => setReloadKey((value) => value + 1)} />
+    return <ErrorBlock label="株主還元データを取得できませんでした。" onRetry={retry} />
   }
 
   return (

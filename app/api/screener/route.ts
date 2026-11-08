@@ -19,8 +19,8 @@ import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backte
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
 import { loadPhysicsStatusCalibration, type PhysicsStatusCalibration } from '@/lib/queries/physics-status-calibration'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
-import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
-import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { TwoYearLineServingUnavailableError } from '@/lib/server/two-year-line-search'
+import { applyTwoYearLineScreenerFilter, parseTwoYearLineScreenerQuery } from '@/lib/server/two-year-line-screener-filter'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -1072,18 +1072,6 @@ function numParam(searchParams: URLSearchParams, key: string): number | null {
   return Number.isFinite(value) ? value : null
 }
 
-function boundedAngleParam(searchParams: URLSearchParams, key: string): number | null {
-  const value = numParam(searchParams, key)
-  return value !== null && value >= 0 && value <= 90 ? value : null
-}
-
-function invalidAngleParam(searchParams: URLSearchParams, key: string): boolean {
-  const raw = searchParams.get(key)?.trim()
-  if (!raw) return false
-  const value = Number(raw)
-  return !Number.isFinite(value) || value < 0 || value > 90
-}
-
 function stringSetParam(searchParams: URLSearchParams, key: string): Set<string> {
   return new Set(
     (searchParams.get(key) ?? '')
@@ -1331,22 +1319,9 @@ export async function GET(request: NextRequest) {
     const physicalStatusHorizon = parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
     const physicalStatuses = stringSetParam(searchParams, 'physicalStatus')
     const shortTermChecks = stringSetParam(searchParams, 'shortTermCheck')
-    const twoYearLine = parseTwoYearLineFilter(searchParams.get('twoYearLine'))
-    const twoYearPattern = parseTwoYearLinePatternFilter(searchParams.get('twoYearPattern'))
-    if (invalidAngleParam(searchParams, 'twoYearAngleMin') || invalidAngleParam(searchParams, 'twoYearAngleMax')) {
-      return NextResponse.json({ error: 'Invalid 24-month line angle' }, { status: 400 })
-    }
-    const twoYearAngleMin = boundedAngleParam(searchParams, 'twoYearAngleMin')
-    const twoYearAngleMax = boundedAngleParam(searchParams, 'twoYearAngleMax')
-    if (twoYearAngleMin !== null && twoYearAngleMax !== null && twoYearAngleMin > twoYearAngleMax) {
-      return NextResponse.json({ error: 'Invalid 24-month line angle range' }, { status: 400 })
-    }
-    const twoYearQuery: TwoYearLineQuery = {
-      status: twoYearLine,
-      pattern: twoYearLine === 'none' ? 'either' : twoYearPattern,
-      minAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMin,
-      maxAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMax,
-    }
+    const twoYear = parseTwoYearLineScreenerQuery(searchParams, numParam)
+    if ('error' in twoYear) return NextResponse.json({ error: twoYear.error }, { status: 400 })
+    const twoYearQuery = twoYear.query
     const rawLimit = numParam(searchParams, 'limit')
     const rawOffset = numParam(searchParams, 'offset')
     const limit = rawLimit == null ? null : Math.min(5000, Math.max(1, Math.floor(rawLimit)))
@@ -1434,40 +1409,13 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    let twoYearLineMetadata: TwoYearLineSearchMetadata | null = null
-    if (twoYearLine !== 'none') {
-      const searchResult = await loadTwoYearLineSearchEntries({
-        market: 'JP',
-        tickers: filtered.map((row) => row.ticker),
-        asOfDate: date,
-      })
-      const { entries } = searchResult
-      twoYearLineMetadata = searchResult.metadata
-      filtered = filtered
-        .map((row) => {
-          const entry = entries.get(row.ticker.replace(/\.T$/i, '').toUpperCase())
-          const summary = selectTwoYearLineSummary(entry, twoYearQuery)
-          const confirmedDistance = entry?.latestConfirmed?.distancePct ?? null
-          return {
-            ...row,
-            twoYearLineStatus: summary?.status ?? null,
-            twoYearLinePattern: summary?.pattern ?? null,
-            twoYearLinePeriods: summary?.sourcePeriods ?? null,
-            twoYearLineStartClose: summary?.lineStartClose ?? null,
-            twoYearLineEndClose: summary?.lineEndClose ?? null,
-            twoYearLineAngleDeg: summary?.angleDeg ?? null,
-            twoYearLineLastCandleRisePct: summary?.lastCandleRisePct ?? null,
-            twoYearLineConfirmedDistancePct: confirmedDistance,
-            twoYearLineConfirmedDistancePriority: twoYearConfirmedDistancePriority(confirmedDistance),
-            twoYearLineAsOfDate: searchResult.metadata.asOfDate,
-            twoYearLinePriceBasisVersion: searchResult.metadata.priceBasisVersion,
-          }
-        })
-        .filter((row) => {
-          const entry = entries.get(row.ticker.replace(/\.T$/i, '').toUpperCase())
-          return matchesTwoYearLineSearchEntry(entry, twoYearQuery)
-        })
-    }
+    const twoYearResult = await applyTwoYearLineScreenerFilter(filtered, twoYearQuery, {
+      market: 'JP',
+      asOfDate: date,
+      ticker: (row) => row.ticker,
+      entryKey: (ticker) => ticker.replace(/\.T$/i, '').toUpperCase(),
+    })
+    filtered = twoYearResult.rows
 
     const sorted = sortKey
       ? [...filtered].sort((a, b) => {
@@ -1483,7 +1431,7 @@ export async function GET(request: NextRequest) {
       total: filtered.length,
       universe,
       date,
-      twoYearLineRegistry: twoYearLineMetadata,
+      twoYearLineRegistry: twoYearResult.metadata,
       cached: true,
       serverCache: {
         hit: builtRows.cacheHit,
@@ -1516,7 +1464,7 @@ export async function GET(request: NextRequest) {
         physicalStatusHorizon,
         physicalStatus: Array.from(physicalStatuses),
         shortTermCheck: Array.from(shortTermChecks),
-        twoYearLine,
+        twoYearLine: twoYearQuery.status,
         twoYearPattern: twoYearQuery.pattern,
         twoYearAngleMin: twoYearQuery.minAngleDeg,
         twoYearAngleMax: twoYearQuery.maxAngleDeg,
