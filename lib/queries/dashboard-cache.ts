@@ -4,15 +4,12 @@ import {
   getLatestDate,
   getMarketMovers,
   getPatternStatsTopBottom,
-  getStereoscopicSignals,
   type MarketMovers,
   type PatternRankRow,
-  type StereoscopicRow,
 } from '@/lib/queries/dashboard'
 
 export type DashboardCachePayload = {
   latestDate: string
-  stereoscopicSignals: StereoscopicRow[]
   marketMovers: MarketMovers
   patternStatsTopBottom: PatternRankRow[]
   computedAt: string
@@ -51,18 +48,15 @@ export async function buildDashboardCache(date?: string): Promise<DashboardCache
   if (!latestDate) return null
 
   const [
-    stereoscopicSignals,
     marketMovers,
     patternStatsTopBottom,
   ] = await Promise.all([
-    getStereoscopicSignals(12, latestDate),
     getMarketMovers(latestDate),
     getPatternStatsTopBottom(),
   ])
 
   const payload: DashboardCachePayload = {
     latestDate,
-    stereoscopicSignals,
     marketMovers,
     patternStatsTopBottom,
     computedAt: new Date().toISOString(),
