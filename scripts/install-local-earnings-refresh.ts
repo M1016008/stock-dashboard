@@ -13,6 +13,11 @@ import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-envi
 const label = 'com.stockboard.earnings-refresh'
 const supportDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
 const deferredPath = path.join(supportDir, 'earnings-refresh-deferred')
+const configDir = path.join(supportDir, 'config')
+// Scoped credential file: J-Quants only. The job must not inherit unrelated
+// secrets (OpenAI, Gmail OAuth, Tiingo) from the shared runtime.env.
+const jquantsEnvPath = path.join(configDir, 'jquants.env')
+const productionEnvPath = path.join(configDir, 'production.env')
 const scheduleHour = Number(process.env.EARNINGS_REFRESH_HOUR ?? '7')
 const scheduleMinute = Number(process.env.EARNINGS_REFRESH_MINUTE ?? '10')
 
@@ -26,6 +31,21 @@ function clampMinute(value: number): number {
 
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
+
+for (const envPath of [jquantsEnvPath, productionEnvPath]) {
+  if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
+  if ((fs.statSync(envPath).mode & 0o077) !== 0) {
+    throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
+  }
+}
+const jquantsEnvKeys = fs.readFileSync(jquantsEnvPath, 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith('#'))
+  .map((line) => line.split('=', 1)[0])
+if (jquantsEnvKeys.length !== 1 || jquantsEnvKeys[0] !== 'JQUANTS_API_KEY') {
+  throw new Error('jquants.env must contain exactly one key: JQUANTS_API_KEY')
+}
 
 const hour = clampHour(scheduleHour)
 const minute = clampMinute(scheduleMinute)
@@ -44,7 +64,12 @@ const command = [
   'export EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS=${EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS:-2700}',
   'export EARNINGS_REFRESH_LOCK_POLL_SECONDS=${EARNINGS_REFRESH_LOCK_POLL_SECONDS:-30}',
   `export EARNINGS_REFRESH_DEFERRED_PATH=${JSON.stringify(deferredPath)}`,
-  'npm run batch:earnings-refresh',
+  [
+    JSON.stringify(process.execPath),
+    `--env-file=${JSON.stringify(jquantsEnvPath)}`,
+    `--env-file=${JSON.stringify(productionEnvPath)}`,
+    '--import tsx scripts/refresh-earnings.ts',
+  ].join(' '),
 ].join(' && ')
 
 const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
@@ -82,5 +107,5 @@ console.log(
   + `${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} and `
   + `${String(closeHour).padStart(2, '0')}:${String(closeMinute).padStart(2, '0')} JST`,
 )
-console.log('command: npm run batch:earnings-refresh')
+console.log('command: node --env-file=jquants.env --env-file=production.env --import tsx scripts/refresh-earnings.ts')
 console.log(`logs: ${logPath('earnings-refresh.log')}`)
