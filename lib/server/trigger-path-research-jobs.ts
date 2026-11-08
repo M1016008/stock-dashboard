@@ -1,17 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
-import { createInterface } from 'node:readline'
 import os from 'node:os'
 import path from 'node:path'
-import type { Transaction } from '@libsql/client'
-import { client, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
+import { client, ensureReady, execGet, execRun } from '@/lib/db/client'
 import { historicalScanResultPaths } from '@/lib/server/trigger-discovery-historical-scan-jobs'
 import { loadSegmentationSource, TriggerOutcomeSegmentationSourceError } from '@/lib/server/trigger-discovery-outcome-segmentation'
 import { generatePathResearchRows, mapResearchObservations } from '@/lib/server/trigger-path-research-batch'
 import { outcomeResultPaths } from '@/lib/server/trigger-discovery-outcome-jobs'
-import { recoverWorkerJobs } from '@/lib/server/trigger-historical-worker-ownership'
+import {
+  JOB_ID_PATTERN as JOB_ID, beginWriteTransaction, cancelWorkerJob, claimWorkerJob, cleanupExpiredWorkerJobs,
+  hashFile, nowSeconds, readLines, recoverWorkerJobs,
+} from '@/lib/server/trigger-historical-worker-ownership'
 import type { TriggerHistoricalScanEvent } from '@/lib/trigger-discovery-historical-scan-contract'
 import type { TriggerOutcomeJobStatus, TriggerOutcomeRow } from '@/lib/trigger-discovery-outcome-contract'
 import {
@@ -19,7 +20,6 @@ import {
   type PathResearchJobSummary, type PathResearchManifest, type PathResearchRow,
 } from '@/lib/trigger-path-research-contract'
 
-const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const TABLE = 'trigger_path_research_jobs'
 const TTL_SECONDS = 7 * 86_400
 
@@ -38,18 +38,6 @@ export class PathResearchSourceError extends Error {
   }
 }
 
-function nowSeconds(): number { return Math.floor(Date.now() / 1_000) }
-async function beginWriteTransaction(): Promise<Transaction> {
-  const configured = Number(process.env.SQLITE_BUSY_RETRIES ?? 8)
-  const retries = Number.isInteger(configured) ? Math.min(20, Math.max(0, configured)) : 8
-  for (let attempt = 0; ; attempt += 1) {
-    try { return await client.transaction('write') }
-    catch (error) {
-      if (!/SQLITE_BUSY|database is locked/i.test(String(error)) || attempt >= retries) throw error
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2_500, 120 * 2 ** attempt)))
-    }
-  }
-}
 function root(): string {
   return process.env.STOCKBOARD_PATH_RESEARCH_DIR?.trim()
     || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'trigger-path-research')
@@ -61,12 +49,6 @@ export function pathResearchResultPaths(id: string): { manifest: string; rows: s
 }
 async function removeFiles(id: string): Promise<void> {
   await Promise.all(Object.values(pathResearchResultPaths(id)).map((file) => rm(file, { force: true })))
-}
-
-async function hashFile(file: string): Promise<string> {
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(/* turbopackIgnore: true */ file)) hash.update(chunk)
-  return hash.digest('hex')
 }
 
 async function checkedSource(outcomeJobId: string): Promise<{
@@ -140,7 +122,7 @@ export async function createPathResearchJob(outcomeJobId: string): Promise<{ job
   const ttl = Math.min(now + TTL_SECONDS, expiresAt)
   if (ttl <= now) throw new PathResearchSourceError('source_expired')
   await ensureReady()
-  const tx = await beginWriteTransaction()
+  const tx = await beginWriteTransaction('string')
   try {
     const existing = await tx.execute({
       sql: `SELECT * FROM ${TABLE} WHERE outcome_job_id=? AND source_fingerprint=? AND expires_at>?
@@ -174,45 +156,17 @@ export async function getPathResearchJob(id: string): Promise<PathResearchJobSum
 }
 
 export async function cancelPathResearchJob(id: string): Promise<PathResearchJobSummary | null> {
-  const row = await jobRow(id)
-  if (!row) return null
-  if (row.status === 'QUEUED') {
-    await execRun(`UPDATE ${TABLE} SET status='CANCELLED',cancel_requested=1,completed_at=unixepoch()
-      WHERE id=? AND status='QUEUED'`, [id])
-  } else if (row.status === 'RUNNING') {
-    await execRun(`UPDATE ${TABLE} SET status='CANCEL_REQUESTED',cancel_requested=1
-      WHERE id=? AND status='RUNNING'`, [id])
-  }
-  return getPathResearchJob(id)
+  const row = await cancelWorkerJob<PathResearchJobRow>(TABLE, id, 'direct')
+  return row ? summary(row) : null
 }
 
 export async function claimNextPathResearchJob(ownerToken: string = randomUUID()): Promise<PathResearchJobRow | null> {
-  const candidate = await execGet<{ id: string }>(`SELECT id FROM ${TABLE} WHERE status='QUEUED'
-    ORDER BY created_at,id LIMIT 1`)
-  if (!candidate) return null
-  const now = nowSeconds()
-  const result = await client.execute({
-    sql: `UPDATE ${TABLE} SET status='RUNNING',started_at=?,completed_at=NULL,heartbeat_at=?,owner_token=?,
-      cancel_requested=0,processed_events=0,processed_tickers=0,result_location=NULL,result_size_bytes=0,
-      error_category=NULL,attempt_count=attempt_count+1
-      WHERE id=? AND status='QUEUED'
-        AND NOT EXISTS (SELECT 1 FROM ${TABLE} WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND id<>?)
-        AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-        AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-        AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
-      RETURNING *`,
-    args: [now, now, ownerToken, candidate.id, candidate.id],
-  })
-  return (result.rows[0] as unknown as PathResearchJobRow | undefined) ?? null
-}
-
-async function readLines<T>(file: string): Promise<T[]> {
-  const rows: T[] = []
-  const stream = createReadStream(/* turbopackIgnore: true */ file, { encoding: 'utf8' })
-  const lines = createInterface({ input: stream, crlfDelay: Infinity })
-  try { for await (const line of lines) if (line) rows.push(JSON.parse(line) as T) }
-  finally { lines.close(); stream.destroy() }
-  return rows
+  return claimWorkerJob<PathResearchJobRow>(TABLE,
+    `started_at=?,completed_at=NULL,heartbeat_at=?,owner_token=?,
+    cancel_requested=0,processed_events=0,processed_tickers=0,result_location=NULL,result_size_bytes=0,
+    error_category=NULL,attempt_count=attempt_count+1`,
+    () => { const now = nowSeconds(); return [now, now, ownerToken] },
+    { guardLookup: false, ensureReadyBeforeClaim: false })
 }
 
 async function updateProgress(row: PathResearchJobRow, progress: {
@@ -377,12 +331,7 @@ export async function getPathResearchArtifact(id: string): Promise<{
 }
 
 export async function cleanupExpiredPathResearchJobs(): Promise<number> {
-  const ids = await execAll<{ id: string }>(`SELECT id FROM ${TABLE}
-    WHERE expires_at<=unixepoch() AND status IN ('COMPLETED','FAILED','CANCELLED')`)
-  for (const item of ids) await removeFiles(item.id).catch(() => undefined)
-  if (ids.length) await execRun(`DELETE FROM ${TABLE}
-    WHERE expires_at<=unixepoch() AND status IN ('COMPLETED','FAILED','CANCELLED')`)
-  return ids.length
+  return cleanupExpiredWorkerJobs(TABLE, removeFiles)
 }
 
 export async function recoverStalePathResearchJobs(): Promise<{ requeued: number; failed: number; cancelled: number }> {

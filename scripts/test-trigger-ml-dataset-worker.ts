@@ -12,8 +12,9 @@ async function main() {
   try {
     const { ensureReady, client, execGet } = await import('@/lib/db/client')
     const { recoverWorkerJobs } = await import('@/lib/server/trigger-historical-worker-ownership')
-    const { claimNextMlDatasetJob, executeMlDatasetJob, mlDatasetPaths } =
-      await import('@/lib/server/trigger-ml-dataset-jobs')
+    const mlJobs = await import('@/lib/server/trigger-ml-dataset-jobs')
+    const { cancelMlDatasetJob, claimNextMlDatasetJob, executeMlDatasetJob, mlDatasetPaths } = mlJobs
+    assert.equal(Object.keys(mlJobs).some((name) => /cleanup/i.test(name)), false, 'ML datasets have no cleanup')
     await ensureReady()
     const deadOwner = `worker:987654321:0123456789abcdef0123:${randomUUID()}`
     const requeueId = randomUUID()
@@ -31,10 +32,29 @@ async function main() {
       'SELECT status FROM trigger_ml_dataset_jobs WHERE id=?', [requeueId]))?.status, 'QUEUED')
     assert.equal((await execGet<{ status: string }>(
       'SELECT status FROM trigger_ml_dataset_jobs WHERE id=?', [cancelId]))?.status, 'CANCELLED')
+    assert.equal(await cancelMlDatasetJob('not-a-uuid'), null)
+    assert.equal(await cancelMlDatasetJob(randomUUID()), null)
+    const pathBlocker = randomUUID()
+    await client.execute({ sql: `INSERT INTO trigger_path_research_jobs (id,status,outcome_job_id,
+      historical_scan_job_id,source_fingerprint,analysis_cutoff_date,expires_at)
+      VALUES (?,'RUNNING',?,?,'fixture','2025-01-01',unixepoch()+3600)`, args: [pathBlocker, randomUUID(), randomUUID()] })
+    assert.equal(await claimNextMlDatasetJob(deadOwner), null, 'cross-table guard blocks ML while path research is active')
+    await client.execute({ sql: 'DELETE FROM trigger_path_research_jobs WHERE id=?', args: [pathBlocker] })
+    await client.execute({ sql: 'UPDATE trigger_ml_dataset_jobs SET completed_at=123 WHERE id=?', args: [requeueId] })
     const claimed = await claimNextMlDatasetJob(deadOwner)
     assert.equal(claimed?.id, requeueId)
+    assert.equal(Number(claimed?.completed_at), 123, 'ML claim keeps its narrower column reset')
+    assert.equal(Number(claimed?.attempt_count), 2)
     assert.equal((await claimNextMlDatasetJob(deadOwner)), null)
     assert.ok(claimed)
+    const queuedCancelId = randomUUID()
+    await client.execute({ sql: `INSERT INTO trigger_ml_dataset_jobs
+      (id,status,path_research_job_id,outcome_job_id,historical_scan_job_id,source_fingerprint,
+       split_policy_json,analysis_cutoff_date) VALUES (?,'QUEUED',?,?,?,'fixture','{}','2025-01-01')`,
+    args: [queuedCancelId, randomUUID(), randomUUID(), randomUUID()] })
+    assert.equal((await cancelMlDatasetJob(queuedCancelId))?.status, 'CANCELLED')
+    assert.equal(Number((await execGet<{ cancel_requested: number }>(
+      'SELECT cancel_requested FROM trigger_ml_dataset_jobs WHERE id=?', [queuedCancelId]))?.cancel_requested), 1)
     const paths = mlDatasetPaths(requeueId)
     const data = '{"fixture":"already published"}\n'
     const hash = createHash('sha256').update(data).digest('hex')
