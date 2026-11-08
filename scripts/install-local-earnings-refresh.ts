@@ -48,10 +48,16 @@ function dotenvValue(line: string | undefined, key: string): string {
 // Keep the scoped file in sync with the canonical runtime.env (owner-only, values never printed).
 // A reissued key in runtime.env is propagated here on every install.
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
-const runtimeLine = fs.existsSync(runtimeEnvPath)
-  ? fs.readFileSync(runtimeEnvPath, 'utf8').split('\n').find((entry) => entry.trim().startsWith('JQUANTS_API_KEY='))
-  : undefined
-if (runtimeLine && dotenvValue(runtimeLine, 'JQUANTS_API_KEY')) {
+const runtimeText = fs.existsSync(runtimeEnvPath) ? fs.readFileSync(runtimeEnvPath, 'utf8') : ''
+const runtimeKeyLines = runtimeText.split('\n')
+  .filter((entry) => /^\s*(export\s+)?JQUANTS_API_KEY\s*=/.test(entry))
+// Refuse ambiguity instead of guessing which assignment is current (Node uses the last one).
+if (runtimeKeyLines.length > 1) {
+  throw new Error('runtime.env has more than one JQUANTS_API_KEY assignment; keep exactly one and rerun')
+}
+const runtimeLine = runtimeKeyLines[0]
+if (runtimeLine && dotenvValue(runtimeLine, 'JQUANTS_API_KEY')
+  && (parseEnv(runtimeText).JQUANTS_API_KEY ?? '').trim() === dotenvValue(runtimeLine, 'JQUANTS_API_KEY')) {
   const current = fs.existsSync(jquantsEnvPath) ? fs.readFileSync(jquantsEnvPath, 'utf8') : null
   const desired = `${runtimeLine.trim()}\n`
   if (current !== desired) {
