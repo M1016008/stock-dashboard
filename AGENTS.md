@@ -22,8 +22,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   | --- | --- | --- | --- |
   | Finnhub | 米国株の決算カレンダー。`/api/v1/calendar/earnings` のみ (`lib/finnhub.ts`) | `FINNHUB_API_KEY` は Mac mini 上のどの env ファイルにも未設定 | 停止中。キー未設定のため US 決算取得は無効 |
   | Kabutan | テーマ (`/themes`) と材料ニュース (`/news/marketnews`) の取得。銘柄ページ (`/stock/{ticker}`) へのリンク | キー不要 | 稼働中 (`kabutan-themes` / `kabutan-material-news`、exit 0、鮮度 OK) |
-  | JPX | JPX 公式サイトからの直接取得 (J-Quants 経由とは別): 決算発表予定 (`/listing/event-schedules/financial-announcement/`)、上場銘柄一覧 `data_j.xlsx`、ETF/ETN/REIT 銘柄一覧 | キー不要 | 決算予定の取得は earnings-refresh に含まれ、J-Quants キーの読込み不備で 2026-10-23 から停止中 |
-  | FMP | 次回決算日 (`earnings-calendar`) と Sector/Industry (`profile`) のアダプタ (`lib/fmp.ts`、`/stable`) | `FMP_API_KEY` は未設定 | 未使用 (Production から呼ぶ処理なし) |
+  | JPX | JPX 公式サイトからの直接取得 (J-Quants 経由とは別): (1) 決算発表予定 `/listing/event-schedules/financial-announcement/` (`lib/jpx-earnings.ts`)、(2) 上場銘柄一覧 `/markets/statistics-equities/misc/.../data_j.xlsx` (`scripts/audit-large-holder-instruments.ts`)。ETF/ETN/REIT・優先株の銘柄一覧ページと `www2.jpx.co.jp/disc` の PDF は出典リンクとして表示するだけで、取得はしない | キー不要 | (1) earnings-refresh に含まれ、J-Quants キーの読込み不備で 2026-10-23 から停止中。(2) 定期実行なし (手動の監査スクリプトのみ) |
+  | FMP | 次回決算日 (`earnings-calendar`) と Sector/Industry (`profile`) のアダプタ (`lib/fmp.ts`、`/stable`) | `FMP_API_KEY` は未設定。表示・再配信の書面上の権利は Repository 上で未確認 (`docs/us-fmp-provider-assessment.md` が要件として記載)。表示用のゲート `FMP_DISPLAY_LICENSE_APPROVED` は未設定 | 未使用 (Production から呼ぶ処理なし)。有効化には、キーの設置、表示ゲートの設定、Production 構成の変更について個別の承認が必要 |
 
 - **上記以外の補完**: 各市場の一次ソースで取得できないデータに限り別ソースを使う。**ただし都度判断・相談**
   (勝手に Yahoo Finance 等にフォールバックしない)
