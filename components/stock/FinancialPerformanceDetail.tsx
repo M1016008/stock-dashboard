@@ -46,6 +46,7 @@ import {
   TabSwitch,
   UnavailableNote,
 } from '@/components/stock/fundamentals/primitives'
+import { useFundamentalReadModel } from '@/components/stock/fundamentals/useFundamentalReadModel'
 
 interface FinancialPerformanceDetailProps {
   ticker: string
@@ -89,11 +90,6 @@ const METRIC_LABELS: Record<FinancialPerformanceDetailMetric, string> = {
 }
 
 const METRIC_OPTIONS = FINANCIAL_PERFORMANCE_DETAIL_METRICS.map((metric) => ({ value: metric, label: METRIC_LABELS[metric] }))
-
-function detailUrl(ticker: string, analysisDate: string | null): string {
-  const query = analysisDate ? `?as_of=${encodeURIComponent(analysisDate)}` : ''
-  return `/api/financial-performance-detail/${encodeURIComponent(ticker)}${query}`
-}
 
 function visiblePeriods(periods: FinancialPerformanceDetailPeriod[], range: TimelineRange) {
   if (range === 'all') return periods
@@ -168,15 +164,11 @@ function pointTypeLabel(period: FinancialPerformanceDetailPeriod): string {
 }
 
 export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPerformanceDetailProps) {
-  const [model, setModel] = useState<FinancialPerformanceDetailReadModel | null>(null)
   const [mode, setMode] = useState<FinancialTimelineMode>('FY')
   const [range, setRange] = useState<TimelineRange>('5')
   const [selectedMetric, setSelectedMetric] = useState<FinancialPerformanceDetailMetric>('revenue')
   const [profitabilityView, setProfitabilityView] = useState<ProfitabilityView>('margins')
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1024px)')
@@ -186,30 +178,16 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
     return () => media.removeEventListener('change', update)
   }, [])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError('')
-    fetch(detailUrl(ticker, analysisDate), { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((payload: FinancialPerformanceDetailReadModel) => {
-        if (!controller.signal.aborted) setModel(payload)
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [analysisDate, ticker, reloadKey])
+  const { model, loading, error, retry } = useFundamentalReadModel<FinancialPerformanceDetailReadModel>(
+    '/api/financial-performance-detail/', ticker, analysisDate,
+  )
 
   const series = model?.modes[mode]
   const periods = useMemo(() => visiblePeriods(series?.periods ?? [], range), [range, series?.periods])
 
   if (loading) return <LoadingBlock label="業績詳細を読み込んでいます..." />
   if (error || !model || !series) {
-    return <ErrorBlock label="業績詳細を取得できませんでした。" onRetry={() => setReloadKey((value) => value + 1)} />
+    return <ErrorBlock label="業績詳細を取得できませんでした。" onRetry={retry} />
   }
 
   return (

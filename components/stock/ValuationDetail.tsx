@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { CircleGauge, History, Info, Layers, Scale, Users } from 'lucide-react'
 import {
   CartesianGrid,
@@ -46,6 +46,7 @@ import {
   TabSwitch,
   UnavailableNote,
 } from '@/components/stock/fundamentals/primitives'
+import { useFundamentalReadModel } from '@/components/stock/fundamentals/useFundamentalReadModel'
 
 interface ValuationDetailProps {
   ticker: string
@@ -64,10 +65,6 @@ const TAXONOMY_OPTIONS: Array<{ value: Taxonomy; label: string }> = [
   { value: 'sector33', label: '33業種' },
   { value: 'custom60', label: '独自60分類' },
 ]
-
-function valuationUrl(ticker: string, analysisDate: string | null): string {
-  return `/api/valuation-detail/${encodeURIComponent(ticker)}${analysisDate ? `?as_of=${encodeURIComponent(analysisDate)}` : ''}`
-}
 
 function compactNumber(value: number): string {
   const absolute = Math.abs(value)
@@ -126,31 +123,12 @@ function windowLabel(window: ValuationHistoryWindow): string {
 }
 
 export function ValuationDetail({ ticker, analysisDate }: ValuationDetailProps) {
-  const [model, setModel] = useState<ValuationDetailReadModel | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [reloadKey, setReloadKey] = useState(0)
+  const { model, loading, error, retry } = useFundamentalReadModel<ValuationDetailReadModel>(
+    '/api/valuation-detail/', ticker, analysisDate,
+  )
   const [metric, setMetric] = useState<ValuationHistoryMetric>('forward_per')
   const [window, setWindow] = useState<ValuationHistoryWindow>('5y')
   const [taxonomy, setTaxonomy] = useState<Taxonomy>('sector33')
-
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError('')
-    fetch(valuationUrl(ticker, analysisDate), { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((payload: ValuationDetailReadModel) => {
-        if (!controller.signal.aborted) setModel(payload)
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [analysisDate, ticker, reloadKey])
 
   const selected = model?.history[metric] ?? null
   const stats = selected?.statistics[window] ?? null
@@ -160,7 +138,7 @@ export function ValuationDetail({ ticker, analysisDate }: ValuationDetailProps) 
 
   if (loading) return <LoadingBlock label="バリュエーションを読み込んでいます..." />
   if (error || !model || !selected || !stats || !peer) {
-    return <ErrorBlock label="バリュエーションを取得できませんでした。" onRetry={() => setReloadKey((value) => value + 1)} />
+    return <ErrorBlock label="バリュエーションを取得できませんでした。" onRetry={retry} />
   }
 
   return (
