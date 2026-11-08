@@ -1,18 +1,11 @@
 // Register a low-priority launchd watcher for the removable classification CSV.
 
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import {
+  calendarXml, cwd, ensureLaunchAgentDirs, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.classification-sync'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const recoveryIntervalSeconds = Math.max(
   3600,
   Number(process.env.CLASSIFICATION_SYNC_INTERVAL_SECONDS ?? '21600') || 21600,
@@ -26,56 +19,13 @@ if (scheduleTimes.length === 0) {
 }
 const sourcePath = process.env.CLASSIFICATION_FILE?.trim()
   || '/Volumes/OWC Express 1M2 80G/会社四季報CSV/会社四季報_最新.csv'
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
 
 function calendar(time: string): string {
   const [hour, minute] = time.split(':').map(Number)
-  return [
-    '    <dict>',
-    `      <key>Hour</key><integer>${hour}</integer>`,
-    `      <key>Minute</key><integer>${minute}</integer>`,
-    '    </dict>',
-  ].join('\n')
+  return calendarXml(hour, minute)
 }
 
-function sleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
-
-function bootstrap(attempts = 6): void {
-  let lastError: unknown
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
-        stdio: attempt === attempts ? 'inherit' : 'ignore',
-      })
-      return
-    } catch (error) {
-      lastError = error
-      if (attempt < attempts) sleep(500 * attempt)
-    }
-  }
-  throw lastError
-}
-
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 const command = [
   `cd ${JSON.stringify(cwd)}`,
@@ -87,23 +37,7 @@ const command = [
   'nice -n 15 npm run batch:classification-sync',
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <array>
 ${scheduleTimes.map(calendar).join('\n')}
   </array>
@@ -120,26 +54,14 @@ ${scheduleTimes.map(calendar).join('\n')}
   <key>ThrottleInterval</key>
   <integer>300</integer>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'classification-sync.log'))}</string>
+  <string>${xmlEscape(logPath('classification-sync.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'classification-sync.err'))}</string>
-</dict>
-</plist>
-`
+  <string>${xmlEscape(logPath('classification-sync.err'))}</string>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // First registration.
-}
-sleep(750)
-bootstrap()
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist, { retryBootstrap: true })
 
 console.log(`launchd registered: ${plistPath}`)
 console.log(`daily schedule: ${scheduleTimes.join(', ')} JST`)
 console.log(`recovery: after login and every ${Math.round(recoveryIntervalSeconds / 3600)} hours`)
 console.log(`source: ${sourcePath}`)
-console.log(`logs: ${path.join(logDir, 'classification-sync.log')}`)
+console.log(`logs: ${logPath('classification-sync.log')}`)

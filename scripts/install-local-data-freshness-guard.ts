@@ -1,45 +1,21 @@
 // Register the cross-market recovery guard. It runs after login and every
 // 15 minutes, then conditionally starts only stale, compatible StockBoard services.
 
-import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import {
+  cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.data-freshness-guard'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const intervalSeconds = Math.max(
   900,
   Number(process.env.DATA_FRESHNESS_GUARD_INTERVAL_SECONDS ?? '900') || 900,
 )
 const defaultUsDb = process.env.US_ANALYTICS_DB_PATH?.trim()
   || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
 
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 const command = [
   `cd ${JSON.stringify(cwd)}`,
@@ -53,23 +29,7 @@ const command = [
   'nice -n 15 npm run batch:data-freshness-guard',
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartInterval</key>
+const plist = launchAgentPlist(label, command, `  <key>StartInterval</key>
   <integer>${intervalSeconds}</integer>
   <key>RunAtLoad</key>
   <true/>
@@ -82,25 +42,14 @@ ${launchAgentStorageEnvironmentXml('  ')}
   <key>ThrottleInterval</key>
   <integer>300</integer>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'data-freshness-guard.log'))}</string>
+  <string>${xmlEscape(logPath('data-freshness-guard.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'data-freshness-guard.err'))}</string>
-</dict>
-</plist>
-`
+  <string>${xmlEscape(logPath('data-freshness-guard.err'))}</string>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // First registration.
-}
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist)
 
 console.log(`launchd registered: ${plistPath}`)
 console.log(`schedule: after login and every ${Math.round(intervalSeconds / 60)} minutes`)
 console.log('safety: read-only audit, no duplicate launch, writer-lock deferral, per-source cooldown')
 console.log(`report: ${path.join(home, 'Library', 'Application Support', 'StockBoard', 'data-freshness-latest.json')}`)
-console.log(`logs: ${path.join(logDir, 'data-freshness-guard.log')}`)
+console.log(`logs: ${logPath('data-freshness-guard.log')}`)

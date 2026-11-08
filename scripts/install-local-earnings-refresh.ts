@@ -3,40 +3,18 @@
 // Register a local launchd job that refreshes the earnings calendar and actual disclosure times.
 // The refresh uses J-Quants + JPX official data and warms dashboard cache.
 
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import {
+  calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.earnings-refresh'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const supportDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
 const deferredPath = path.join(supportDir, 'earnings-refresh-deferred')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const scheduleHour = Number(process.env.EARNINGS_REFRESH_HOUR ?? '7')
 const scheduleMinute = Number(process.env.EARNINGS_REFRESH_MINUTE ?? '10')
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
 
 function clampHour(value: number): number {
   return Number.isInteger(value) && value >= 0 && value <= 23 ? value : 7
@@ -46,8 +24,7 @@ function clampMinute(value: number): number {
   return Number.isInteger(value) && value >= 0 && value <= 59 ? value : 10
 }
 
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
 
 const hour = clampHour(scheduleHour)
@@ -70,41 +47,14 @@ const command = [
   'npm run batch:earnings-refresh',
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Hour</key><integer>${hour}</integer>
-      <key>Minute</key><integer>${minute}</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>${retryHour}</integer>
-      <key>Minute</key><integer>${retryMinute}</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>${closeHour}</integer>
-      <key>Minute</key><integer>${closeMinute}</integer>
-    </dict>
+${[[hour, minute], [retryHour, retryMinute], [closeHour, closeMinute]].map(([h, m]) => calendarXml(h, m)).join('\n')}
   </array>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'earnings-refresh.log'))}</string>
+  <string>${xmlEscape(logPath('earnings-refresh.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'earnings-refresh.err'))}</string>
+  <string>${xmlEscape(logPath('earnings-refresh.err'))}</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -122,21 +72,9 @@ ${launchAgentStorageEnvironmentXml('  ')}
   <key>Nice</key>
   <integer>10</integer>
   <key>ThrottleInterval</key>
-  <integer>300</integer>
-</dict>
-</plist>
-`
+  <integer>300</integer>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // Not registered yet.
-}
-
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist)
 
 console.log(`launchd registered: ${plistPath}`)
 console.log(
@@ -145,4 +83,4 @@ console.log(
   + `${String(closeHour).padStart(2, '0')}:${String(closeMinute).padStart(2, '0')} JST`,
 )
 console.log('command: npm run batch:earnings-refresh')
-console.log(`logs: ${path.join(logDir, 'earnings-refresh.log')}`)
+console.log(`logs: ${logPath('earnings-refresh.log')}`)

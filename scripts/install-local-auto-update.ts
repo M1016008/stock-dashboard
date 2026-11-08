@@ -3,49 +3,17 @@
 // ローカルMacの launchd に StockBoard の日次自動更新を登録する。
 // J-Quantsの日次株価更新を16:30以降とみなし、17:00までにサイト基準日を最新化する。
 
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import {
+  calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
+} from './lib/launchagent-install'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.update-latest'
-const cwd = process.cwd()
-const home = os.homedir()
-const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
-const plistPath = path.join(launchAgentsDir, `${label}.plist`)
-const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
 const productionEnvPath = path.join(configDir, 'production.env')
-const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const pathEnv = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin',
-].join(':')
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-function calendar(hour: number, minute: number, weekday: number): string {
-  return [
-    '    <dict>',
-    `      <key>Weekday</key><integer>${weekday}</integer>`,
-    `      <key>Hour</key><integer>${hour}</integer>`,
-    `      <key>Minute</key><integer>${minute}</integer>`,
-    '    </dict>',
-  ].join('\n')
-}
 
 function marketDayRetrySchedule(): string {
   // launchd Weekday: 1=Monday ... 5=Friday.
@@ -59,31 +27,10 @@ function marketDayRetrySchedule(): string {
     [18, 10],
     [21, 10],
   ] as const
-  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
+  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendarXml(hour, minute, weekday))).join('\n')
 }
 
-function sleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
-
-function bootstrap(attempts = 6): void {
-  let lastError: unknown
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
-        stdio: attempt === attempts ? 'inherit' : 'ignore',
-      })
-      return
-    } catch (error) {
-      lastError = error
-      if (attempt < attempts) sleep(500 * attempt)
-    }
-  }
-  throw lastError
-}
-
-fs.mkdirSync(launchAgentsDir, { recursive: true })
-fs.mkdirSync(logDir, { recursive: true })
+ensureLaunchAgentDirs()
 
 for (const envPath of [runtimeEnvPath, productionEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
@@ -138,48 +85,19 @@ const command = [
   ].join(' '),
 ].join(' && ')
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${label}</string>
-  <key>WorkingDirectory</key>
-  <string>${xmlEscape(cwd)}</string>
-${launchAgentStorageEnvironmentXml('  ')}
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>${xmlEscape(command)}</string>
-  </array>
-  <key>StartCalendarInterval</key>
+const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
   <array>
 ${marketDayRetrySchedule()}
   </array>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'update-latest.log'))}</string>
+  <string>${xmlEscape(logPath('update-latest.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'update-latest.err'))}</string>
+  <string>${xmlEscape(logPath('update-latest.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
-</dict>
-</plist>
-`
+  <false/>`, launchAgentStorageEnvironmentXml('  '))
 
-fs.writeFileSync(plistPath, plist)
-
-try {
-  execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
-} catch {
-  // 未登録なら問題なし。
-}
-
-sleep(750)
-bootstrap()
-execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
+const plistPath = installLaunchAgent(label, plist, { retryBootstrap: true })
 
 console.log(`launchd registered: ${plistPath}`)
 console.log('schedule: Mon-Fri 16:40, 16:55, 17:20, 18:10, 21:10 JST')
-console.log(`logs: ${path.join(logDir, 'update-latest.log')}`)
+console.log(`logs: ${logPath('update-latest.log')}`)
