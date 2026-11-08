@@ -3,10 +3,10 @@ import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-st
 import {
   normalizeStage,
   shortStageLabel,
+  STAGE_KEYS,
   STAGE_TIMEFRAME_LABELS,
-  US_STAGE_KEYS,
-  type UsStageEntry,
-} from './technical-view'
+  type StageEntry,
+} from '@/components/stock/technical-view'
 
 /** サマリーの1行。左の共通見出し軸(sm以上は固定幅)と横罫で読む。モバイルは見出しの下に内容を縦に流す */
 export function SheetRow({
@@ -74,14 +74,14 @@ export function CurrentOnlyDataNotice({ label }: { label: string }) {
 }
 
 /** 6軸Stageを日足・週足・月足の順に1本のリボンで並べる(区画の間は1px、時間軸の間だけ少し空ける) */
-export function StageRibbon({ stage }: { stage: UsStageEntry }) {
+export function StageRibbon({ stage }: { stage: StageEntry }) {
   return (
     <div className="grid max-w-[720px] grid-cols-3 gap-1" role="group" aria-label="6ステージ(日足・週足・月足 × A・B)" data-overview-stage-ribbon>
       {[0, 2, 4].map((start) => (
         <div key={start} role="group" aria-label={STAGE_TIMEFRAME_LABELS[start / 2]} className="min-w-0">
           <span className="mb-1 block text-[11px] font-bold text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</span>
           <div className="grid grid-cols-2 gap-px">
-            {US_STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
+            {STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
               <SixStageCell key={key} label={label} stage={stage[key]} />
             ))}
           </div>

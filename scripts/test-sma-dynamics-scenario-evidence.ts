@@ -525,7 +525,7 @@ const fmt = priceFormatter(1)
   for (const file of ['components/stock/sma-dynamics/SmaDynamicsView.tsx', 'components/stock/sma-dynamics/SmaDynamicsSection.tsx', 'components/stock/sma-dynamics/SmaScenarioEvidence.tsx']) {
     assert.doesNotMatch(read(file), /sma-dynamics-scenario-fixtures|sma-dynamics-fixtures/, `${file}: fixtures never reach the shared UI`)
   }
-  for (const file of ['app/stock/[ticker]/StockDetailClient.tsx', 'components/us/stock-detail/UsChartWorkspace.tsx', 'app/us/stock/[ticker]/UsStockDetailClient.tsx']) {
+  for (const file of ['app/stock/[ticker]/StockDetailClient.tsx', 'components/stock/TechnicalChartSnapshot.tsx', 'components/us/stock-detail/UsChartWorkspace.tsx', 'app/us/stock/[ticker]/UsStockDetailClient.tsx']) {
     assert.doesNotMatch(read(file), /externalScenarios|scenario-evidence|scenario-fixtures/, `${file}: no scenario evidence in live Stock Detail`)
   }
   const view = stripComments(read('components/stock/sma-dynamics/SmaDynamicsView.tsx'))

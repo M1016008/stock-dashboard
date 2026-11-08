@@ -31,6 +31,62 @@ import { Notice } from '@/components/ui/EmptyState'
 import { StageTimeline, type StageTimelineSnapshot } from '@/components/stock/StageTimeline'
 import { SmaDynamicsSection } from '@/components/stock/sma-dynamics/SmaDynamicsSection'
 import { useSmaLinkIntent } from '@/components/stock/sma-dynamics/useSmaLinkIntent'
+import { ScoreThresholdBar } from '@/components/stock/ScoreThresholdBar'
+import { TechnicalChartSnapshot, useChartHeight } from '@/components/stock/TechnicalChartSnapshot'
+import {
+  angleDirectionArrow,
+  angleDirectionColor,
+  angleDirectionLabel,
+  buildMaFieldInsight,
+  directionColor,
+  directionGlyph,
+  directionLabelJa,
+  directionWord,
+  EMPTY_MOMENTUM_SNAPSHOT,
+  fmtDeg,
+  fmtLift,
+  fmtPct,
+  fmtRate,
+  fmtScore,
+  formatDelta,
+  MA_ANGLE_KEYS,
+  MA_FIELD_THRESHOLD_DEG,
+  maAngleSet,
+  maFieldChangeConditions,
+  maFieldInputs,
+  normalizeStage,
+  PHYSICAL_BOUNDARIES,
+  PHYSICAL_FORCE_THRESHOLD,
+  PHYSICAL_STRONG_PMS,
+  physicalToneColor,
+  previousMomentumRow,
+  scoreLevelLabel,
+  scoreTone,
+  SHORT_TERM_CHANGE_THRESHOLD,
+  SHORT_TERM_LEAN_PCT,
+  SHORT_TERM_PFS_THRESHOLD,
+  SHORT_TERM_PMS_LEVEL,
+  SHORT_TERM_STRONG_PCT,
+  shortStageLabel,
+  shortTermSideReading,
+  STAGE_KEYS,
+  STAGE_TIMEFRAME_LABELS,
+  stagePairText,
+  stageSide,
+  tallyDirection,
+  thresholdDirection,
+  trendArrow,
+  trendLabelFromDelta,
+  trendText,
+  upperStageText,
+  type EvidenceDirection,
+  type MaAngleSet,
+  type MaFieldInsight,
+  type ShortTermEvidenceItem,
+  type ShortTermEvidenceSide,
+  type StageEntry,
+  type TechnicalMomentumSnapshot,
+} from '@/components/stock/technical-view'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { Ma25mMonitorSummary } from '@/components/stock/Ma25mMonitorSummary'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
@@ -54,7 +110,6 @@ import {
 import { findTicker } from '@/lib/master/tickers'
 import {
   buildStockDecisionSummaryUrls,
-  formatTechnicalSnapshotDateLabel,
   selectPhysicalMomentumScoreRow,
 } from '@/lib/stock-decision-summary'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
@@ -63,8 +118,6 @@ import { physicsStatusTone, type PhysicsStatus } from '@/lib/ml/physics-analysis
 import {
   buildPhysicalMomentumView,
   buildPhysicalRawMetricView,
-  describePhysicalScore,
-  type PhysicalMomentumTone,
 } from '@/lib/physical-momentum-view'
 import {
   physicalPlanDirectionLabel,
@@ -608,40 +661,6 @@ function StockDetailTabs({
   )
 }
 
-type TechnicalMomentumSnapshot = {
-  status: 'loading' | 'available' | 'missing' | 'error'
-  scoreDate: string | null
-  maDate: string | null
-  pms: number | null
-  pfs: number | null
-  pes: number | null
-  isScoreFresh: boolean | null
-  scoreSource: PhysicalMomentumResponse['scoreSource']
-  maStructure: string | null
-  maDescription: string | null
-  /** buildMaFieldInsight の color(表示専用。未設定なら中立色) */
-  maColor?: string | null
-  maAngles?: MaAngleSet | null
-  /** buildMaFieldInsight の角度幅と前回比(表示専用) */
-  maSpreadDeg?: number | null
-  maSpreadChangeDeg?: number | null
-  message: string | null
-}
-
-const CHART_STAGE_AXES: Array<{
-  key: keyof NonNullable<StageTimelineSnapshot['stages']>
-  label: string
-}> = [
-  { key: 'dailyA', label: '日A' },
-  { key: 'dailyB', label: '日B' },
-  { key: 'weeklyA', label: '週A' },
-  { key: 'weeklyB', label: '週B' },
-  { key: 'monthlyA', label: '月A' },
-  { key: 'monthlyB', label: '月B' },
-]
-
-const STAGE_TIMEFRAME_LABELS = ['日足', '週足', '月足'] as const
-
 function ChartWorkspace({
   ticker,
   companyName,
@@ -660,16 +679,8 @@ function ChartWorkspace({
     message: null,
   })
   const [momentumSnapshot, setMomentumSnapshot] = useState<TechnicalMomentumSnapshot>({
+    ...EMPTY_MOMENTUM_SNAPSHOT,
     status: 'loading',
-    scoreDate: null,
-    maDate: null,
-    pms: null,
-    pfs: null,
-    pes: null,
-    isScoreFresh: null,
-    scoreSource: null,
-    maStructure: null,
-    maDescription: null,
     message: null,
   })
   const handleStageSnapshot = useCallback((snapshot: StageTimelineSnapshot) => {
@@ -681,19 +692,7 @@ function ChartWorkspace({
 
   useEffect(() => {
     setStageSnapshot({ status: 'loading', date: null, stages: null, message: null })
-    setMomentumSnapshot({
-      status: 'loading',
-      scoreDate: null,
-      maDate: null,
-      pms: null,
-      pfs: null,
-      pes: null,
-      isScoreFresh: null,
-      scoreSource: null,
-      maStructure: null,
-      maDescription: null,
-      message: null,
-    })
+    setMomentumSnapshot({ ...EMPTY_MOMENTUM_SNAPSHOT, status: 'loading', message: null })
   }, [analysisDate, ticker])
 
   const chartHeight = useChartHeight()
@@ -704,6 +703,7 @@ function ChartWorkspace({
     <div className="space-y-3 pb-6 sm:space-y-4" aria-label="チャート・6ステージ分析">
       <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title" data-section="Price &amp; moving averages">
         <TechnicalChartSnapshot
+          market="JP"
           stage={stageSnapshot}
           momentum={momentumSnapshot}
           analysisDate={analysisDate}
@@ -748,509 +748,6 @@ function ChartWorkspace({
 
       <TechnicalSnapshotGuide momentum={momentumSnapshot} />
     </div>
-  )
-}
-
-/** チャート高さは画面幅に合わせる(狭い画面でローソクが十分見え、広い画面で縦に伸びすぎない)。表示専用 */
-function useChartHeight(): number {
-  const [height, setHeight] = useState(460)
-  useEffect(() => {
-    const phone = window.matchMedia('(max-width: 480px)')
-    const tablet = window.matchMedia('(max-width: 1023px)')
-    const wide = window.matchMedia('(min-width: 1280px)')
-    const update = () => setHeight(phone.matches ? 320 : tablet.matches ? 400 : wide.matches ? 480 : 460)
-    update()
-    const lists = [phone, tablet, wide]
-    lists.forEach((list) => list.addEventListener('change', update))
-    return () => lists.forEach((list) => list.removeEventListener('change', update))
-  }, [])
-  return height
-}
-
-function TechnicalChartSnapshot({
-  stage,
-  momentum,
-  analysisDate,
-  chart,
-}: {
-  stage: StageTimelineSnapshot
-  momentum: TechnicalMomentumSnapshot
-  analysisDate: string | null
-  chart: ReactNode
-}) {
-  const stageCode = stage.stages
-    ? CHART_STAGE_AXES.map(({ key }) => stage.stages?.[key] ?? '-').join('')
-    : '------'
-  const referenceDateLabel = formatTechnicalSnapshotDateLabel({
-    stageDate: stage.date,
-    scoreDate: momentum.scoreDate,
-    maDate: momentum.maDate,
-    analysisDate,
-  })
-  const stageMessage = stage.status === 'loading'
-    ? '6ステージを読み込み中'
-    : stage.status === 'error'
-      ? `6ステージを取得できませんでした(${stage.message ?? '詳細不明'})`
-      : stage.status === 'missing'
-        ? stage.message ?? '6ステージの履歴がありません'
-        : '6ステージの値を取得できませんでした'
-  const momentumReady = momentum.status === 'available'
-  const stateColor = momentumReady ? momentum.maColor ?? 'var(--text-muted)' : 'var(--text-muted)'
-  const stateTitle = momentumReady
-    ? momentum.maStructure ?? 'MA力場は未判定'
-    : momentum.status === 'loading'
-      ? '読み込み中'
-      : momentum.status === 'error'
-        ? 'MA力場を取得できませんでした'
-        : 'MA力場は未算出'
-  const stateDescription = momentumReady
-    ? momentum.maDescription
-    : momentum.status === 'loading'
-      ? '移動平均の角度を読み込んでいます。'
-      : momentum.message ?? '移動平均の角度から状態を判定できませんでした。'
-
-  // 結論(全幅) → チャート ┬ 根拠レール(MA・3スコア) → 6ステージ(全幅の1帯)。DOM順=読み順。
-  // xl のレールにはMAと3スコアだけを置き、チャート列との高さ差で余白が生まれないよう6ステージは列の外に出す。各ブロックは内容なりの高さ
-  return (
-    <section className="bg-white" aria-labelledby="technical-snapshot-title" data-section="Technical snapshot" data-stage-code={stageCode}>
-      <div className="space-y-3 p-3 sm:p-4">
-        <TechnicalStateHero color={stateColor} title={stateTitle} description={stateDescription} />
-        <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(400px,440px)] xl:gap-x-5">
-          <div className="min-w-0">{chart}</div>
-          <div className="min-w-0">
-            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <h2 id="technical-snapshot-title" className="m-0 text-[14px] font-bold text-[var(--color-text-primary)]">現在の技術構造</h2>
-              <span className="font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">{referenceDateLabel}</span>
-            </div>
-            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-1">
-              <TechnicalMaEvidence momentum={momentum} />
-              <TechnicalScorePanel momentum={momentum} className="border-t border-[var(--color-border-soft)] pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0 xl:border-l-0 xl:border-t xl:pl-0 xl:pt-3" />
-            </div>
-          </div>
-        </div>
-        <TechnicalStageMap stage={stage} stageCode={stageCode} stageMessage={stageMessage} />
-      </div>
-    </section>
-  )
-}
-
-type MaSignal = 'up' | 'down' | 'flat'
-
-/** Current State(buildMaFieldInsight)と同じ ±MA_FIELD_THRESHOLD_DEG で向きを分ける */
-function maSignalOf(deg: number | null | undefined): MaSignal | null {
-  if (deg == null || !Number.isFinite(deg)) return null
-  if (deg > MA_FIELD_THRESHOLD_DEG) return 'up'
-  if (deg < -MA_FIELD_THRESHOLD_DEG) return 'down'
-  return 'flat'
-}
-
-function maSignalColor(signal: MaSignal | null): string {
-  if (signal === 'up') return 'var(--price-up)'
-  if (signal === 'down') return 'var(--price-down)'
-  return signal === 'flat' ? 'var(--text-secondary)' : 'var(--text-muted)'
-}
-
-function maSignalGlyph(signal: MaSignal | null): string {
-  if (signal === 'up') return '↗'
-  if (signal === 'down') return '↘'
-  return signal === 'flat' ? '→' : '—'
-}
-
-/** 本数・平均は maFieldInputs、多数派と逆向きの判定は同じ MA_FIELD_THRESHOLD_DEG を再利用する */
-function summarizeMaEvidence(angles: MaAngleSet) {
-  const inputs = maFieldInputs(angles)
-  const majority: 'up' | 'down' | null = inputs.up > inputs.down ? 'up' : inputs.down > inputs.up ? 'down' : null
-  const contrary = MA_ANGLE_KEYS.filter(({ key }) => {
-    const signal = maSignalOf(angles[key])
-    return majority != null && signal != null && signal !== 'flat' && signal !== majority
-  })
-  return { inputs, majority, contrary, flat: inputs.total - inputs.up - inputs.down }
-}
-
-/** このページ唯一の主結論(20px)。他の結論(運動状態など)は15px以下にして競合させない */
-function TechnicalStateHero({ color, title, description }: { color: string; title: string; description: string | null }) {
-  const glyph = color === 'var(--price-up)' ? '↗' : color === 'var(--price-down)' ? '↘' : color === 'var(--text-secondary)' ? '→' : '—'
-  return (
-    <div
-      className="flex min-w-0 items-start gap-3 rounded-[var(--radius-card)] border border-[var(--color-border-soft)] bg-white px-3 py-2"
-      style={{ borderLeftWidth: 3, borderLeftColor: color }}
-      data-technical-current-state
-    >
-      <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center text-[28px] font-extrabold leading-none" style={{ color }}>{glyph}</span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline gap-x-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
-          <span>現在の状態 ・ MA力場</span>
-          <span className="font-medium">移動平均の角度から判定</span>
-        </div>
-        {/* 広い画面では結論と説明を1行に並べ、狭い画面では説明が結論の下に回る */}
-        <div className="mt-0.5 flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
-          <h3 className="m-0 text-[20px] font-extrabold leading-tight [text-wrap:pretty]" style={{ color }}>{title}</h3>
-          {description && <p className="m-0 min-w-0 flex-1 basis-[22rem] text-[12px] font-medium leading-5 text-[var(--color-text-secondary)] [text-wrap:pretty]">{description}</p>}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const TECHNICAL_MA_GROUPS = [
-  { title: '短期', caption: '5・25MA', keys: ['ma5', 'ma25'], avg: 'shortAvg' },
-  { title: '長期', caption: '75・200MA', keys: ['ma75', 'ma200'], avg: 'longAvg' },
-] as const
-
-/** 角度どおりに傾けた矢印(表示専用。破線は水平) */
-function MaTiltArrow({ deg, color }: { deg: number | null; color: string }) {
-  if (deg == null) return <span aria-hidden="true" className="w-7 text-center font-mono text-[14px] font-black" style={{ color }}>—</span>
-  const tilt = Math.max(-75, Math.min(75, deg))
-  return (
-    <svg aria-hidden="true" focusable="false" width="28" height="24" viewBox="0 0 28 24" className="shrink-0 overflow-visible">
-      <line x1="1" y1="12" x2="27" y2="12" stroke="var(--color-border-default)" strokeWidth="1" strokeDasharray="2 2" />
-      <g transform={`rotate(${-tilt} 14 12)`} stroke={color} fill={color}>
-        <line x1="4" y1="12" x2="21" y2="12" strokeWidth="2" strokeLinecap="round" />
-        <path d="M27 12 L19 7.5 L19 16.5 Z" stroke="none" />
-      </g>
-    </svg>
-  )
-}
-
-function TechnicalMaEvidence({ momentum, className = '' }: { momentum: TechnicalMomentumSnapshot; className?: string }) {
-  const angles = momentum.maAngles ?? null
-  const evidence = angles ? summarizeMaEvidence(angles) : null
-  const statusNote = momentum.status === 'loading'
-    ? 'MAの角度を読み込み中'
-    : momentum.status === 'error'
-      ? `MAの角度を取得できませんでした${momentum.message ? `(${momentum.message})` : ''}`
-      : momentum.status === 'missing'
-        ? momentum.message ?? 'MAの角度は未算出です'
-        : 'MAの角度を表示できません'
-
-  const spreadChange = momentum.maSpreadChangeDeg ?? null
-  const spread = momentum.maSpreadDeg ?? null
-
-  return (
-    <section className={`min-w-0 ${className}`} aria-labelledby="technical-ma-evidence-title" data-technical-ma-evidence>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 id="technical-ma-evidence-title" className="m-0 text-[12px] font-bold text-[var(--color-text-primary)]">MAの傾き</h3>
-        <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">この銘柄自身の絶対角度</span>
-        {spread != null && (
-          <span className="ml-auto font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]" title="4本のMA角度の最大と最小の差。前回比は直前の営業日との差です">
-            角度幅 <b className="text-[var(--color-text-primary)]">{spread.toFixed(1)}°</b>
-            {spreadChange != null && <> 前回比 <b className="text-[var(--color-text-primary)]">{fmtDeg(spreadChange)}</b>({spreadChange > 0 ? '拡大' : spreadChange < 0 ? '縮小' : '不変'})</>}
-          </span>
-        )}
-      </div>
-      {evidence ? (
-        <p className="m-0 mt-1 text-[12px] font-semibold leading-5 text-[var(--color-text-primary)]">
-          {evidence.inputs.total}本のMAのうち、上向き<b className="font-mono" style={{ color: 'var(--price-up)' }}>{evidence.inputs.up}</b>本・下向き<b className="font-mono" style={{ color: 'var(--price-down)' }}>{evidence.inputs.down}</b>本
-          <span className="font-medium text-[var(--color-text-tertiary)]">(±{MA_FIELD_THRESHOLD_DEG}°超)</span>
-          {evidence.flat > 0 && <span className="font-medium text-[var(--color-text-secondary)]">・横ばい{evidence.flat}本</span>}
-          {evidence.contrary.length > 0 && evidence.majority && (
-            <>。<b>{evidence.contrary.map(({ label }) => label).join('・')}</b>は多数派({evidence.majority === 'up' ? '上向き' : '下向き'})と逆向き</>
-          )}
-        </p>
-      ) : (
-        <p className="m-0 mt-1 text-[11px] font-medium leading-5 text-[var(--color-text-tertiary)]">{statusNote}</p>
-      )}
-      <div className="mt-2 space-y-2">
-        {TECHNICAL_MA_GROUPS.map((group) => {
-          const avg = evidence ? evidence.inputs[group.avg] : null
-          const avgSignal = maSignalOf(avg)
-          const avgColor = maSignalColor(avgSignal)
-          return (
-            <div key={group.title} role="group" aria-label={`${group.title}(${group.caption})`} className="min-w-0">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[11px] font-bold text-[var(--color-text-secondary)]">
-                  {group.title} <span className="font-mono font-medium text-[var(--color-text-tertiary)]">{group.caption}</span>
-                </span>
-                <span className="whitespace-nowrap font-mono text-[11px] font-bold tabular-nums" style={{ color: avgColor }}>
-                  <span className="font-sans font-medium text-[var(--color-text-tertiary)]">平均 </span>
-                  <span aria-hidden="true">{maSignalGlyph(avgSignal)} </span>{fmtDeg(avg)}
-                </span>
-              </div>
-              <div role="list" className="mt-0.5 divide-y divide-[var(--color-border-soft)]">
-                {group.keys.map((key) => {
-                  const label = MA_ANGLE_KEYS.find((item) => item.key === key)?.label ?? key
-                  const deg = angles?.[key] ?? null
-                  const color = angleDirectionColor(deg)
-                  const word = angleDirectionLabel(deg)
-                  const isContrary = evidence?.contrary.some((item) => item.key === key) ?? false
-                  return (
-                    <div
-                      key={key}
-                      role="listitem"
-                      aria-label={`${label} ${word}${deg == null ? '' : ` ${fmtDeg(deg)}`}${isContrary ? ' 多数派と逆向き' : ''}`}
-                      className="grid min-w-0 grid-cols-[4.75rem_minmax(0,1fr)_3.75rem_3.5rem] items-center gap-x-2 py-1 sm:grid-cols-[5.5rem_1.75rem_minmax(0,1fr)_3.75rem_3.5rem]"
-                      title={`${label} ${word}${deg == null ? '' : ` ${fmtDeg(deg)}`}。矢印は角度どおりの傾きで、チャート上の見た目の傾きとは異なります`}
-                    >
-                      <span className="flex min-w-0 flex-wrap items-center gap-x-1 text-[12px] font-bold text-[var(--color-text-secondary)]">
-                        {label}
-                        {isContrary && <span className="border border-dashed border-[var(--color-text-secondary)] px-1 text-[11px] font-bold leading-4 text-[var(--color-text-primary)]">逆向き</span>}
-                      </span>
-                      <span className="flex justify-center max-sm:hidden"><MaTiltArrow deg={deg} color={color} /></span>
-                      <MaAngleBar deg={deg} color={color} />
-                      <strong className="whitespace-nowrap text-right font-mono text-[13px] font-bold tabular-nums" style={{ color }}>{deg == null ? '—' : fmtDeg(deg)}</strong>
-                      <span className="whitespace-nowrap text-[11px] font-semibold" style={{ color }}>{word}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <p className="m-0 mt-1.5 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]">
-        バーは±{MA_BAR_SCALE_DEG}°で頭打ち ・ 縦線=±{MA_STRONG_DEG}°(強)
-      </p>
-    </section>
-  )
-}
-
-const MA_BAR_SCALE_DEG = 45
-const MA_STRONG_DEG = 3
-
-/** 角度の正負・大きさを0中心で示す表示専用バー。±MA_STRONG_DEG(「強」の表示基準)に縦線を引く。強い側は濃く、弱い側は淡く塗る */
-function MaAngleBar({ deg, color }: { deg: number | null; color: string }) {
-  const numeric = deg != null && Number.isFinite(deg) ? deg : null
-  const valid = numeric != null
-  const ratio = numeric != null ? Math.min(1, Math.abs(numeric) / MA_BAR_SCALE_DEG) : 0
-  const strong = numeric != null && Math.abs(numeric) >= MA_STRONG_DEG
-  const tick = (MA_STRONG_DEG / MA_BAR_SCALE_DEG) * 50
-  return (
-    <span aria-hidden="true" className="relative block h-3 min-w-0 bg-[var(--color-surface-subtle)]">
-      {valid && ratio > 0 && (
-        <span
-          className="absolute inset-y-0"
-          style={{
-            width: `${Math.max(2, ratio * 50)}%`,
-            ...((numeric ?? 0) < 0 ? { right: '50%' } : { left: '50%' }),
-            background: color,
-            opacity: strong ? 1 : 0.45,
-          }}
-        />
-      )}
-      <span className="absolute inset-y-0 w-px bg-black/20" style={{ left: `${50 - tick}%` }} />
-      <span className="absolute inset-y-0 w-px bg-black/20" style={{ left: `${50 + tick}%` }} />
-      <span className="absolute inset-y-[-2px] left-1/2 w-px bg-[var(--color-border-strong)]" />
-    </span>
-  )
-}
-
-/** 既存の6軸の値だけから、最頻ステージと多数派から異なる軸を表示用に集約する */
-function summarizeStageAxes(stages: NonNullable<StageTimelineSnapshot['stages']>) {
-  const known = CHART_STAGE_AXES.flatMap(({ key, label }) => {
-    const value = stages[key]
-    return value == null ? [] : [{ label, value }]
-  })
-  if (known.length === 0) return null
-  const counts: Record<number, number> = {}
-  known.forEach(({ value }) => { counts[value] = (counts[value] ?? 0) + 1 })
-  const ranked = Object.entries(counts)
-    .map(([value, count]) => [Number(value), count] as const)
-    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-  const [topStage, topCount] = ranked[0]
-  const tied = ranked.length > 1 && ranked[1][1] === topCount
-  return {
-    known: known.length,
-    ranked,
-    topStage,
-    topCount,
-    tied,
-    exceptions: tied ? [] : known.filter(({ value }) => value !== topStage),
-  }
-}
-
-function TechnicalStageMap({
-  stage,
-  stageCode,
-  stageMessage,
-  className = '',
-}: {
-  stage: StageTimelineSnapshot
-  stageCode: string
-  stageMessage: string
-  className?: string
-}) {
-  const summary = stage.stages ? summarizeStageAxes(stage.stages) : null
-  const missingCount = summary ? CHART_STAGE_AXES.length - summary.known : 0
-  return (
-    <section className={`min-w-0 border-t border-[var(--color-border-soft)] pt-3 ${className}`} aria-labelledby="technical-stage-title" data-technical-stage-map>
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
-      <h3 id="technical-stage-title" className="m-0 text-[12px] font-bold text-[var(--color-text-primary)]">
-        6ステージ <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">日・週・月のMAの並び(短期→長期)</span>
-      </h3>
-      {summary ? (
-        <p className="m-0 text-[12px] font-semibold leading-5 text-[var(--color-text-primary)]">
-          {summary.tied ? (
-            <>{summary.ranked.map(([value, count]) => `S${value} ${STAGE_LABELS[value]} ${count}軸`).join('・')}に分かれています</>
-          ) : summary.exceptions.length === 0 ? (
-            <>{summary.known}軸すべてが S{summary.topStage} {STAGE_LABELS[summary.topStage]}</>
-          ) : (
-            <>
-              {summary.known}軸中{summary.topCount}軸が S{summary.topStage} {STAGE_LABELS[summary.topStage]}
-              <span className="font-medium text-[var(--color-text-secondary)]">
-                ・多数派と異なる軸 {summary.exceptions.map(({ label, value }) => `${label} S${value} ${STAGE_LABELS[value]}`).join('・')}
-              </span>
-            </>
-          )}
-          {missingCount > 0 && <span className="font-medium text-[var(--color-text-tertiary)]">・未取得{missingCount}軸</span>}
-        </p>
-      ) : (
-        <p className="m-0 text-[11px] font-medium leading-5 text-[var(--color-text-tertiary)]">{stageMessage}</p>
-      )}
-      </div>
-      <div className="mt-2 grid grid-cols-3 gap-1.5 sm:gap-2" aria-label={`6ステージ ${stageCode}`}>
-        {[0, 2, 4].map((start) => (
-          <div key={start} role="group" aria-label={STAGE_TIMEFRAME_LABELS[start / 2]} className="min-w-0">
-            <span className="mb-1 block text-[11px] font-bold text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</span>
-            <div role="list" className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-              {CHART_STAGE_AXES.slice(start, start + 2).map(({ key, label }) => {
-                const value = stage.stages?.[key] ?? null
-                const isException = value != null && summary != null && summary.exceptions.some((item) => item.label === label)
-                return (
-                  <div
-                    key={key}
-                    role="listitem"
-                    aria-label={value ? `${label} S${value} ${STAGE_LABELS[value]}${isException ? ' 多数派と異なる軸' : ''}` : `${label} 未取得`}
-                    data-stage-axis={label}
-                    className="flex min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 border px-1.5 py-1 text-center leading-tight"
-                    style={{
-                      background: value ? STAGE_BG_COLORS[value] : 'var(--color-surface-subtle)',
-                      borderColor: value ? STAGE_BORDER_COLORS[value] : 'var(--color-border-default)',
-                      borderWidth: isException ? 2 : 1,
-                      borderStyle: isException ? 'dashed' : 'solid',
-                    }}
-                    title={value ? `${label} S${value}: ${STAGE_LABELS[value]}` : stageMessage}
-                  >
-                    <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
-                    <strong className="font-mono text-[14px] leading-tight text-[var(--color-text-primary)]">{value ? `S${value}` : '—'}</strong>
-                    {isException && <b className="text-[11px] font-bold text-[var(--color-text-primary)]">異なる軸</b>}
-                    {value && <span className="break-words text-[11px] font-semibold leading-tight text-[var(--color-text-secondary)]">{STAGE_LABELS[value]}</span>}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-      {stage.status !== 'available' && summary && <div className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">{stageMessage}</div>}
-    </section>
-  )
-}
-
-const TECHNICAL_SCORE_ROWS = [
-  { kind: 'pms', code: 'PMS', label: '総合の強さ', neutral: false },
-  { kind: 'pfs', code: 'PFS', label: '足元の力の向き', neutral: false },
-  { kind: 'pes', code: 'PES', label: '値動きの熱量', neutral: true },
-] as const
-
-function TechnicalScorePanel({ momentum, className = '' }: { momentum: TechnicalMomentumSnapshot; className?: string }) {
-  const values = { pms: momentum.pms, pfs: momentum.pfs, pes: momentum.pes }
-  const statusDetail = momentum.status === 'loading' ? '読み込み中' : momentum.status === 'error' ? '取得できません' : '未算出'
-  const rowGrid = 'grid-cols-[6.5rem_minmax(0,1fr)]'
-  return (
-    <section className={`min-w-0 ${className}`} aria-labelledby="technical-score-title" data-technical-scores>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 id="technical-score-title" className="m-0 text-[12px] font-bold text-[var(--color-text-primary)]">3スコア</h3>
-        <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">市場全体との差(日足)</span>
-      </div>
-      <div className="mt-2 space-y-1">
-        <div className={`grid gap-x-2 ${rowGrid}`} aria-hidden="true">
-          <span />
-          <span className="grid grid-cols-[auto_minmax(0,1fr)_auto] pr-[3.25rem] font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]" title="バーは-2.5〜+2.5で頭打ちです">
-            <span className="whitespace-nowrap">-2.5</span>
-            <span className="whitespace-nowrap text-center">0=市場平均</span>
-            <span className="whitespace-nowrap">+2.5</span>
-          </span>
-        </div>
-        {TECHNICAL_SCORE_ROWS.map(({ kind, code, label, neutral }) => {
-          const value = values[kind]
-          const marks = PHYSICAL_BOUNDARIES.find((item) => item.code === code)?.marks ?? []
-          return (
-            <div
-              key={code}
-              className={`grid min-w-0 items-center gap-x-2 gap-y-0.5 ${rowGrid}`}
-              data-score={code}
-              title={momentum.status === 'available' ? `${label} ${code} ・ 判定境界まで ${nearestBoundaryText(value, marks)}` : undefined}
-            >
-              <span className="min-w-0 leading-tight">
-                <span className="block text-[12px] font-bold text-[var(--color-text-primary)]">{label}</span>
-                <span className="font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">{code}</span>
-              </span>
-              <ScoreThresholdBar label={`${label} ${code}`} value={value} text={formatDelta(value)} neutral={neutral} marks={marks} />
-              <span className="col-start-2 text-[11px] font-medium leading-4 text-[var(--color-text-secondary)]">
-                {momentum.status === 'available' ? describePhysicalScore(kind, value) : statusDetail}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-      <p className="m-0 mt-1.5 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]">
-        縦線=判定の境界({PHYSICAL_BOUNDARIES.map(({ code, marks }) => `${code} ${marks.map(formatDelta).join('/')}`).join(' ・ ')})。熱量(PES)は方向ではなく活動量です。
-      </p>
-      {momentum.status !== 'available' ? (
-        <div className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-          {momentum.status === 'loading' ? 'PMS/PFS/PESを読み込み中' : momentum.message ?? 'PMS/PFS/PESは表示できません'}
-        </div>
-      ) : (momentum.message || (momentum.isScoreFresh === false && momentum.scoreDate)) && (
-        <div className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-          {momentum.message ?? `スコア算出日 ${momentum.scoreDate}`}
-        </div>
-      )}
-    </section>
-  )
-}
-
-/**
- * 3スコア共通の0中心バー(±2.5で頭打ち)。判定の境界(marks)に縦線を引き、境界を越えた側は濃く塗る。
- * 方向を持たない量(neutral=PES)は上昇/下落色ではなくスレートで描く。表示専用。
- */
-function ScoreThresholdBar({
-  value,
-  text,
-  label,
-  neutral = false,
-  marks = [],
-}: {
-  value: number | null | undefined
-  text: string
-  label: string
-  neutral?: boolean
-  marks?: number[]
-}) {
-  const numeric = value != null && Number.isFinite(value) ? value : null
-  const valid = numeric != null
-  const ratio = numeric != null ? Math.min(1, Math.abs(numeric) / 2.5) : 0
-  const negative = numeric != null && numeric < 0
-  const color = neutral ? 'var(--color-price-flat)' : negative ? 'var(--price-down)' : 'var(--price-up)'
-  const crossed = numeric != null && marks.some((mark) => (mark > 0 ? numeric >= mark : numeric <= mark))
-  const at = (point: number) => `${((Math.max(-2.5, Math.min(2.5, point)) + 2.5) / 5) * 100}%`
-  return (
-    <span className="grid min-w-0 grid-cols-[minmax(28px,1fr)_3.25rem] items-center gap-2" title={`${label} ${text}`}>
-      <span
-        className="relative block h-3 bg-[var(--color-surface-subtle)]"
-        role="img"
-        aria-label={`${label} ${text}(-2.5〜+2.5の目盛り${marks.length > 0 ? `、判定境界 ${marks.map(formatDelta).join('と')}` : ''})`}
-      >
-        {valid && ratio > 0 && (
-          <span
-            className="absolute inset-y-0"
-            style={{
-              width: `${Math.max(2, ratio * 50)}%`,
-              ...(negative ? { right: '50%' } : { left: '50%' }),
-              background: color,
-              opacity: crossed ? 1 : 0.5,
-            }}
-          />
-        )}
-        {marks.map((mark) => (
-          <span key={mark} className="absolute inset-y-[-2px] w-px bg-[var(--color-text-secondary)]/70" style={{ left: at(mark) }} />
-        ))}
-        <span className="absolute inset-y-[-2px] left-1/2 w-px bg-[var(--color-border-strong)]" />
-      </span>
-      <strong
-        className="text-right font-mono text-[13px] font-bold tabular-nums"
-        style={{ color: !valid ? 'var(--color-text-tertiary)' : neutral ? 'var(--color-text-primary)' : color }}
-      >{text}</strong>
-    </span>
   )
 }
 
@@ -1951,21 +1448,13 @@ function technicalMomentumSnapshotFromResponse(payload: PhysicalMomentumResponse
   const latest = payload.latest
   if (!latest) {
     return {
+      ...EMPTY_MOMENTUM_SNAPSHOT,
       status: 'missing',
-      scoreDate: null,
-      maDate: null,
-      pms: null,
-      pfs: null,
-      pes: null,
       isScoreFresh: payload.isScoreFresh ?? false,
-      scoreSource: payload.scoreSource ?? null,
-      maStructure: null,
-      maDescription: null,
       message: 'PMS/PFS/PESは未計算です',
     }
   }
-  const previous = [...(payload.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
-  const field = buildMaFieldInsight(latest, previous)
+  const field = buildMaFieldInsight(latest, previousMomentumRow(payload))
   const { scoreDate, scoreRow } = selectPhysicalMomentumScoreRow({
     latest,
     history: payload.history,
@@ -1980,7 +1469,6 @@ function technicalMomentumSnapshotFromResponse(payload: PhysicalMomentumResponse
     pfs: scoreRow?.physicalForceScore ?? null,
     pes: scoreRow?.physicalEnergyScore ?? null,
     isScoreFresh: payload.isScoreFresh ?? (scoreDate === latest.date),
-    scoreSource: payload.scoreSource ?? null,
     maStructure: field.label,
     maDescription: field.description,
     maColor: field.color,
@@ -2015,19 +1503,7 @@ function PhysicalMomentumSection({
     setPlanLoading(true)
     setPlanError('')
     setMobileDetailsOpen(false)
-    onSnapshotChange?.({
-      status: 'loading',
-      scoreDate: null,
-      maDate: null,
-      pms: null,
-      pfs: null,
-      pes: null,
-      isScoreFresh: null,
-      scoreSource: null,
-      maStructure: null,
-      maDescription: null,
-      message: null,
-    })
+    onSnapshotChange?.({ ...EMPTY_MOMENTUM_SNAPSHOT, status: 'loading', message: null })
     const planParams = analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''
     Promise.allSettled([
       fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260${analysisDate ? `&date=${encodeURIComponent(analysisDate)}` : ''}`, { cache: 'no-store' })
@@ -2044,19 +1520,7 @@ function PhysicalMomentumSection({
         } else {
           const message = (momentumResult.reason as Error).message
           setError(message)
-          onSnapshotChange?.({
-            status: 'error',
-            scoreDate: null,
-            maDate: null,
-            pms: null,
-            pfs: null,
-            pes: null,
-            isScoreFresh: null,
-            scoreSource: null,
-            maStructure: null,
-            maDescription: null,
-            message,
-          })
+          onSnapshotChange?.({ ...EMPTY_MOMENTUM_SNAPSHOT, status: 'error', message })
         }
         if (planResult.status === 'fulfilled') {
           setPlan(planResult.value)
@@ -2091,10 +1555,7 @@ function PhysicalMomentumSection({
     padding: '10px 12px',
     marginBottom: '10px',
   }
-  const previous = latest
-    ? [...(data?.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
-    : null
-  const fieldInsight = latest ? buildMaFieldInsight(latest, previous) : null
+  const fieldInsight = latest ? buildMaFieldInsight(latest, previousMomentumRow(data)) : null
   const scoreRow = latest && data
     ? selectPhysicalMomentumScoreRow({
       latest,
@@ -2197,14 +1658,6 @@ function PhysicalMomentumSection({
   )
 }
 
-function trendText(trend: PhysicalMomentumResponse['trend']): string {
-  return trend === 'rising' ? '上昇中' : trend === 'falling' ? '低下中' : trend === 'flat' ? '横ばい' : '推移未判定'
-}
-
-function trendArrow(trend: PhysicalMomentumResponse['trend']): string {
-  return trend === 'rising' ? '↗' : trend === 'falling' ? '↘' : trend === 'flat' ? '→' : '·'
-}
-
 /** 日足の結論 → 根拠 → 変化点 を3行で示す。数値はAPI値と既存の判定関数の出力のみ。 */
 function PhysicalStateSummary({
   scoreRow,
@@ -2219,7 +1672,7 @@ function PhysicalStateSummary({
   rank: number | null
   total: number
   trend: PhysicalMomentumResponse['trend']
-  field: PhysicalMaFieldInsight | null
+  field: MaFieldInsight | null
 }) {
   const view = buildPhysicalMomentumView({
     pms: scoreRow?.physicalMomentumScore,
@@ -2286,15 +1739,6 @@ function PhysicalStateSummary({
     </section>
   )
 }
-
-function scoreTone(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value === 0) return 'var(--text-primary)'
-  return value > 0 ? 'var(--price-up)' : 'var(--price-down)'
-}
-
-// buildPhysicalMomentumView の方向判定と同じ閾値(PFS ±0.35、PMS ±1)
-const PHYSICAL_FORCE_THRESHOLD = 0.35
-const PHYSICAL_STRONG_PMS = 1
 
 function PhysicalTimeframeConclusionPanel({ views }: { views: PhysicalMomentumTimeframeView[] }) {
   if (views.length === 0) return null
@@ -2629,23 +2073,6 @@ function PhysicalTrendChip({ label, value, tone, note }: { label: string; value:
   )
 }
 
-// buildPhysicalMomentumView が使う判定の境界(PMS ±1、PFS ±0.35、PES +1 / -0.35)
-const PHYSICAL_BOUNDARIES: Array<{ code: 'PMS' | 'PFS' | 'PES'; label: string; marks: number[] }> = [
-  { code: 'PMS', label: '強さ', marks: [-PHYSICAL_STRONG_PMS, PHYSICAL_STRONG_PMS] },
-  { code: 'PFS', label: '方向', marks: [-PHYSICAL_FORCE_THRESHOLD, PHYSICAL_FORCE_THRESHOLD] },
-  { code: 'PES', label: '熱量', marks: [-0.35, 1] },
-]
-
-function nearestBoundaryText(value: number | null, marks: number[]): string {
-  if (value == null || !Number.isFinite(value)) return '未算出'
-  const below = marks.filter((mark) => mark <= value).sort((a, b) => b - a)[0]
-  const above = marks.filter((mark) => mark > value).sort((a, b) => a - b)[0]
-  const parts: string[] = []
-  if (above != null) parts.push(`${formatDelta(above)}まで +${(above - value).toFixed(2)}`)
-  if (below != null) parts.push(`${formatDelta(below)}まで -${(value - below).toFixed(2)}`)
-  return parts.join(' / ')
-}
-
 function PhysicalTradePlanCards({
   loading,
   error,
@@ -2841,107 +2268,6 @@ function PhysicalPlanLevelChip({
   )
 }
 
-interface PhysicalMaFieldInsight {
-  label: string
-  description: string
-  color: string
-  spreadDeg: number | null
-  spreadChangeDeg: number | null
-}
-
-function buildMaFieldInsight(latest: PhysicalMomentumApiRow, previous: PhysicalMomentumApiRow | null): PhysicalMaFieldInsight {
-  const latestAngles = [latest.ma5Angle, latest.ma25Angle, latest.ma75Angle, latest.ma200Angle]
-    .map(angleDeg)
-    .filter((value): value is number => value != null)
-  const previousAngles = previous
-    ? [previous.ma5Angle, previous.ma25Angle, previous.ma75Angle, previous.ma200Angle]
-      .map(angleDeg)
-      .filter((value): value is number => value != null)
-    : []
-
-  if (latestAngles.length < 3) {
-    return {
-      label: 'MA力場未判定',
-      description: 'MA角度データが不足しています。',
-      color: 'var(--text-muted)',
-      spreadDeg: null,
-      spreadChangeDeg: null,
-    }
-  }
-
-  const ma5 = angleDeg(latest.ma5Angle)
-  const ma25 = angleDeg(latest.ma25Angle)
-  const ma75 = angleDeg(latest.ma75Angle)
-  const ma200 = angleDeg(latest.ma200Angle)
-  const shortAvg = averageFinite([ma5, ma25])
-  const longAvg = averageFinite([ma75, ma200])
-  const positive = latestAngles.filter((value) => value > 0.2).length
-  const negative = latestAngles.filter((value) => value < -0.2).length
-  const spreadDeg = angularSpread(latestAngles)
-  const previousSpread = previousAngles.length >= 3 ? angularSpread(previousAngles) : null
-  const spreadChangeDeg = spreadDeg != null && previousSpread != null ? spreadDeg - previousSpread : null
-
-  let label = '力場は中立'
-  let description = '短期線と長期線の向きがまだ揃っていません。価格の力がどちらへ伝わるか確認する局面です。'
-  let color = 'var(--text-secondary)'
-
-  if (shortAvg != null && longAvg != null && shortAvg > 0.2 && longAvg > 0.2 && positive >= 3) {
-    label = '上方向へ力が拡散'
-    description = '短期線だけでなく長期線側にも上向きの力が伝わっています。上位足との整合を確認したい状態です。'
-    color = 'var(--price-up)'
-  } else if (shortAvg != null && longAvg != null && shortAvg < -0.2 && longAvg < -0.2 && negative >= 3) {
-    label = '下方向へ力が拡散'
-    description = '短期線から長期線側まで下向きの力が広がっています。反発よりも下落継続リスクを優先確認します。'
-    color = 'var(--price-down)'
-  } else if (shortAvg != null && longAvg != null && shortAvg > 0.2 && longAvg < -0.2) {
-    label = '短期上向き・長期収縮'
-    description = '短期には上向きの力がありますが、長期線はまだ下向きです。力が長期側へ拡散するかが焦点です。'
-    color = 'var(--price-up)'
-  } else if (shortAvg != null && longAvg != null && shortAvg < -0.2 && longAvg > 0.2) {
-    label = '短期調整・長期残存'
-    description = '短期線は下向きですが、長期線には上向きの力が残っています。一時調整か崩れ始めかを確認します。'
-    color = 'var(--price-down)'
-  } else if (spreadChangeDeg != null && spreadChangeDeg >= 5) {
-    label = '力場が拡散中'
-    description = 'MA角度の幅が広がっています。力が一方向へ揃うか、ねじれとして分散するかを確認します。'
-    color = positive >= negative ? 'var(--price-up)' : 'var(--price-down)'
-  } else if (spreadChangeDeg != null && spreadChangeDeg <= -5) {
-    label = '力場が収縮中'
-    description = 'MA角度の幅が狭まっています。方向感はいったん圧縮され、次の拡散方向を待つ局面です。'
-    color = 'var(--text-secondary)'
-  } else if (positive > 0 && negative > 0) {
-    label = '力場がねじれ'
-    description = '短期・中期・長期の向きが混在しています。単純な上昇/下落ではなく、時間軸ごとの力の差を見ます。'
-    color = 'var(--text-secondary)'
-  }
-
-  return { label, description, color, spreadDeg, spreadChangeDeg }
-}
-
-interface MaAngleSet {
-  ma5: number | null
-  ma25: number | null
-  ma75: number | null
-  ma200: number | null
-}
-
-const MA_ANGLE_KEYS: Array<{ key: keyof MaAngleSet; label: string }> = [
-  { key: 'ma5', label: '5MA' },
-  { key: 'ma25', label: '25MA' },
-  { key: 'ma75', label: '75MA' },
-  { key: 'ma200', label: '200MA' },
-]
-
-/** APIのラジアン角を度に直すだけの表示変換 */
-function maAngleSet(row: Pick<PhysicalMomentumApiRow, 'ma5Angle' | 'ma25Angle' | 'ma75Angle' | 'ma200Angle'>): MaAngleSet {
-  return {
-    ma5: angleDeg(row.ma5Angle),
-    ma25: angleDeg(row.ma25Angle),
-    ma75: angleDeg(row.ma75Angle),
-    ma200: angleDeg(row.ma200Angle),
-  }
-}
-
 function MaAngleStrip({ angles, compact = false }: { angles: MaAngleSet | null; compact?: boolean }) {
   return (
     <div className="grid grid-cols-4 gap-0.5" role="list" aria-label="移動平均線の傾き(短期→長期)">
@@ -2969,139 +2295,6 @@ function MaAngleStrip({ angles, compact = false }: { angles: MaAngleSet | null; 
   )
 }
 
-interface MaFieldInputs {
-  shortAvg: number | null
-  longAvg: number | null
-  up: number
-  down: number
-  total: number
-}
-
-// buildMaFieldInsight と同じ入力(短期=5・25MA平均、長期=75・200MA平均、±0.2°)を表示用に取り出す
-function maFieldInputs(angles: MaAngleSet): MaFieldInputs {
-  const all = [angles.ma5, angles.ma25, angles.ma75, angles.ma200].filter((value): value is number => value != null)
-  return {
-    shortAvg: averageFinite([angles.ma5, angles.ma25]),
-    longAvg: averageFinite([angles.ma75, angles.ma200]),
-    up: all.filter((value) => value > MA_FIELD_THRESHOLD_DEG).length,
-    down: all.filter((value) => value < -MA_FIELD_THRESHOLD_DEG).length,
-    total: all.length,
-  }
-}
-
-const MA_FIELD_THRESHOLD_DEG = 0.2
-const MA_FIELD_SPREAD_SHIFT_DEG = 5
-
-function fmtDeg(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}°`
-}
-
-/** MA力場ラベルが変わる境界を、現在の入力値と並べて文章化する(判定ロジックの閾値をそのまま使う) */
-function maFieldChangeConditions(label: string, inputs: MaFieldInputs): string[] {
-  const short = `短期平均(5・25MA)${fmtDeg(inputs.shortAvg)}`
-  const long = `長期平均(75・200MA)${fmtDeg(inputs.longAvg)}`
-  const t = MA_FIELD_THRESHOLD_DEG
-  if (label === '下方向へ力が拡散') {
-    return [
-      `${short}が-${t}°以上になると外れる(+${t}°超なら「短期上向き・長期収縮」)`,
-      `${long}が-${t}°以上になると外れる`,
-      `下向きのMA ${inputs.down}/${inputs.total}本(3本未満で外れる)`,
-    ]
-  }
-  if (label === '上方向へ力が拡散') {
-    return [
-      `${short}が+${t}°以下になると外れる(-${t}°未満なら「短期調整・長期残存」)`,
-      `${long}が+${t}°以下になると外れる`,
-      `上向きのMA ${inputs.up}/${inputs.total}本(3本未満で外れる)`,
-    ]
-  }
-  if (label === '短期上向き・長期収縮') {
-    return [
-      `${long}が-${t}°以上になると外れる(+${t}°超・上向き3本以上なら「上方向へ力が拡散」)`,
-      `${short}が+${t}°以下になると外れる`,
-    ]
-  }
-  if (label === '短期調整・長期残存') {
-    return [
-      `${long}が+${t}°以下になると外れる(-${t}°未満・下向き3本以上なら「下方向へ力が拡散」)`,
-      `${short}が-${t}°以上になると外れる`,
-    ]
-  }
-  if (label === 'MA力場未判定') return ['MA角度が3本以上そろうと判定されます']
-  return [
-    `短期・長期の平均がともに±${t}°を超えて同じ向きにそろい、同じ向きが3本以上で「上/下方向へ力が拡散」`,
-    `角度幅の前回比が±${MA_FIELD_SPREAD_SHIFT_DEG}°を超えると「拡散中/収縮中」`,
-  ]
-}
-
-function angleDeg(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null
-  return (value * 180) / Math.PI
-}
-
-function averageFinite(values: Array<number | null>): number | null {
-  const finite = values.filter((value): value is number => value != null && Number.isFinite(value))
-  if (finite.length === 0) return null
-  return finite.reduce((sum, value) => sum + value, 0) / finite.length
-}
-
-function angularSpread(values: number[]): number | null {
-  if (values.length === 0) return null
-  return Math.max(...values) - Math.min(...values)
-}
-
-function angleDirectionArrow(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  if (value >= 1.2) return '↗'
-  if (value <= -1.2) return '↘'
-  return '→'
-}
-
-function angleDirectionLabel(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return '未判定'
-  if (value >= 3) return '上向き強'
-  if (value >= 1.2) return '上向き'
-  if (value <= -3) return '下向き強'
-  if (value <= -1.2) return '下向き'
-  return '横ばい'
-}
-
-function angleDirectionColor(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return 'var(--text-muted)'
-  if (value >= 1.2) return 'var(--price-up)'
-  if (value <= -1.2) return 'var(--price-down)'
-  return 'var(--text-secondary)'
-}
-
-function physicalToneColor(tone: PhysicalMomentumTone): string {
-  if (tone === 'up') return 'var(--price-up)'
-  if (tone === 'down') return 'var(--price-down)'
-  if (tone === 'warning') return '#b45309'
-  return 'var(--text-secondary)'
-}
-
-function fmtRate(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${(value * 100).toFixed(0)}%`
-}
-
-function fmtLift(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value.toFixed(2)}x`
-}
-
-function fmtPctRaw(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
-}
-
-function directionLabelJa(direction: 'up' | 'down' | 'wait'): string {
-  if (direction === 'up') return '上昇'
-  if (direction === 'down') return '下落'
-  return '見送り'
-}
-
 function tradePlanToneStyle(tone: PhysicalPlanHorizon['suggestion']['tone']) {
   if (tone === 'positive') {
     return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.34)', background: 'rgba(22, 163, 74, 0.06)' }
@@ -3113,32 +2306,6 @@ function tradePlanToneStyle(tone: PhysicalPlanHorizon['suggestion']['tone']) {
     return { color: '#b45309', border: 'rgba(245, 158, 11, 0.36)', background: 'rgba(245, 158, 11, 0.08)' }
   }
   return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
-}
-
-function fmtScore(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return value.toFixed(2)
-}
-
-function formatDelta(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
-}
-
-function trendLabelFromDelta(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '判定保留'
-  if (value >= 0.35) return '改善'
-  if (value <= -0.35) return '悪化'
-  return '横ばい'
-}
-
-function scoreLevelLabel(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return 'PMS未判定'
-  if (value >= 1) return '市場より強い'
-  if (value >= 0.35) return 'やや強い'
-  if (value <= -1) return '市場より弱い'
-  if (value <= -0.35) return 'やや弱い'
-  return '市場平均付近'
 }
 
 function fmtDecimal(value: number | null | undefined, digits = 2): string {
@@ -3154,46 +2321,9 @@ function fmtCompact(value: number | null | undefined): string {
   }).format(value)
 }
 
-type StageKey =
-  | 'daily_a_stage'
-  | 'daily_b_stage'
-  | 'weekly_a_stage'
-  | 'weekly_b_stage'
-  | 'monthly_a_stage'
-  | 'monthly_b_stage'
-
-interface SummaryStageEntry {
-  date: string
-  close: number | null
-  ma_5: number | null
-  ma_25: number | null
-  ma_75: number | null
-  ma_300: number | null
-  daily_a_stage: number | null
-  daily_b_stage: number | null
-  weekly_a_stage: number | null
-  weekly_b_stage: number | null
-  monthly_a_stage: number | null
-  monthly_b_stage: number | null
-}
-
-const SUMMARY_STAGE_KEYS: { key: StageKey; label: string }[] = [
-  { key: 'daily_a_stage', label: '日A' },
-  { key: 'daily_b_stage', label: '日B' },
-  { key: 'weekly_a_stage', label: '週A' },
-  { key: 'weekly_b_stage', label: '週B' },
-  { key: 'monthly_a_stage', label: '月A' },
-  { key: 'monthly_b_stage', label: '月B' },
-]
-
 function fmtPrice(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return `${Math.round(value).toLocaleString('ja-JP')}円`
-}
-
-function fmtPct(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
 const physicalSparklineHeaderStyle: CSSProperties = {
@@ -3893,7 +3023,7 @@ function BasicInfoCard({
   /** 二次レイヤー「市場データ・需給」に続けて置く行(変化率・信用取引) */
   marketSnapshot?: ReactNode
 }) {
-  const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
+  const [latestStage, setLatestStage] = useState<StageEntry | null>(null)
   const [ml, setMl] = useState<BasicMlResponse | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [showSignalDetails, setShowSignalDetails] = useState(false)
@@ -3990,10 +3120,7 @@ function BasicInfoCard({
   const physics = buildBasicPhysicsSummary(ml, summaryLoading)
 
   const latestPhysical = physical?.latest ?? null
-  const previousPhysical = latestPhysical
-    ? [...(physical?.history ?? [])].reverse().find((row) => row.date < latestPhysical.date) ?? null
-    : null
-  const field = latestPhysical ? buildMaFieldInsight(latestPhysical, previousPhysical) : null
+  const field = latestPhysical ? buildMaFieldInsight(latestPhysical, previousMomentumRow(physical)) : null
   const angles = latestPhysical ? maAngleSet(latestPhysical) : null
   const fieldInputs = angles ? maFieldInputs(angles) : null
   const changeConditions = field && fieldInputs ? maFieldChangeConditions(field.label, fieldInputs) : []
@@ -4309,14 +3436,14 @@ const MA_SHEET_COLUMNS: Array<{ heading: string; angleKey: keyof MaAngleSet; ang
 ]
 
 /** 6軸Stageを日足・週足・月足の順に1本の連続リボンで並べる(区画の間は1px、時間軸の間だけ少し空ける) */
-function StageRibbon({ stage }: { stage: SummaryStageEntry }) {
+function StageRibbon({ stage }: { stage: StageEntry }) {
   return (
     <div className="grid max-w-[720px] grid-cols-3 gap-1" role="group" aria-label="6ステージ(日足・週足・月足 × A・B)" data-overview-stage-ribbon>
       {[0, 2, 4].map((start) => (
         <div key={start} role="group" aria-label={STAGE_TIMEFRAME_LABELS[start / 2]} className="min-w-0">
           <span className="mb-1 block text-[11px] font-bold text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</span>
           <div className="grid grid-cols-2 gap-px">
-            {SUMMARY_STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
+            {STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
               <SixStageCell key={key} label={label} stage={stage[key]} />
             ))}
           </div>
@@ -4349,23 +3476,8 @@ function SixStageCell({ label, stage }: { label: string; stage: number | null })
   )
 }
 
-function normalizeStage(stage: number | null | undefined): number | null {
-  if (stage == null || !Number.isFinite(stage)) return null
-  const rounded = Math.round(stage)
-  return rounded >= 1 && rounded <= 6 ? rounded : null
-}
-
-function shortStageLabel(stage: number): string {
-  if (stage === 1) return '安定上昇'
-  if (stage === 2) return '調整'
-  if (stage === 3) return '弱気移行'
-  if (stage === 4) return '安定下降'
-  if (stage === 5) return '反発兆し'
-  return '強気初期'
-}
-
 function buildBasicDecisionSummary(
-  stage: SummaryStageEntry | null,
+  stage: StageEntry | null,
   physical: PhysicalMomentumResponse | null,
   ml: BasicMlResponse | null,
   quote: StockQuote | null,
@@ -4420,85 +3532,13 @@ function buildBasicPhysicsSummary(ml: BasicMlResponse | null, loading: boolean) 
   }
 }
 
-type EvidenceDirection = 'up' | 'down' | 'flat' | null
-
-interface ShortTermEvidenceItem {
-  label: string
-  /** 結論文で使う短い名前 */
-  name: string
-  value: string
-  direction: EvidenceDirection
-}
-
-interface ShortTermEvidenceSide {
-  key: 'short' | 'medium'
-  label: string
-  items: ShortTermEvidenceItem[]
-  up: number
-  down: number
-  direction: EvidenceDirection
-}
-
-// lib/short-term-check と同じ閾値・区分を表示用に参照する(判定そのものは buildShortTermCheck の結果を使う)
-const SHORT_TERM_PFS_THRESHOLD = 0.8
-const SHORT_TERM_CHANGE_THRESHOLD = 2
-const SHORT_TERM_PMS_LEVEL = 0.35
-const SHORT_TERM_STRONG_PCT = 40
-const SHORT_TERM_LEAN_PCT = 14
+// lib/ml/physics-analysis の物理分類を短期チェックの根拠の向きに読み替える(JP だけが持つ入力)
 const PHYSICS_UP_STATUSES = ['上昇加速', '上昇継続', '押し目形成', '反発準備']
 const PHYSICS_DOWN_STATUSES = ['過熱注意', '失速警戒', '下落加速']
 
-function stageSide(stage: number | null | undefined): EvidenceDirection {
-  const value = normalizeStage(stage)
-  if (value == null) return null
-  if (value === 1 || value === 6) return 'up'
-  if (value === 3 || value === 4) return 'down'
-  return 'flat'
-}
-
-function tallyDirection(directions: EvidenceDirection[]): EvidenceDirection {
-  const known = directions.filter((direction): direction is Exclude<EvidenceDirection, null> => direction != null)
-  if (known.length === 0) return null
-  const up = known.filter((direction) => direction === 'up').length
-  const down = known.filter((direction) => direction === 'down').length
-  return up > down ? 'up' : down > up ? 'down' : 'flat'
-}
-
-function thresholdDirection(value: number | null | undefined, threshold: number): EvidenceDirection {
-  if (value == null || !Number.isFinite(value)) return null
-  return value >= threshold ? 'up' : value <= -threshold ? 'down' : 'flat'
-}
-
-function stagePairText(a: number | null | undefined, b: number | null | undefined): string {
-  return `S${normalizeStage(a) ?? '-'}・S${normalizeStage(b) ?? '-'}`
-}
-
-function directionGlyph(direction: EvidenceDirection): string {
-  return direction === 'up' ? '▲' : direction === 'down' ? '▼' : direction === 'flat' ? '–' : '·'
-}
-
-function directionWord(direction: EvidenceDirection): string {
-  return direction === 'up' ? '上向き' : direction === 'down' ? '下向き' : direction === 'flat' ? '中立' : '未取得'
-}
-
-function directionColor(direction: EvidenceDirection): string {
-  return direction === 'up' ? 'var(--price-up)' : direction === 'down' ? 'var(--price-down)' : 'var(--color-text-tertiary)'
-}
-
-function upperStageText(stage: SummaryStageEntry): string {
-  const upper = [stage.weekly_a_stage, stage.weekly_b_stage, stage.monthly_a_stage, stage.monthly_b_stage].map(stageSide)
-  const positive = upper.filter((side) => side === 'up').length
-  const negative = upper.filter((side) => side === 'down').length
-  if (positive >= 3) return '強気整合'
-  if (negative >= 3) return '弱気整合'
-  if (positive > negative) return 'やや強い'
-  if (negative > positive) return 'やや弱い'
-  return '混在'
-}
-
 /** 短期チェックの入力を短期/中期に分け、向きと一致・不一致、判定が変わる境界を並べる */
 function buildShortTermEvidence(
-  stage: SummaryStageEntry | null,
+  stage: StageEntry | null,
   physical: PhysicalMomentumResponse | null,
   ml: BasicMlResponse | null,
   quote: StockQuote | null,
@@ -4599,27 +3639,6 @@ function buildShortTermEvidence(
     : `${shortTermSideReading('短期', shortSide)}。${shortTermSideReading('中期', mediumSide)}。`
 
   return { sides: [shortSide, mediumSide], agreement, reading, conditions: conditions.slice(0, 3) }
-}
-
-/** 根拠の向きを「何が支え、何が逆向き・中立か」の一文にまとめる(各項目の向き判定をそのまま使う) */
-function shortTermSideReading(title: string, side: ShortTermEvidenceSide): string {
-  const names = (direction: EvidenceDirection) => side.items.filter((item) => item.direction === direction).map((item) => item.name)
-  const up = names('up')
-  const down = names('down')
-  const flat = names('flat')
-  if (side.direction == null) return `${title}は判定材料なし`
-  if (side.direction === 'flat') {
-    return up.length === 0 && down.length === 0
-      ? `${title}は向きを示す材料がなく中立`
-      : `${title}は上向き(${up.join('・')})と下向き(${down.join('・')})が拮抗`
-  }
-  const lead = side.direction === 'up' ? up : down
-  const opposite = side.direction === 'up' ? down : up
-  const others = opposite.length + flat.length
-  let text = `${title}は${lead.join('・')}${lead.length === 1 && others > 0 ? 'のみ' : ''}が${directionWord(side.direction)}`
-  if (opposite.length > 0) text += `、${opposite.join('・')}は${directionWord(side.direction === 'up' ? 'down' : 'up')}`
-  if (flat.length > 0) text += `、${flat.join('・')}は中立`
-  return text
 }
 
 function shortTermToneStyle(tone: ShortTermCheckTone) {
