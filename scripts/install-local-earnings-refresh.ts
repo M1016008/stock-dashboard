@@ -33,6 +33,13 @@ function clampMinute(value: number): number {
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
 
+// util.parseEnv (the parser behind `node --env-file`) needs Node >= 20.12. Production runs
+// /usr/local/bin/node v24.11.1 and CI pins Node 24.
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 12) || typeof parseEnv !== 'function') {
+  throw new Error(`install-local-earnings-refresh requires Node >= 20.12 (running ${process.versions.node})`)
+}
+
 // Value of KEY in one line, parsed exactly as `node --env-file` does (quotes, # comments).
 function dotenvValue(line: string | undefined, key: string): string {
   return (line ? parseEnv(line)[key] ?? '' : '').trim()
