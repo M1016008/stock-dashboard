@@ -308,6 +308,17 @@ async function main(): Promise<void> {
     'SELECT status FROM trigger_outcome_analysis_jobs WHERE id=?', [cancelOutcome],
   ))?.status, 'CANCELLED')
 
+  assert.equal(await cancelHistoricalScanJob('not-a-uuid'), null)
+  assert.equal(await cancelOutcomeAnalysisJob(randomUUID()), null)
+  const queuedHistorical = await cloneHistorical(started.jobId, 7)
+  await execRun("UPDATE historical_trigger_scan_jobs SET error_category='stale' WHERE id=?", [queuedHistorical])
+  assert.equal((await cancelHistoricalScanJob(queuedHistorical))?.status, 'CANCELLED')
+  const queuedHistoricalRow = await execGet<{ cancel_requested: number; heartbeat_at: number | null; error_category: string | null }>(
+    'SELECT cancel_requested,heartbeat_at,error_category FROM historical_trigger_scan_jobs WHERE id=?', [queuedHistorical])
+  assert.equal(Number(queuedHistoricalRow?.cancel_requested), 1)
+  assert.ok(queuedHistoricalRow?.heartbeat_at != null, 'transactional cancel stamps heartbeat')
+  assert.equal(queuedHistoricalRow?.error_category, null)
+
   const failed = await cloneHistorical(started.jobId, 4)
   await execRun("UPDATE historical_trigger_scan_jobs SET status='FAILED' WHERE id=?", [failed])
   assert.deepEqual(await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup'),
