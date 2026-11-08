@@ -43,11 +43,10 @@ for (const envPath of [runtimeEnvPath, productionEnvPath, edinetEnvPath]) {
 if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
   throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
 }
-const edinetEnvKeys = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
+const edinetEnvLines = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
   .map((line) => line.trim()).filter((line) => line && !line.startsWith('#'))
-  .map((line) => line.split('=', 1)[0])
-if (edinetEnvKeys.length !== 1 || edinetEnvKeys[0] !== 'EDINET_API_KEY') {
-  throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY')
+if (edinetEnvLines.length !== 1 || !/^EDINET_API_KEY=\S+/.test(edinetEnvLines[0])) {
+  throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY (non-empty)')
 }
 
 const command = [
