@@ -6,11 +6,12 @@ Claude Code が実装を担当し、Codex が独立レビューを行う。最�
 
 ### レビューが必須になるとき
 1. Production 操作の承認をオーナーに求める前: 変更差分、実行手順、Rollback 手順
-2. PR を Draft から外す前、または main への Merge の承認を求める前: PR の差分全体
-3. データを書き換えるコード (Backup 用 CLI、JP 修復など)
+2. PR を Draft から外す前、Draft 以外で main 向け PR を作る前、main への Merge の承認を求める前: PR の差分全体
+3. データを書き換えるコード (Backup 用 CLI、JP 修復など): 実行、Merge、承認依頼のいずれよりも前
 4. 文書だけの変更: 軽く1回
 
-手順が単純な操作 (例: ファイル権限の変更) は、オーナーが不要と判断した場合だけ省略できる。
+例外は、オーナーが個別に「レビュー不要」と明示した単純な操作 (例: ファイル権限の変更) だけ。
+PR、データを書き換えるコード、それ以外の Production 操作には適用しない。
 
 ### やり方
 - Mac mini の `codex` CLI を使う。`~/.codex/config.toml` は `sandbox_mode = "danger-full-access"` なので、
