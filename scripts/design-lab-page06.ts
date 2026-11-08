@@ -5,12 +5,10 @@ import { buildPage06ClaudeInput, deterministicPage06Narrative, validatePage06Nar
 import { generatePage06Narrative } from '@/lib/server/daily-close-page06-narrative'
 import { SNAPSHOT_VERSION, baseName, readSnapshot, renderSnapshot, type Page06Snapshot } from './lib/design-lab-page06-render'
 import {
-  PORTED_BLOCKS,
   READONLY_REPORT_CONSTRAINTS,
   buildDailyCloseReport,
   isReportDate,
   precheckReadonlyDatabase,
-  verifyPortedSource,
 } from './lib/readonly-daily-close-report'
 
 // Page 06 Design Lab CLI。
@@ -47,8 +45,6 @@ async function generate(args: string[]) {
   if (!isReportDate(requestedDate)) throw new Error(`invalid date: ${requestedDate}`)
   if (!narrativeJson && process.env.CLAUDE_DESIGN_LAB !== '1') throw new Error('CLAUDE_DESIGN_LAB=1 is required (generate calls Claude Code CLI once)')
 
-  verifyPortedSource()
-  console.log(`Ported source verification: PASS (${PORTED_BLOCKS.length} blocks)`)
   await precheckReadonlyDatabase()
   console.log('SQLite precheck: journal_mode=wal, -readonly, query_only=ON')
 

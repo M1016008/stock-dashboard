@@ -20,7 +20,8 @@ const root = process.cwd()
 const viewSource = fs.readFileSync(path.join(root, 'components/reports/DailyCloseReportView.tsx'), 'utf8')
 const clientSource = fs.readFileSync(path.join(root, 'components/reports/DailyCloseReportClient.tsx'), 'utf8')
 const routeSource = fs.readFileSync(path.join(root, 'app/api/reports/daily-close/route.ts'), 'utf8')
-const builderSource = fs.readFileSync(path.join(root, 'lib/server/daily-close-report.ts'), 'utf8')
+const coreSource = fs.readFileSync(path.join(root, 'lib/server/daily-close-report-core.ts'), 'utf8')
+const builderSource = fs.readFileSync(path.join(root, 'lib/server/daily-close-report.ts'), 'utf8') + coreSource
 const cssSource = fs.readFileSync(path.join(root, 'components/reports/daily-close-report.module.css'), 'utf8')
 
 assert.equal(DAILY_CLOSE_REPORT_TYPE, 'STOCKBOARD_DAILY_CLOSE')
@@ -115,6 +116,7 @@ assert.match(routeSource, /cache: 'no-store'|Cache-Control': 'private, no-store'
 assert.match(builderSource, /getRankingSnapshot\(\)/)
 assert.match(builderSource, /snapshot\.priceDate === priceDate \? 'CURRENT' : 'DELAYED'/)
 assert.doesNotMatch(builderSource, /sendMail|gmail|nodemailer/i)
+assert.doesNotMatch(coreSource, /^import .*(db\/client|external-storage-guard|node:sqlite|large-holders)/m)
 assert.doesNotMatch(clientSource, /sendMail|gmail|nodemailer/i)
 assert.match(cssSource, /@page\s*\{[\s\S]*?size:\s*A4 landscape;/)
 assert.match(cssSource, /break-after:\s*page;/)
