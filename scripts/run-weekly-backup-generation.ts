@@ -157,8 +157,12 @@ function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+// Owner formats written by the code; the PID is always the second colon field:
+//   lib/server/update-lock.ts                       <jobType>:<pid>:<epochMs>:<base36>
+//   lib/server/trigger-historical-worker-ownership  worker:<pid>:<birthHash>:<uuid>
+// Anything else returns null and is treated as a live owner by the caller.
 function ownerPid(owner: string): number | null {
-  const match = owner.match(/(?:^|[^0-9])(\d{2,7})(?:[^0-9]|$)/)
+  const match = owner.match(/^[A-Za-z0-9_.-]+:(\d+):[A-Za-z0-9]+:[A-Za-z0-9-]+$/)
   return match ? Number(match[1]) : null
 }
 
