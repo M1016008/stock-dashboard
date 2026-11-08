@@ -66,8 +66,9 @@ if (runtimeLine && dotenvValue(runtimeLine, 'JQUANTS_API_KEY')
     fs.renameSync(temporary, jquantsEnvPath)
     console.log(`${current === null ? 'provisioned' : 'synchronized'} ${jquantsEnvPath} from runtime.env (key: JQUANTS_API_KEY)`)
   }
-} else if (!fs.existsSync(jquantsEnvPath)) {
-  throw new Error(`Cannot provision ${jquantsEnvPath}: runtime.env has no non-empty JQUANTS_API_KEY`)
+} else {
+  // runtime.env is canonical: never keep a scoped copy whose source key was removed or emptied.
+  throw new Error(`runtime.env has no usable JQUANTS_API_KEY; ${jquantsEnvPath} is not trusted on its own`)
 }
 for (const envPath of [jquantsEnvPath, productionEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
