@@ -149,6 +149,7 @@ assert.deepEqual(
 )
 
 const searchRoute = readFileSync('app/api/us/trigger-discovery/search/route.ts', 'utf8')
+const sharedSearchSource = readFileSync('lib/server/trigger-discovery-routes.ts', 'utf8')
 const miniRoute = readFileSync('app/api/us/trigger-discovery/mini-charts/route.ts', 'utf8')
 const serverSource = readFileSync('lib/server/us-trigger-discovery.ts', 'utf8')
 const clientSource = readFileSync('app/us/trigger-discovery/UsTriggerDiscoveryClient.tsx', 'utf8')
@@ -164,7 +165,8 @@ assert.match(searchRoute, /maPath: 'generic'/)
 assert.match(searchRoute, /historical_exchange_unavailable/)
 assert.match(searchRoute, /classificationAvailability: isLatest \? 'CURRENT' : 'UNAVAILABLE'/)
 assert.match(searchRoute, /universeBasis: isLatest \? 'CURRENT_ACTIVE' : 'TRADING_COVERAGE'/)
-assert.match(searchRoute, /averageTradingValue: row\.averageTradingValue/)
+assert.match(searchRoute, /rows: pageRows\.map\(toTriggerDiscoverySearchRow\)/)
+assert.match(sharedSearchSource, /averageTradingValue: row\.averageTradingValue/)
 assert.match(searchRoute, /currency: 'USD'/)
 
 assert.match(serverSource, /WHERE market = 'US'/)

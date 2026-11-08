@@ -8,10 +8,12 @@ import {
 } from '@/lib/server/trigger-discovery-search-request'
 
 const searchRoute = readFileSync('app/api/trigger-discovery/search/route.ts', 'utf8')
-assert.match(searchRoute, /triggerDiscoverySearchInFlight/)
-assert.match(searchRoute, /const pending = inFlight\.get\(key\)/)
-assert.match(searchRoute, /if \(pending\) return \{ result: await pending, cacheHit: true \}/)
-assert.match(searchRoute, /if \(inFlight\.get\(key\) === task\) inFlight\.delete\(key\)/)
+const sharedSearchSource = readFileSync('lib/server/trigger-discovery-routes.ts', 'utf8')
+assert.match(searchRoute, /getCachedTriggerDiscoveryBase\(\s*'JP',/)
+assert.match(sharedSearchSource, /JP: \{ cache: 'triggerDiscoverySearchCache', inFlight: 'triggerDiscoverySearchInFlight' \}/)
+assert.match(sharedSearchSource, /const pending = inFlight\.get\(key\)/)
+assert.match(sharedSearchSource, /if \(pending\) return \{ result: await pending, cacheHit: true \}/)
+assert.match(sharedSearchSource, /if \(inFlight\.get\(key\) === task\) inFlight\.delete\(key\)/)
 
 function parses(overrides: Record<string, unknown> = {}) {
   return parseTriggerDiscoverySearchRequest({ requestedAsOf: '2026-09-06', ...overrides })
