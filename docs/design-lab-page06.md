@@ -19,7 +19,7 @@ Daily Close Report の Page 06（現行「60分類 1M & ACCELERATION」）を作
 
 | 層 | ファイル | 内容 |
 |---|---|---|
-| データ | `scripts/lib/readonly-daily-close-report.ts` | 本番 SQLite を `sqlite3 -readonly` + `query_only=ON` で読み、`lib/server/daily-close-report.ts` と同一ロジックで DailyCloseReport を組み立てる。移植元とのソース照合付き（不一致なら中止） |
+| データ | `scripts/lib/readonly-daily-close-report.ts` | 本番 SQLite を `sqlite3 -readonly` + `query_only=ON` で読み、本番と共通の `lib/server/daily-close-report-core.ts` で DailyCloseReport を組み立てる（Large Holder は UNAVAILABLE 固定） |
 | 判定ロジック / ViewModel | `lib/daily-close-momentum-matrix.ts` | 状態判定（しきい値 `MOMENTUM_THRESHOLDS`）、LOW SAMPLE / 平均主導フラグ、状態別リスト・注目分類の選定、表示フォーマット |
 | Narrative（pure） | `lib/daily-close-page06-narrative-content.ts` | Claude 入力 JSON、出力検証（文字数・入力外の数値・注目外の分類名・禁止語）、deterministic fallback 文章 |
 | Narrative（Claude 呼び出し） | `lib/server/daily-close-page06-narrative.ts` | `--json-schema` とシステムプロンプト。`lib/server/claude-code-adapter.ts` 経由で subscription のみ |

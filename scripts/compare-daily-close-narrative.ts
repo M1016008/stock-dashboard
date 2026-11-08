@@ -1,11 +1,9 @@
 import { generateClaudeNarrative } from '@/lib/server/daily-close-narrative'
 import {
-  PORTED_BLOCKS,
   READONLY_REPORT_CONSTRAINTS,
   buildDailyCloseReport,
   isReportDate,
   precheckReadonlyDatabase,
-  verifyPortedSource,
 } from './lib/readonly-daily-close-report'
 
 // Deterministic Narrative vs Claude Code Subscription Narrative を 1 日分だけ比較する。
@@ -25,9 +23,6 @@ async function main() {
   const requestedDate = process.argv[2] ?? null
   if (requestedDate && !isReportDate(requestedDate)) throw new Error(`invalid date: ${requestedDate}`)
 
-  // 移植元ソース照合。不一致なら DB にも Claude にも触れず中止
-  verifyPortedSource()
-  console.log(`Ported source verification: PASS (${PORTED_BLOCKS.length} blocks)`)
   await precheckReadonlyDatabase()
   console.log('SQLite precheck: journal_mode=wal, -readonly, query_only=ON')
 
