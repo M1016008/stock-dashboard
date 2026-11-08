@@ -14,7 +14,9 @@ const label = 'com.stockboard.update-latest'
 const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
 const productionEnvPath = path.join(configDir, 'production.env')
-// EDINET is not in runtime.env; it is read from its own one-key file.
+// EDINET is not in runtime.env; it is read from its own one-key file. It is optional for
+// update-latest (the EDINET holdings refresh is skipped without it), so a missing file must
+// never stop the daily update: the plist uses --env-file-if-exists.
 const edinetEnvPath = path.join(configDir, 'edinet.env')
 
 function marketDayRetrySchedule(): string {
@@ -34,7 +36,7 @@ function marketDayRetrySchedule(): string {
 
 ensureLaunchAgentDirs()
 
-for (const envPath of [runtimeEnvPath, productionEnvPath, edinetEnvPath]) {
+for (const envPath of [runtimeEnvPath, productionEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
   if ((fs.statSync(envPath).mode & 0o077) !== 0) {
     throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
@@ -43,10 +45,17 @@ for (const envPath of [runtimeEnvPath, productionEnvPath, edinetEnvPath]) {
 if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
   throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
 }
-const edinetEnvLines = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
-  .map((line) => line.trim()).filter((line) => line && !line.startsWith('#'))
-if (edinetEnvLines.length !== 1 || !/^EDINET_API_KEY=\S+/.test(edinetEnvLines[0])) {
-  throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY (non-empty)')
+if (fs.existsSync(edinetEnvPath)) {
+  if ((fs.statSync(edinetEnvPath).mode & 0o077) !== 0) {
+    throw new Error(`Canonical machine env must be owner-only: ${edinetEnvPath}`)
+  }
+  const edinetEnvLines = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
+    .map((line) => line.trim()).filter((line) => line && !line.startsWith('#'))
+  if (edinetEnvLines.length !== 1 || !/^EDINET_API_KEY=\S+/.test(edinetEnvLines[0])) {
+    throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY (non-empty)')
+  }
+} else {
+  console.warn(`${edinetEnvPath} is absent; update-latest will skip the EDINET holdings refresh`)
 }
 
 const command = [
@@ -88,7 +97,7 @@ const command = [
     JSON.stringify(process.execPath),
     `--env-file=${JSON.stringify(runtimeEnvPath)}`,
     `--env-file=${JSON.stringify(productionEnvPath)}`,
-    `--env-file=${JSON.stringify(edinetEnvPath)}`,
+    `--env-file-if-exists=${JSON.stringify(edinetEnvPath)}`,
     '--import tsx scripts/update-latest.ts',
   ].join(' '),
 ].join(' && ')
