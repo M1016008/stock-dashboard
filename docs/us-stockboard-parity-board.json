@@ -110,7 +110,7 @@
       "remaining": "None within the implemented contract.",
       "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "91a7886330d4384858d4b20c41cf1bec0e16e4a7",
+      "git": "1a4f425d945fff7422453999224e0ba495d24357",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1106,7 +1106,7 @@
       "remaining": "Price, Stage, Physical and current classification filters are complete; historical classifications and forecast filters remain unavailable.",
       "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "91a7886330d4384858d4b20c41cf1bec0e16e4a7",
+      "git": "1a4f425d945fff7422453999224e0ba495d24357",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: effective-dated classifications and approved forecasts are missing.",
       "nextAction": "Keep unsupported historical filters fail-closed until their sources exist.",
@@ -1120,7 +1120,8 @@
         ],
         "implementationPaths": [
           "app/us/screener/UsScreenerClient.tsx",
-          "app/api/us/screener/route.ts"
+          "app/api/us/screener/route.ts",
+          "lib/server/two-year-line-screener-filter.ts"
         ],
         "testPaths": [
           "scripts/test-us-screener-filters.ts",

@@ -6,8 +6,8 @@ import { findUsAliasTickers, getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
-import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
-import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { applyTwoYearLineScreenerFilter, parseTwoYearLineScreenerQuery } from '@/lib/server/two-year-line-screener-filter'
 import { evaluateUsEarningsCoverage, todayInNewYork, type UsEarningsCoverageRun } from '@/lib/queries/us-earnings'
 import {
   assertUsScreenerHistoricalFilters,
@@ -124,18 +124,6 @@ function numericParam(searchParams: URLSearchParams, key: string): number | null
   if (!raw) return null
   const value = Number(raw)
   return Number.isFinite(value) ? value : null
-}
-
-function boundedAngleParam(searchParams: URLSearchParams, key: string): number | null {
-  const value = numericParam(searchParams, key)
-  return value !== null && value >= 0 && value <= 90 ? value : null
-}
-
-function invalidAngleParam(searchParams: URLSearchParams, key: string): boolean {
-  const raw = searchParams.get(key)?.trim()
-  if (!raw) return false
-  const value = Number(raw)
-  return !Number.isFinite(value) || value < 0 || value > 90
 }
 
 function stageParams(searchParams: URLSearchParams): Partial<Record<StageAxis, number[]>> {
@@ -329,22 +317,10 @@ export async function GET(request: NextRequest) {
     const stage23Candidate = searchParams.get('stage23Candidate') === '1'
     const shortTermCheck = searchParams.get('shortTermCheck')?.trim() ?? ''
     const physicalStatus = searchParams.get('physicalStatus')?.trim() ?? ''
-    const twoYearLine = parseTwoYearLineFilter(searchParams.get('twoYearLine'))
-    const twoYearPattern = parseTwoYearLinePatternFilter(searchParams.get('twoYearPattern'))
-    if (invalidAngleParam(searchParams, 'twoYearAngleMin') || invalidAngleParam(searchParams, 'twoYearAngleMax')) {
-      return NextResponse.json({ error: 'Invalid 24-month line angle' }, { status: 400 })
-    }
-    const twoYearAngleMin = boundedAngleParam(searchParams, 'twoYearAngleMin')
-    const twoYearAngleMax = boundedAngleParam(searchParams, 'twoYearAngleMax')
-    if (twoYearAngleMin !== null && twoYearAngleMax !== null && twoYearAngleMin > twoYearAngleMax) {
-      return NextResponse.json({ error: 'Invalid 24-month line angle range' }, { status: 400 })
-    }
-    const twoYearQuery: TwoYearLineQuery = {
-      status: twoYearLine,
-      pattern: twoYearLine === 'none' ? 'either' : twoYearPattern,
-      minAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMin,
-      maxAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMax,
-    }
+    const twoYear = parseTwoYearLineScreenerQuery(searchParams, numericParam)
+    if ('error' in twoYear) return NextResponse.json({ error: twoYear.error }, { status: 400 })
+    const twoYearQuery = twoYear.query
+    const twoYearLine = twoYearQuery.status
     const earningsWindowValue = Number(searchParams.get('earningsWindowDays'))
     const earningsWindowDays = EARNINGS_WINDOWS.has(earningsWindowValue) ? earningsWindowValue : null
     const earningsTimeBucketValue = searchParams.get('earningsTimeBucket')?.trim() ?? ''
@@ -945,41 +921,13 @@ export async function GET(request: NextRequest) {
     if (physicalStatus) {
       filteredRows = filteredRows.filter((row) => row.physicalStatusLabel === physicalStatus)
     }
-    let twoYearLineMetadata: TwoYearLineSearchMetadata | null = null
-    if (twoYearLine !== 'none') {
-      const searchResult = await loadTwoYearLineSearchEntries({
-        market: 'US',
-        tickers: filteredRows.map((row) => String(row.ticker ?? '')),
-        asOfDate: date,
-      })
-      const { entries } = searchResult
-      twoYearLineMetadata = searchResult.metadata
-      filteredRows = filteredRows
-        .map((row) => {
-          const entry = entries.get(String(row.ticker ?? '').toUpperCase())
-          const summary = selectTwoYearLineSummary(entry, twoYearQuery)
-          const confirmedDistance = entry?.latestConfirmed?.distancePct ?? null
-          return {
-            ...row,
-            ticker: String(row.ticker ?? ''),
-            twoYearLineStatus: summary?.status ?? null,
-            twoYearLinePattern: summary?.pattern ?? null,
-            twoYearLinePeriods: summary?.sourcePeriods ?? null,
-            twoYearLineStartClose: summary?.lineStartClose ?? null,
-            twoYearLineEndClose: summary?.lineEndClose ?? null,
-            twoYearLineAngleDeg: summary?.angleDeg ?? null,
-            twoYearLineLastCandleRisePct: summary?.lastCandleRisePct ?? null,
-            twoYearLineConfirmedDistancePct: confirmedDistance,
-            twoYearLineConfirmedDistancePriority: twoYearConfirmedDistancePriority(confirmedDistance),
-            twoYearLineAsOfDate: searchResult.metadata.asOfDate,
-            twoYearLinePriceBasisVersion: searchResult.metadata.priceBasisVersion,
-          }
-        })
-        .filter((row) => {
-          const entry = entries.get(String(row.ticker ?? '').toUpperCase())
-          return matchesTwoYearLineSearchEntry(entry, twoYearQuery)
-        })
-    }
+    const twoYearResult = await applyTwoYearLineScreenerFilter(filteredRows, twoYearQuery, {
+      market: 'US',
+      asOfDate: date,
+      ticker: (row) => String(row.ticker ?? ''),
+      entryKey: (ticker) => ticker.toUpperCase(),
+    })
+    filteredRows = twoYearResult.rows
 
     if (computedSort) {
       filteredRows.sort((a, b) => {
@@ -1054,7 +1002,7 @@ export async function GET(request: NextRequest) {
       source: 'tiingo',
       mlSource: hasUsAnalyticsDb() ? 'us_analytics' : 'main',
       pit,
-      twoYearLineRegistry: twoYearLineMetadata,
+      twoYearLineRegistry: twoYearResult.metadata,
       earnings: {
         source: 'finnhub',
         available: earningsCoverage.ok,
