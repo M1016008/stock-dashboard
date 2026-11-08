@@ -7,6 +7,16 @@ import {
   GET as readSaved,
   PATCH as updateSaved,
 } from '@/app/api/trigger-discovery/saved/[id]/route'
+import { POST as evaluateSaved } from '@/app/api/trigger-discovery/saved/[id]/evaluate/route'
+import { GET as readNotificationSettings } from '@/app/api/trigger-discovery/saved/[id]/notification-settings/route'
+import { GET as listUsSaved, POST as createUsSaved } from '@/app/api/us/trigger-discovery/saved/route'
+import {
+  DELETE as archiveUsSaved,
+  GET as readUsSaved,
+  PATCH as updateUsSaved,
+} from '@/app/api/us/trigger-discovery/saved/[id]/route'
+import { POST as evaluateUsSaved } from '@/app/api/us/trigger-discovery/saved/[id]/evaluate/route'
+import { GET as readUsNotificationSettings } from '@/app/api/us/trigger-discovery/saved/[id]/notification-settings/route'
 import { savedTriggerConfigsFromSearchRequest, type SavedTriggerDetailResponse } from '@/lib/trigger-definition'
 
 const namePrefix = '__phase7_saved_trigger_api__'
@@ -124,6 +134,38 @@ async function main() {
     assert.equal((await readSaved(request('/api/trigger-discovery/saved/not-a-uuid', 'GET'), context('not-a-uuid'))).status, 400)
     const missingId = '00000000-0000-4000-8000-000000000000'
     assert.equal((await readSaved(request(`/api/trigger-discovery/saved/${missingId}`, 'GET'), context(missingId))).status, 404)
+
+    // US / JP isolation: each route only sees its own market's definitions.
+    const usCreatedResponse = await createUsSaved(request('/api/us/trigger-discovery/saved', 'POST', {
+      name: `${namePrefix}us`,
+      ...savedTriggerConfigsFromSearchRequest({ requestedAsOf: '2026-08-25' }),
+    }))
+    assert.equal(usCreatedResponse.status, 201)
+    assert.equal(usCreatedResponse.headers.get('Server-Timing'), null, 'US saved routes do not emit Server-Timing')
+    const usId = (await usCreatedResponse.json() as SavedTriggerDetailResponse).definition.id
+    assert.match(createdResponse.headers.get('Server-Timing') ?? '', /^saved-trigger-create;dur=/)
+
+    const usListIds = (await (await listUsSaved()).json() as { definitions: Array<{ id: string }> }).definitions.map((item) => item.id)
+    assert.ok(usListIds.includes(usId) && !usListIds.includes(id), 'US list must contain only US definitions')
+    const jpListIds = (await (await listSaved()).json() as { definitions: Array<{ id: string }> }).definitions.map((item) => item.id)
+    assert.ok(jpListIds.includes(id) && !jpListIds.includes(usId), 'JP list must contain only JP definitions')
+
+    assert.equal((await readUsSaved(request(`/api/us/trigger-discovery/saved/${usId}`, 'GET'), context(usId))).status, 200)
+    assert.equal((await readSaved(request(`/api/trigger-discovery/saved/${usId}`, 'GET'), context(usId))).status, 404)
+    assert.equal((await readUsSaved(request(`/api/us/trigger-discovery/saved/${id}`, 'GET'), context(id))).status, 404)
+    assert.equal((await updateSaved(request(`/api/trigger-discovery/saved/${usId}`, 'PATCH', { name: `${namePrefix}x` }), context(usId))).status, 404)
+    assert.equal((await updateUsSaved(request(`/api/us/trigger-discovery/saved/${id}`, 'PATCH', { name: `${namePrefix}x` }), context(id))).status, 404)
+    assert.equal((await archiveSaved(request(`/api/trigger-discovery/saved/${usId}`, 'DELETE'), context(usId))).status, 404)
+    assert.equal((await archiveUsSaved(request(`/api/us/trigger-discovery/saved/${id}`, 'DELETE'), context(id))).status, 404)
+    assert.equal((await evaluateSaved(request(`/api/trigger-discovery/saved/${usId}/evaluate`, 'POST', { requestedAsOf: '2026-08-25' }), context(usId))).status, 404)
+    assert.equal((await evaluateUsSaved(request(`/api/us/trigger-discovery/saved/${id}/evaluate`, 'POST', { requestedAsOf: '2026-08-25' }), context(id))).status, 404)
+    assert.equal((await readNotificationSettings(request(`/api/trigger-discovery/saved/${usId}/notification-settings`, 'GET'), context(usId))).status, 404)
+    assert.equal((await readUsNotificationSettings(request(`/api/us/trigger-discovery/saved/${id}/notification-settings`, 'GET'), context(id))).status, 404)
+
+    const usArchivedResponse = await archiveUsSaved(request(`/api/us/trigger-discovery/saved/${usId}`, 'DELETE'), context(usId))
+    assert.equal(usArchivedResponse.status, 200)
+    assert.equal(usArchivedResponse.headers.get('Server-Timing'), null)
+    assert.equal((await readSaved(request(`/api/trigger-discovery/saved/${id}`, 'GET'), context(id))).status, 200, 'US archive must not touch JP definitions')
 
     startedAt = performance.now()
     const archivedResponse = await archiveSaved(request(`/api/trigger-discovery/saved/${id}`, 'DELETE'), context(id))
