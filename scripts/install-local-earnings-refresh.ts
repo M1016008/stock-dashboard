@@ -32,19 +32,28 @@ function clampMinute(value: number): number {
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
 
+// Provision the scoped file once from the canonical runtime.env (owner-only, value never printed).
+const runtimeEnvPath = path.join(configDir, 'runtime.env')
+if (!fs.existsSync(jquantsEnvPath)) {
+  const line = fs.existsSync(runtimeEnvPath)
+    ? fs.readFileSync(runtimeEnvPath, 'utf8').split('\n').find((entry) => /^JQUANTS_API_KEY=\S/.test(entry.trim()))
+    : undefined
+  if (!line) throw new Error(`Cannot provision ${jquantsEnvPath}: runtime.env has no non-empty JQUANTS_API_KEY`)
+  fs.writeFileSync(jquantsEnvPath, `${line.trim()}\n`, { mode: 0o600, flag: 'wx' })
+  console.log(`provisioned ${jquantsEnvPath} (key: JQUANTS_API_KEY)`)
+}
 for (const envPath of [jquantsEnvPath, productionEnvPath]) {
   if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
   if ((fs.statSync(envPath).mode & 0o077) !== 0) {
     throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
   }
 }
-const jquantsEnvKeys = fs.readFileSync(jquantsEnvPath, 'utf8')
+const jquantsEnvLines = fs.readFileSync(jquantsEnvPath, 'utf8')
   .split('\n')
   .map((line) => line.trim())
   .filter((line) => line && !line.startsWith('#'))
-  .map((line) => line.split('=', 1)[0])
-if (jquantsEnvKeys.length !== 1 || jquantsEnvKeys[0] !== 'JQUANTS_API_KEY') {
-  throw new Error('jquants.env must contain exactly one key: JQUANTS_API_KEY')
+if (jquantsEnvLines.length !== 1 || !/^JQUANTS_API_KEY=\S+/.test(jquantsEnvLines[0])) {
+  throw new Error('jquants.env must contain exactly one key: JQUANTS_API_KEY (non-empty)')
 }
 
 const hour = clampHour(scheduleHour)
