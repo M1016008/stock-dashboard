@@ -1212,9 +1212,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_PASS",
-      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "git": "b85e29bafceacc1381975e1ce0d0af25787e0629",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
