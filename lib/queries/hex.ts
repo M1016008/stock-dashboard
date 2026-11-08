@@ -366,331 +366,9 @@ export interface TransitionDetailRow {
   objective_down_hit_rate: number | null
   objective_down_metrics_json: string | null
 }
-export async function getTransitionDetail(
-  ts: Timescale,
-  period: Period,
-  universeFilter: UniverseFilterValue = null,
-  limit = 30,
-  asOfDate: string | null = null,
-): Promise<TransitionDetailRow[]> {
-  const range = await getDateRange(period, asOfDate)
-  if (!range) return []
-  const [start, end] = range
-  const col = getCol(ts)
-  const physicsHorizon = getPhysicsHorizonForPeriod(period)
-  const universe = universeSqlCondition('ticker', universeFilter)
-
-  if (period === 'to_latest') {
-    if (start >= end) return []
-    const prevEnd1 = (await execGet<{ d: string | null }>(
-      `SELECT MAX(date) AS d FROM daily_snapshots WHERE date < ?`,
-      [end],
-    ))?.d ?? null
-    const prevEnd2 = prevEnd1
-      ? (await execGet<{ d: string | null }>(
-        `SELECT MAX(date) AS d FROM daily_snapshots WHERE date < ?`,
-        [prevEnd1],
-      ))?.d ?? null
-      : null
-
-    return await execAll<TransitionDetailRow>(
-      `
-      WITH dedup AS (
-        SELECT
-          ticker, date,
-          daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-          ma_5, ma_25, ma_75, ma_300,
-          stage
-        FROM (
-          SELECT
-            ticker, date,
-            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-            ma_5, ma_25, ma_75, ma_300,
-            ${col} AS stage,
-            ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
-          FROM daily_snapshots
-          WHERE date IN (?, ?, ?, ?)
-            AND ${col} IS NOT NULL
-        )
-        WHERE rn = 1
-      ),
-      start_rows AS (
-        SELECT ticker, stage AS start_stage
-        FROM dedup
-        WHERE date = ?
-      ),
-      cur AS (
-        SELECT *
-        FROM dedup
-        WHERE date = ?
-          ${universe.sql ? `AND ${universe.sql}` : ''}
-      ),
-      paired AS (
-        SELECT
-          cur.*,
-          start_rows.start_stage AS prev_stage,
-          prev.ma_5 AS prev_ma_5,
-          prev.ma_25 AS prev_ma_25,
-          prev.ma_75 AS prev_ma_75,
-          prev.ma_300 AS prev_ma_300,
-          prev2.ma_5 AS prev2_ma_5,
-          prev2.ma_25 AS prev2_ma_25,
-          prev2.ma_75 AS prev2_ma_75,
-          prev2.ma_300 AS prev2_ma_300
-        FROM cur
-        JOIN start_rows ON start_rows.ticker = cur.ticker
-        LEFT JOIN dedup prev
-          ON prev.ticker = cur.ticker
-         AND prev.date = ?
-        LEFT JOIN dedup prev2
-          ON prev2.ticker = cur.ticker
-         AND prev2.date = ?
-        WHERE start_rows.start_stage != cur.stage
-      ),
-      px AS (
-        SELECT ticker, close, volume FROM ohlcv_daily WHERE date = ?
-      ),
-      py AS (
-        SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = (
-          SELECT MAX(date) FROM ohlcv_daily WHERE date < ?
-        )
-      ),
-      ml_date AS (
-        SELECT MAX(as_of_date) AS d FROM serving_ml_candidates WHERE as_of_date <= ?
-      ),
-      signal_date AS (
-        SELECT MAX(date) AS d FROM serving_latest_signals WHERE date <= ?
-      ),
-      physics_date AS (
-        SELECT MAX(as_of_date) AS d
-        FROM serving_ml_physics_candidates
-        WHERE as_of_date <= ?
-          AND horizon_days = ?
-      ),
-      objective_up AS (
-        SELECT evaluation_date, sample_count, precision_at_20, precision_at_50, hit_rate, metrics_json
-        FROM ml_model_evaluations
-        WHERE direction = 'up'
-          AND horizon_days = ?
-          AND model_type LIKE '%objective%holdout%'
-          AND (model_type LIKE '%enhanced%' OR metrics_json LIKE '%"variant":"enhanced"%')
-        ORDER BY
-          CASE WHEN metrics_json LIKE '%"split":"test"%' THEN 0 ELSE 1 END ASC,
-          evaluation_date DESC,
-          created_at DESC
-        LIMIT 1
-      ),
-      objective_down AS (
-        SELECT evaluation_date, sample_count, precision_at_20, precision_at_50, hit_rate, metrics_json
-        FROM ml_model_evaluations
-        WHERE direction = 'down'
-          AND horizon_days = ?
-          AND model_type LIKE '%objective%holdout%'
-          AND (model_type LIKE '%enhanced%' OR metrics_json LIKE '%"variant":"enhanced"%')
-        ORDER BY
-          CASE WHEN metrics_json LIKE '%"split":"test"%' THEN 0 ELSE 1 END ASC,
-          evaluation_date DESC,
-          created_at DESC
-        LIMIT 1
-      )
-      SELECT
-        paired.ticker,
-        tu.name,
-        paired.daily_a_stage   AS daily_a,
-        paired.daily_b_stage   AS daily_b,
-        paired.weekly_a_stage  AS weekly_a,
-        paired.weekly_b_stage  AS weekly_b,
-        paired.monthly_a_stage AS monthly_a,
-        paired.monthly_b_stage AS monthly_b,
-        paired.prev_stage      AS from_stage,
-        paired.stage           AS to_stage,
-        px.close               AS price,
-        CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close END AS changePct,
-        px.volume,
-        paired.ma_5,
-        paired.ma_25,
-        paired.ma_75,
-        paired.ma_300,
-        paired.prev_ma_5,
-        paired.prev_ma_25,
-        paired.prev_ma_75,
-        paired.prev_ma_300,
-        paired.prev2_ma_5,
-        paired.prev2_ma_25,
-        paired.prev2_ma_75,
-        paired.prev2_ma_300,
-        sig.signal_codes,
-        ml_up.rank AS ml_up_rank,
-        ml_down.rank AS ml_down_rank,
-        ml_up.reason_json AS ml_up_reason_json,
-        ml_down.reason_json AS ml_down_reason_json,
-        ml_up.explanation_json AS ml_up_explanation_json,
-        ml_down.explanation_json AS ml_down_explanation_json,
-        ? AS physics_horizon_days,
-        p_up.rank AS physics_up_rank,
-        p_up.candidate_score AS physics_up_score,
-        p_up.model_name AS physics_up_model,
-        p_up.feature_json AS physics_up_feature_json,
-        p_up.reason_json AS physics_up_reason_json,
-        p_up.explanation_json AS physics_up_explanation_json,
-        p_down.rank AS physics_down_rank,
-        p_down.candidate_score AS physics_down_score,
-        p_down.model_name AS physics_down_model,
-        p_down.feature_json AS physics_down_feature_json,
-        p_down.reason_json AS physics_down_reason_json,
-        p_down.explanation_json AS physics_down_explanation_json,
-        p_wait.rank AS physics_wait_rank,
-        p_wait.candidate_score AS physics_wait_score,
-        p_wait.model_name AS physics_wait_model,
-        p_wait.feature_json AS physics_wait_feature_json,
-        p_wait.reason_json AS physics_wait_reason_json,
-        p_wait.explanation_json AS physics_wait_explanation_json,
-        (SELECT evaluation_date FROM objective_up) AS objective_up_evaluation_date,
-        (SELECT sample_count FROM objective_up) AS objective_up_sample_count,
-        (SELECT precision_at_20 FROM objective_up) AS objective_up_precision_at_20,
-        (SELECT precision_at_50 FROM objective_up) AS objective_up_precision_at_50,
-        (SELECT hit_rate FROM objective_up) AS objective_up_hit_rate,
-        (SELECT metrics_json FROM objective_up) AS objective_up_metrics_json,
-        (SELECT evaluation_date FROM objective_down) AS objective_down_evaluation_date,
-        (SELECT sample_count FROM objective_down) AS objective_down_sample_count,
-        (SELECT precision_at_20 FROM objective_down) AS objective_down_precision_at_20,
-        (SELECT precision_at_50 FROM objective_down) AS objective_down_precision_at_50,
-        (SELECT hit_rate FROM objective_down) AS objective_down_hit_rate,
-        (SELECT metrics_json FROM objective_down) AS objective_down_metrics_json
-      FROM paired
-      LEFT JOIN ticker_universe tu ON tu.ticker = paired.ticker
-      LEFT JOIN px USING (ticker)
-      LEFT JOIN py USING (ticker)
-      LEFT JOIN serving_latest_signals sig
-        ON sig.ticker = paired.ticker
-       AND sig.date = (SELECT d FROM signal_date)
-      LEFT JOIN serving_ml_candidates ml_up
-        ON ml_up.ticker = paired.ticker
-       AND ml_up.direction = 'up'
-       AND ml_up.as_of_date = (SELECT d FROM ml_date)
-      LEFT JOIN serving_ml_candidates ml_down
-        ON ml_down.ticker = paired.ticker
-       AND ml_down.direction = 'down'
-       AND ml_down.as_of_date = (SELECT d FROM ml_date)
-      LEFT JOIN serving_ml_physics_candidates p_up
-        ON p_up.ticker = paired.ticker
-       AND p_up.direction = 'up'
-       AND p_up.horizon_days = ?
-       AND p_up.as_of_date = (SELECT d FROM physics_date)
-      LEFT JOIN serving_ml_physics_candidates p_down
-        ON p_down.ticker = paired.ticker
-       AND p_down.direction = 'down'
-       AND p_down.horizon_days = ?
-       AND p_down.as_of_date = (SELECT d FROM physics_date)
-      LEFT JOIN serving_ml_physics_candidates p_wait
-        ON p_wait.ticker = paired.ticker
-       AND p_wait.direction = 'wait'
-       AND p_wait.horizon_days = ?
-       AND p_wait.as_of_date = (SELECT d FROM physics_date)
-      ORDER BY ABS(paired.stage - paired.prev_stage) DESC, paired.ticker ASC
-      LIMIT ?
-      `,
-      [
-        start,
-        end,
-        prevEnd1 ?? '',
-        prevEnd2 ?? '',
-        start,
-        end,
-        ...universe.params,
-        prevEnd1 ?? '',
-        prevEnd2 ?? '',
-        end,
-        end,
-        end,
-        end,
-        end,
-        physicsHorizon,
-        physicsHorizon,
-        physicsHorizon,
-        physicsHorizon,
-        physicsHorizon,
-        physicsHorizon,
-        physicsHorizon,
-        limit,
-      ],
-    )
-  }
-
-  const dedupStart = await getSnapshotWindowStart(end, period === 'month' ? 22 : period === 'week' ? 7 : 3)
-
-  // 期間内最後の遷移を 1 銘柄あたり 1 件抽出。
-  return await execAll<TransitionDetailRow>(
-    `
-    WITH dedup AS (
-      SELECT
-        ticker, date,
-        daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-        ma_5, ma_25, ma_75, ma_300,
-        stage
-      FROM (
-        SELECT
-          ticker, date,
-          daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-          ma_5, ma_25, ma_75, ma_300,
-          ${col} AS stage,
-          ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
-        FROM daily_snapshots
-        WHERE date BETWEEN ? AND ?
-          AND ${col} IS NOT NULL
-      )
-      WHERE rn = 1
-    ),
-    cur AS (
-      SELECT ticker, date,
-             daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-             ma_5, ma_25, ma_75, ma_300,
-             stage
-      FROM dedup
-      WHERE date BETWEEN ? AND ?
-        ${universe.sql ? `AND ${universe.sql}` : ''}
-    ),
-    paired AS (
-      SELECT
-        cur.*,
-        prev.stage AS prev_stage,
-        prev.ma_5 AS prev_ma_5,
-        prev.ma_25 AS prev_ma_25,
-        prev.ma_75 AS prev_ma_75,
-        prev.ma_300 AS prev_ma_300,
-        prev2.ma_5 AS prev2_ma_5,
-        prev2.ma_25 AS prev2_ma_25,
-        prev2.ma_75 AS prev2_ma_75,
-        prev2.ma_300 AS prev2_ma_300
-      FROM cur
-      JOIN dedup prev
-        ON prev.ticker = cur.ticker
-       AND prev.date = (
-         SELECT MAX(p.date)
-         FROM dedup p
-         WHERE p.ticker = cur.ticker
-           AND p.date < cur.date
-       )
-      LEFT JOIN dedup prev2
-        ON prev2.ticker = cur.ticker
-       AND prev2.date = (
-         SELECT MAX(p2.date)
-         FROM dedup p2
-         WHERE p2.ticker = cur.ticker
-           AND p2.date < prev.date
-       )
-    ),
-    trans AS (
-      SELECT * FROM paired
-      WHERE prev_stage != stage
-    ),
-    latest AS (
-      SELECT ticker, MAX(date) AS d FROM trans GROUP BY ticker
-    ),
-    pick AS (
-      SELECT t.* FROM trans t JOIN latest l ON l.ticker = t.ticker AND l.d = t.date
-    ),
-    px AS (
+// getTransitionDetail 両分岐共通の付帯情報 (価格/ML/シグナル/physics/objective)。
+// 直前の CTE は pick。placeholder 12 個: end x5, physicsHorizon x7。
+const TRANSITION_DETAIL_ENRICHMENT_SQL = `px AS (
       SELECT ticker, close, volume FROM ohlcv_daily WHERE date = ?
     ),
     py AS (
@@ -829,7 +507,194 @@ export async function getTransitionDetail(
       ON p_wait.ticker = pick.ticker
      AND p_wait.direction = 'wait'
      AND p_wait.horizon_days = ?
-     AND p_wait.as_of_date = (SELECT d FROM physics_date)
+     AND p_wait.as_of_date = (SELECT d FROM physics_date)`
+
+export async function getTransitionDetail(
+  ts: Timescale,
+  period: Period,
+  universeFilter: UniverseFilterValue = null,
+  limit = 30,
+  asOfDate: string | null = null,
+): Promise<TransitionDetailRow[]> {
+  const range = await getDateRange(period, asOfDate)
+  if (!range) return []
+  const [start, end] = range
+  const col = getCol(ts)
+  const physicsHorizon = getPhysicsHorizonForPeriod(period)
+  const universe = universeSqlCondition('ticker', universeFilter)
+
+  if (period === 'to_latest') {
+    if (start >= end) return []
+    const prevEnd1 = (await execGet<{ d: string | null }>(
+      `SELECT MAX(date) AS d FROM daily_snapshots WHERE date < ?`,
+      [end],
+    ))?.d ?? null
+    const prevEnd2 = prevEnd1
+      ? (await execGet<{ d: string | null }>(
+        `SELECT MAX(date) AS d FROM daily_snapshots WHERE date < ?`,
+        [prevEnd1],
+      ))?.d ?? null
+      : null
+
+    return await execAll<TransitionDetailRow>(
+      `
+      WITH dedup AS (
+        SELECT
+          ticker, date,
+          daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+          ma_5, ma_25, ma_75, ma_300,
+          stage
+        FROM (
+          SELECT
+            ticker, date,
+            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+            ma_5, ma_25, ma_75, ma_300,
+            ${col} AS stage,
+            ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
+          FROM daily_snapshots
+          WHERE date IN (?, ?, ?, ?)
+            AND ${col} IS NOT NULL
+        )
+        WHERE rn = 1
+      ),
+      start_rows AS (
+        SELECT ticker, stage AS start_stage
+        FROM dedup
+        WHERE date = ?
+      ),
+      cur AS (
+        SELECT *
+        FROM dedup
+        WHERE date = ?
+          ${universe.sql ? `AND ${universe.sql}` : ''}
+      ),
+      pick AS (
+        SELECT
+          cur.*,
+          start_rows.start_stage AS prev_stage,
+          prev.ma_5 AS prev_ma_5,
+          prev.ma_25 AS prev_ma_25,
+          prev.ma_75 AS prev_ma_75,
+          prev.ma_300 AS prev_ma_300,
+          prev2.ma_5 AS prev2_ma_5,
+          prev2.ma_25 AS prev2_ma_25,
+          prev2.ma_75 AS prev2_ma_75,
+          prev2.ma_300 AS prev2_ma_300
+        FROM cur
+        JOIN start_rows ON start_rows.ticker = cur.ticker
+        LEFT JOIN dedup prev
+          ON prev.ticker = cur.ticker
+         AND prev.date = ?
+        LEFT JOIN dedup prev2
+          ON prev2.ticker = cur.ticker
+         AND prev2.date = ?
+        WHERE start_rows.start_stage != cur.stage
+      ),
+      ${TRANSITION_DETAIL_ENRICHMENT_SQL}
+      ORDER BY ABS(pick.stage - pick.prev_stage) DESC, pick.ticker ASC
+      LIMIT ?
+      `,
+      [
+        start,
+        end,
+        prevEnd1 ?? '',
+        prevEnd2 ?? '',
+        start,
+        end,
+        ...universe.params,
+        prevEnd1 ?? '',
+        prevEnd2 ?? '',
+        end,
+        end,
+        end,
+        end,
+        end,
+        physicsHorizon,
+        physicsHorizon,
+        physicsHorizon,
+        physicsHorizon,
+        physicsHorizon,
+        physicsHorizon,
+        physicsHorizon,
+        limit,
+      ],
+    )
+  }
+
+  const dedupStart = await getSnapshotWindowStart(end, period === 'month' ? 22 : period === 'week' ? 7 : 3)
+
+  // 期間内最後の遷移を 1 銘柄あたり 1 件抽出。
+  return await execAll<TransitionDetailRow>(
+    `
+    WITH dedup AS (
+      SELECT
+        ticker, date,
+        daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+        ma_5, ma_25, ma_75, ma_300,
+        stage
+      FROM (
+        SELECT
+          ticker, date,
+          daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+          ma_5, ma_25, ma_75, ma_300,
+          ${col} AS stage,
+          ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
+        FROM daily_snapshots
+        WHERE date BETWEEN ? AND ?
+          AND ${col} IS NOT NULL
+      )
+      WHERE rn = 1
+    ),
+    cur AS (
+      SELECT ticker, date,
+             daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+             ma_5, ma_25, ma_75, ma_300,
+             stage
+      FROM dedup
+      WHERE date BETWEEN ? AND ?
+        ${universe.sql ? `AND ${universe.sql}` : ''}
+    ),
+    paired AS (
+      SELECT
+        cur.*,
+        prev.stage AS prev_stage,
+        prev.ma_5 AS prev_ma_5,
+        prev.ma_25 AS prev_ma_25,
+        prev.ma_75 AS prev_ma_75,
+        prev.ma_300 AS prev_ma_300,
+        prev2.ma_5 AS prev2_ma_5,
+        prev2.ma_25 AS prev2_ma_25,
+        prev2.ma_75 AS prev2_ma_75,
+        prev2.ma_300 AS prev2_ma_300
+      FROM cur
+      JOIN dedup prev
+        ON prev.ticker = cur.ticker
+       AND prev.date = (
+         SELECT MAX(p.date)
+         FROM dedup p
+         WHERE p.ticker = cur.ticker
+           AND p.date < cur.date
+       )
+      LEFT JOIN dedup prev2
+        ON prev2.ticker = cur.ticker
+       AND prev2.date = (
+         SELECT MAX(p2.date)
+         FROM dedup p2
+         WHERE p2.ticker = cur.ticker
+           AND p2.date < prev.date
+       )
+    ),
+    trans AS (
+      SELECT * FROM paired
+      WHERE prev_stage != stage
+    ),
+    latest AS (
+      SELECT ticker, MAX(date) AS d FROM trans GROUP BY ticker
+    ),
+    pick AS (
+      SELECT t.* FROM trans t JOIN latest l ON l.ticker = t.ticker AND l.d = t.date
+    ),
+    ${TRANSITION_DETAIL_ENRICHMENT_SQL}
     ORDER BY pick.date DESC, ABS(pick.stage - pick.prev_stage) DESC
     LIMIT ?
     `,
