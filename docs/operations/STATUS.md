@@ -47,6 +47,16 @@
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
   Claude Code のレビュー実行は毎回 read-only で上書きしている (CLAUDE.md の Codex 独立レビュー節を参照)。
 
+## 補完ソースの状態 (方針と用途は AGENTS.md。ここには日々変わる状態だけを書く)
+状態は確認日時点のもの。変わったら日付を付けて更新する。
+
+| 取得元 | キー・契約の有無 | Production での動作 | 確認日 |
+| --- | --- | --- | --- |
+| Finnhub | `FINNHUB_API_KEY` は Mac mini 上のどの env ファイルにも未設定 | 停止中。キー未設定のため US 決算取得は無効 | 2026-11-09 |
+| Kabutan | キー不要 | 稼働中 (`kabutan-themes` / `kabutan-material-news`、exit 0、鮮度 OK) | 2026-11-09 |
+| JPX | キー不要 | (1) 決算発表予定: 平日 21:10 の update-latest 内の batch-earnings で取得 (10/27 を除き成功)。earnings-refresh 単独の実行 (07:10・14:10・16:30) は 10/23〜11/9 に失敗していたが、2026-11-09 23:56 の env 適用後の実行で成功 (下の「記録の訂正」参照)。(2)(3) 定期実行なし (手動の監査スクリプトのみ。実行は都度オーナーの判断) | 2026-11-10 |
+| FMP | `FMP_API_KEY` は未設定。表示用のゲート `FMP_DISPLAY_LICENSE_APPROVED` も未設定 | 未使用 (Production から呼ぶ処理なし)。有効化には、キーの設置、表示ゲートの設定、Production 構成の変更について個別の承認が必要 | 2026-11-09 |
+
 ## 記録の訂正
 - **決算カレンダーの停止は誤り。止まっていたのは earnings-refresh 単独の実行だけ** (記録日: 2026-11-10)
   - 訂正前の記述 (2026-11-09 の最初の監査): 「earnings-refresh は 10/23 から止まっており、決算カレンダーが16日古い」。
