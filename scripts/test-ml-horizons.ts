@@ -121,7 +121,5 @@ assert.ok(
   'historical pattern search must expose the 200-day horizon',
 )
 
-const chartDrillSource = fs.readFileSync(path.join(process.cwd(), 'lib/chart-drill/server.ts'), 'utf8')
-assert.ok(chartDrillSource.includes('const MAX_HORIZON = 200'), 'chart drill must accept the 200-day horizon')
 
 console.log(`ML horizon consistency tests passed: ${ML_PRIMARY_HORIZON_LIST}`)

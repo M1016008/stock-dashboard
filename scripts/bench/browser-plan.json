@@ -20,7 +20,6 @@
     { "id": "ai-research", "path": "/ai/research" },
     { "id": "backtest-jp", "path": "/backtest" },
     { "id": "backtest-us", "path": "/us/analysis/backtest", "allowConsole": ["Minified React error #441", "[us-route-error]"], "interactions": [{ "type": "assertText", "contains": "画面を表示できませんでした" }] },
-    { "id": "chart-drill", "path": "/chart-drill" },
     { "id": "commodities", "path": "/commodities" },
     { "id": "commodity-detail", "path": "/commodities/us/CL" },
     { "id": "commodities-screener", "path": "/commodities/screener" },

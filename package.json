@@ -183,7 +183,6 @@
     "test:custom-charts": "tsx scripts/test-custom-charts.ts",
     "test:pms": "tsx scripts/test-physical-momentum.ts",
     "test:physical-plan": "tsx scripts/test-physical-plan.ts",
-    "test:chart-drill": "tsx scripts/test-chart-drill.ts",
     "test:us-shared-tools": "tsx scripts/test-us-shared-tools.ts",
     "test:us-sec-companyfacts": "tsx scripts/test-us-sec-companyfacts.ts",
     "test:sec-edgar-contract": "tsx scripts/test-sec-edgar-contract.ts",

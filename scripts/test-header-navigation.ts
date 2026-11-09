@@ -63,7 +63,6 @@ assert.equal(PAGE_CATALOG.usPeriodExplorer.href, '/us/period-explorer')
 assert.equal(PAGE_CATALOG.sectorStructure.href, '/sectors?view=structure')
 assert.equal(PAGE_CATALOG.historicalPatterns.href, '/ai/ma-lens#historical-pattern-search')
 assert.equal(PAGE_CATALOG.usAiResearch.href, '/ai/research?market=US')
-assert.equal(PAGE_CATALOG.usChartDrill.href, '/chart-drill?market=US')
 assert.equal(PAGE_CATALOG.usMarketMomentum.href, '/us/market-momentum')
 assert.equal(PAGE_CATALOG.usSectors.href, '/us/sectors')
 assert.equal(PAGE_CATALOG.mtfCloseCalendar.href, '/mtf-close-calendar')
@@ -133,10 +132,6 @@ const areaCases: Array<[string, string | null, HeaderArea]> = [
   // AssistantResearchClient reads `market` case-sensitively; the header must agree.
   ['/ai/research', 'us', 'jp'],
   ['/ai/research', 'COMMODITY', 'commodities'],
-  ['/chart-drill', 'US', 'us'],
-  // ChartDrillClient reads `market` case-insensitively; the header must agree.
-  ['/chart-drill', 'us', 'us'],
-  ['/chart-drill', 'COMMODITY', 'jp'],
   // On JP pages `market` is a market-segment filter, not a market switch.
   ['/period-explorer', 'US', 'jp'],
   ['/ma25m-monitor', 'US', 'jp'],
@@ -204,9 +199,6 @@ const expectedCounterparts: Array<[string, string | null, Record<HeaderArea, str
   // Shared query routes: the market query is added for US and removed for JP.
   ['/ai/research', null, { jp: '/', us: '/ai/research?market=US', commodities: '/commodities' }],
   ['/ai/research', 'US', { jp: '/ai/research', us: '/us', commodities: '/commodities' }],
-  ['/chart-drill', null, { jp: '/', us: '/chart-drill?market=US', commodities: '/commodities' }],
-  ['/chart-drill', 'US', { jp: '/chart-drill', us: '/us', commodities: '/commodities' }],
-  ['/chart-drill', 'us', { jp: '/chart-drill', us: '/us', commodities: '/commodities' }],
   // No commodity research page in navigation: go home rather than guess.
   ['/ai/research', 'COMMODITY', { jp: '/', us: '/us', commodities: '/commodities' }],
   // Period Explorer keeps the analytical task while dropping JP-only filters.
@@ -257,7 +249,7 @@ for (const sample of samplePaths) {
     assert.doesNotMatch(link.href, /#/, `${sample} -> ${link.href} must not carry a fragment`)
     const target = new URL(link.href, 'https://stockboard.invalid')
     if (target.searchParams.has('market')) {
-      assert.ok(['/ai/research', '/chart-drill'].includes(target.pathname), `${link.href} must not attach market to a page that ignores it`)
+      assert.ok(['/ai/research'].includes(target.pathname), `${link.href} must not attach market to a page that ignores it`)
     }
   }
 }
