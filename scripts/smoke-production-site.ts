@@ -47,7 +47,6 @@ const pages: Check[] = [
   '/ai/research',
   '/ai/transitions',
   '/backtest',
-  '/chart-drill',
   '/commodities',
   '/commodities/jp/1328',
   '/commodities/screener',
@@ -619,7 +618,6 @@ const apiChecks: Check[] = [
     path: '/api/backtest/ml-candidates?date=2026-05-27&horizon=40&direction=up&limit=5',
     kind: 'json',
   },
-  { name: 'chart drill question', path: '/api/chart-drill/question', kind: 'json' },
   { name: 'ML model status', path: '/api/ml/model-status', kind: 'json' },
   {
     name: 'ML reliability status',

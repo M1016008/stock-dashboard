@@ -202,15 +202,6 @@ export const PAGE_CATALOG = {
     commandBadge: '分析',
     searchTerms: 'バックテスト',
   },
-  chartDrill: {
-    href: '/chart-drill',
-    label: 'チャートドリル',
-    description: '過去チャートで初動察知を練習',
-    icon: ChartCandlestick,
-    commandVerb: '練習',
-    commandBadge: '分析',
-    searchTerms: 'トレーニング',
-  },
   tradeWorkbench: {
     href: '/trade/workbench',
     label: '売買候補',
@@ -409,15 +400,6 @@ export const PAGE_CATALOG = {
     commandBadge: 'US分析',
     searchTerms: '米国株 trade workbench 売買 候補 注文 下書き',
   },
-  usChartDrill: {
-    href: '/chart-drill?market=US',
-    label: 'USチャートドリル',
-    description: 'US過去チャートで初動を練習',
-    icon: ChartCandlestick,
-    commandVerb: '練習',
-    commandBadge: 'US分析',
-    searchTerms: '米国株 トレーニング',
-  },
   usMa25mMonitor: {
     href: '/us/ma25m-monitor',
     label: 'US月足MA監視',
@@ -508,7 +490,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'stages', label: '6ステージ', pageIds: ['hexStage', 'transitions'], column: 1 },
         { id: 'ma-similarity', label: 'MA・類似分析', pageIds: ['maLens'], column: 1 },
-        { id: 'validation', label: '検証・実践', pageIds: ['backtest', 'chartDrill', 'tradeWorkbench', 'customCharts'], column: 2 },
+        { id: 'validation', label: '検証・実践', pageIds: ['backtest', 'tradeWorkbench', 'customCharts'], column: 2 },
       ],
     },
     {
@@ -556,7 +538,7 @@ export const NAVIGATION_BY_AREA = {
       icon: Activity,
       sections: [
         { id: 'us-models', label: '構造・AI', pageIds: ['usMlLens', 'usTransitions'], column: 1 },
-        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usChartDrill', 'usTradeWorkbench', 'customCharts'], column: 2 },
+        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usTradeWorkbench', 'customCharts'], column: 2 },
       ],
     },
     {
