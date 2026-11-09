@@ -156,13 +156,17 @@ closing the terminal sends it no SIGHUP, and keeps the Mac from idle sleep for
 as long as the CLI runs (verification can take days):
 
 ```
-nohup node --import tsx scripts/run-weekly-backup-generation.ts <execute arguments> > <log path> 2>&1 & cli_pid=$!; disown; nohup /usr/bin/caffeinate -i -w "$cli_pid" > /dev/null 2>&1 & disown; printf '%s\n' "$cli_pid" > <pid file>; ps -o pid=,command= -p "$(cat <pid file>)"
+nohup node --import tsx scripts/run-weekly-backup-generation.ts <execute arguments> > <log path> 2>&1 & cli_pid=$!; disown; nohup /usr/bin/caffeinate -i -w "$cli_pid" > /dev/null 2>&1 & disown; printf '%s\n' "$cli_pid" > <pid file>; ps -o pid=,command= -p "$cli_pid"
 ```
+
+Replace each `<...>` placeholder with a quoted real path (the approval request
+gives the exact line).
 
 Start `node` directly (not through npm or a wrapper) so that `$!` is the CLI's
 own PID; `;` keeps each step in the current shell, so `disown` acts on the
-right job. The last command must print the CLI's `node` command line; if it does
-not, run `echo $cli_pid` in the same shell and write that PID to the file by hand.
+right job. The last command must print the CLI's `node` command line. If it prints
+nothing, the CLI has already exited: treat the start as failed, read the log,
+and follow step 3 below.
 
 Then follow the log with `tail -f`. `caffeinate` does not prevent sleep from
 closing the lid or from power loss.
@@ -174,8 +178,9 @@ writer label, also record its process group (`ps -o pgid= -p <pid>` for a
 running PID) and its definition hash
 (`shasum -a 256 ~/Library/LaunchAgents/<label>.plist`) in the same file.
 
-Pre-start check (accepted risk 4): start only when none of the following shows
-an active writer job. It shows the state at the moment of the check only, and
+Pre-start check (accepted risk 4): start only when every check below passes
+(each looks for current writer activity or, for `updateWindowConflict`, a daily
+update scheduled within the hold limit). It shows the state at the moment of the check only, and
 it does not cover the trigger worker's own maintenance writes (recovery,
 cleanup of expired rows and files, its lease).
 - `launchctl list | grep com.stockboard`: every writer label other than
