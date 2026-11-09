@@ -62,6 +62,11 @@ if (mode !== 'observe' && mode !== 'execute') throw new Error(`UNKNOWN_MODE:${mo
 const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as WeeklyBackupPlan
 validateWeeklyBackupPlan(plan)
 assertWeeklyBackupPlanSha256(plan, expectedPlanSha256)
+// Downstream containment checks are lexical, so no planned path may pass through a symlink.
+const destinationRootOrParent = fs.existsSync(plan.destinationRoot) ? plan.destinationRoot : path.dirname(plan.destinationRoot)
+for (const planned of [plan.sourceMount, plan.destinationMount, destinationRootOrParent, ...MARKETS.map((m) => plan.sourceDatabasePaths[m])]) {
+  if (fs.realpathSync(planned) !== planned) throw new Error(`PLANNED_PATH_NOT_CANONICAL:${planned}`)
+}
 
 function run(file: string, args: string[], timeoutMs = 60_000): string {
   const result = spawnSync(file, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
@@ -89,8 +94,7 @@ function diskutilPlist(target: string): Record<string, unknown> {
   return JSON.parse(result.stdout) as Record<string, unknown>
 }
 
-function physicalWholeDisk(mount: string): string {
-  const info = diskutilPlist(mount)
+function physicalWholeDisk(mount: string, info: Record<string, unknown>): string {
   const stores = info.APFSPhysicalStores as Array<{ APFSPhysicalStore: string }> | undefined
   const store = stores?.[0]?.APFSPhysicalStore ?? String(info.ParentWholeDisk ?? '')
   const whole = store.match(/^(disk\d+)/)?.[1]
@@ -128,7 +132,7 @@ function volumeIdentity(mount: string): { mount: string; uuid: string; serial: s
   return {
     mount,
     uuid: String(info.VolumeUUID ?? ''),
-    serial: physicalSerial(physicalWholeDisk(mount)),
+    serial: physicalSerial(physicalWholeDisk(mount, info)),
     freeBytes: Number(stats.bavail * stats.bsize),
   }
 }
@@ -306,7 +310,7 @@ function assertRuntimeIdentity(): void {
     if (info.MountPoint !== mount || String(info.VolumeUUID).toUpperCase() !== uuid.toUpperCase()) {
       throw new Error(`RUNTIME_VOLUME_IDENTITY_CHANGED:${mount}`)
     }
-    if (physicalSerial(physicalWholeDisk(mount)) !== serial) throw new Error(`RUNTIME_PHYSICAL_SERIAL_CHANGED:${mount}`)
+    if (physicalSerial(physicalWholeDisk(mount, info)) !== serial) throw new Error(`RUNTIME_PHYSICAL_SERIAL_CHANGED:${mount}`)
   }
 }
 

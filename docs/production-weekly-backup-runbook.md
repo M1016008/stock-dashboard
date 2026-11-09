@@ -90,6 +90,13 @@ Pinned SQLite 3.54.1 tooling is stored outside Production under
 Each one-shot plan fixes the sqlite3 and sqlite3_rsync SHA-256 values plus the
 upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
 
+Accepted risks (recorded, not coded): only `com.stockboard.*` LaunchAgents and
+update locks are checked for writers, so do not run manual `sqlite3`/Node tools
+against Production during the hold; a write by one is still caught by the WAL
+growth and source size/mtime checks and fails the run. Observe mode calls
+`/api/health`, which writes the same storage-probe telemetry as the existing
+`com.stockboard.web-health` job; it does not write to the databases.
+
 ## Abort and writer restoration
 
 The plan's `maximumWriterHoldMs` is the hold limit (3 hours for the first
@@ -106,7 +113,9 @@ never touched):
    (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
    error propagates to the Writer Hold, which restores every label that was
    loaded before the hold, then the CLI exits non-zero. The candidate stays
-   unpublished. The log shows `SQLITE_RSYNC_DEADLINE_EXCEEDED` and no
+   unpublished. The log shows `SQLITE_RSYNC_DEADLINE_EXCEEDED` (or
+   `WRITER_HOLD_LIMIT_EXCEEDED` if the limit passes while writers are stopping
+   or between markets) and no
    `WRITERS_RESTORED` phase line, followed by `FAILED`.
 2. **Operator abort during the hold.** Send `kill -INT <CLI node pid>`. The CLI
    does not exit on SIGINT/SIGTERM/SIGHUP; it fails the next runtime-identity

@@ -214,6 +214,13 @@ export async function runMonitoredSqliteRsync(args: {
   if (result.code !== 0) {
     throw new Error(`SQLITE_RSYNC_FAILED:${result.code}:${result.signal}:${stderr.trim() || stdout.trim()}`)
   }
+  // Sample once more after exit: a source write after the last one-second sample must still fail the run.
+  const finalStat = fs.lstatSync(args.sourceDatabasePath)
+  peakWalGrowthBytes = Math.max(peakWalGrowthBytes,
+    Math.abs(walBytes(args.limits.sourceWalPath) - args.limits.sourceWalBytesAtStart))
+  if (peakWalGrowthBytes > args.limits.maximumWalGrowthBytes) throw new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
+  if (finalStat.size !== args.limits.sourceDatabaseSizeAtStart
+    || finalStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) throw new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
   args.assertRuntimeIdentity()
   return { elapsedMs: Date.now() - started, sourceWalGrowthBytes: peakWalGrowthBytes, stderr: stderr.trim() }
 }
