@@ -93,16 +93,21 @@ upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
 ### Guarantee and accepted risks (owner-approved 2026-11-09)
 
 Guarantee: each market's database in a published generation is a
-transaction-consistent SQLite snapshot. For each of the four source files (JP
-and US database and WAL), the runner records device, inode, size, mtime and
-ctime as the first step of the copy operation (which starts once every writer
-process group has exited and one `launchctl print` check per writer has passed)
-and records them again after the last copy. A write that changes a file between
-its two records, including a WAL reused at the same length, fails the run
-without publishing; the per-copy monitor also checks the market being copied
-every second. Consistency of work that spans several transactions or both
-markets is protected for approved writers by the existing update-lock and
-daily-window checks, and for anything else only by the operating rule below.
+transaction-consistent SQLite snapshot of that database alone. It is not
+guaranteed that a multi-transaction job, or one spanning JP and US, is either
+wholly in or wholly out of the generation (accepted risks 3 and 4).
+
+Detection, with its conditions: for each of the four source files (JP and US
+database and WAL), the runner records device, inode, size, mtime and ctime as
+the first step of the copy operation (which starts once every writer process
+group has exited and one `launchctl print` check per writer has passed) and
+records them again after the last copy. If any of those values differs between
+a file's two records (a WAL reused at the same length still changes its mtime),
+the run fails without publishing. Writes outside those two records, or that
+leave no trace in those values, are not detected (accepted risks 3 to 7). While
+a market is being copied, its monitor repeats the database and WAL checks after
+each round of runtime-identity probes, so the interval is about one second plus
+the probe time, and longer when probes are slow.
 
 Operating rule: while writers are stopped, do not run manual `sqlite3`/Node
 tools against Production, and do not operate on the StockBoard repository or
@@ -118,15 +123,24 @@ Accepted risks (recorded, not coded):
 3. A manual job that commits part of its work just before the baseline and the
    rest after the final record can leave JP and US (or one database) at
    different points of that job; the operating rule is the only protection.
-4. The four files are recorded one after another, so a write between two of
+4. The update-lock and daily-window checks only observe one moment; they do not
+   exclude other work. An approved writer (for example the resident
+   trigger-historical-scan worker, or an update job started by hand) that
+   starts a multi-transaction job after the pre-hold observation and is stopped
+   by the hold partway through leaves that partial state in the generation.
+   The post-stop check skips a lock whose owner process has exited, so it does
+   not catch this either. Mitigation: the pre-start check under "Abort and
+   writer restoration"; it narrows the gap to the seconds between that check
+   and the hold but does not close it.
+5. The four files are recorded one after another, so a write between two of
    those records may be absorbed into a baseline or fall after a final record.
    Such a write happens before the copies start or after they finish.
-5. A write after a file's final record (before writers are restarted) is not
+6. A write after a file's final record (before writers are restarted) is not
    detected; both copies are already complete.
-6. A WAL that is created, written and removed entirely between samples while
+7. A WAL that is created, written and removed entirely between samples while
    absent at both records is not seen; a committed transaction would still
    change the main file.
-7. Each runtime identity check runs `system_profiler` once per volume; the
+8. Each runtime identity check runs `system_profiler` once per volume; the
    resulting stop latency is the worst case given under "Abort and writer
    restoration".
 
@@ -144,6 +158,15 @@ never touched):
 writer label, also record its process group (`ps -o pgid= -p <pid>` for a
 running PID) and its definition hash
 (`shasum -a 256 ~/Library/LaunchAgents/<label>.plist`) in the same file.
+
+Pre-start check (accepted risk 4): start only when no writer is mid-job.
+- `launchctl list | grep com.stockboard`: every writer label other than
+  `com.stockboard.trigger-historical-scan` shows `-` for its PID.
+- `pgrep -P <trigger-historical-scan PID> -fl caffeinate` prints nothing (the
+  worker holds `caffeinate` only while a claimed write job is running).
+- the observe output shows `"writerLockOwners": []` and
+  `"updateWindowConflict": false`.
+If any check fails, wait and repeat; do not start until all pass.
 
 1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
    (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
