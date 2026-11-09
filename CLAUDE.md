@@ -15,8 +15,10 @@ Claude Code が実装を担当し、Codex が独立レビューを行う。最�
 PR、データを書き換えるコード、それ以外の Production 操作には適用しない。
 
 ### やり方
-- Mac mini の `codex` CLI を使う。`~/.codex/config.toml` は `sandbox_mode = "danger-full-access"` なので、
-  必ず `-c sandbox_mode='"read-only"' -c approval_policy='"never"'` で上書きする。
+- Mac mini の `codex` CLI を使う。`~/.codex/config.toml` の既定は `sandbox_mode = "danger-full-access"` のまま
+  変更しない (2026-11-09 オーナー決定)。そのため、Claude Code が Codex にレビューさせるときは**毎回必ず**
+  `-c sandbox_mode='"read-only"' -c approval_policy='"never"'` を付けて上書きする。この上書きなしで
+  `codex` を実行しない。
 - PR は、その branch の worktree で `codex exec` を実行し、`git diff origin/<PR の base>...HEAD` を対象に指定する
   (base は `gh pr view <番号> --json baseRefName` で確認する)。
   `codex review --base` は独自の指示文と併用できないため使わない。
