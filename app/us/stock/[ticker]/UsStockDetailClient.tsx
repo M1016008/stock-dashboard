@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   BrainCircuit,
   ChartCandlestick,
-  GitCompareArrows,
   Landmark,
   LayoutDashboard,
   Loader2,
@@ -16,7 +15,6 @@ import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
-import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
@@ -35,12 +33,7 @@ import {
 import { useUsPhysicalMomentum } from '@/components/us/stock-detail/useUsPhysicalMomentum'
 import type { StockQuote } from '@/types/stock'
 import type { NextUsEarnings } from '@/lib/queries/us-earnings'
-import {
-  isComparedSymbol,
-  recordRecentSymbol,
-  toggleComparedSymbol,
-  WORKSPACE_EVENT,
-} from '@/lib/client/stock-workspace'
+import { recordRecentSymbol } from '@/lib/client/stock-workspace'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 type UsStockDetailTab = 'overview' | 'chart' | 'fundamental' | 'scenario' | 'ml'
@@ -75,7 +68,6 @@ export function UsStockDetailClient({
   const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
   const [fundamentalView, setFundamentalView] = useState<UsFundamentalView>('summary')
-  const [compared, setCompared] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -185,15 +177,11 @@ export function UsStockDetailClient({
         setFundamentalView(hash)
       }
     }
-    const syncCompared = () => setCompared(isComparedSymbol('US', quote.ticker))
     readTab()
-    syncCompared()
     recordRecentSymbol({ market: 'US', ticker: quote.ticker, name: quote.name })
     window.addEventListener('hashchange', readTab)
-    window.addEventListener(WORKSPACE_EVENT, syncCompared)
     return () => {
       window.removeEventListener('hashchange', readTab)
-      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
     }
   }, [quote])
 
@@ -292,18 +280,6 @@ export function UsStockDetailClient({
                 <div className="mt-1 font-mono text-[11px]">価格日</div>
               </div>
             )}
-            <button
-              type="button"
-              onClick={() => setCompared(toggleComparedSymbol({ market: 'US', ticker: quote.ticker, name: quote.name }))}
-              className="btn max-sm:min-h-11! max-sm:min-w-11!"
-              data-variant={compared ? 'primary' : undefined}
-              aria-pressed={compared}
-              aria-label={compared ? '比較から外す' : '比較へ追加'}
-              title={compared ? '比較から外す' : '比較へ追加'}
-            >
-              <GitCompareArrows size={14} aria-hidden />
-              <span className="hidden sm:inline">{compared ? '比較中' : '比較に追加'}</span>
-            </button>
           </div>
         </div>
         {quote.priceQualityWarning && (
@@ -354,7 +330,7 @@ export function UsStockDetailClient({
         />
       )}
 
-      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ → AI */}
+      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ */}
       {analysisParamsReady && activeTab === 'scenario' && (
         <>
           <ScenarioProjectionChart
@@ -378,7 +354,6 @@ export function UsStockDetailClient({
               source: 'US EOD',
             }}
           />
-          <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
         </>
       )}
 

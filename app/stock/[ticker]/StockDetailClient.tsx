@@ -11,7 +11,6 @@ import {
   ChartCandlestick,
   ChevronRight,
   FileSearch,
-  GitCompareArrows,
   LayoutDashboard,
   Landmark,
   NotebookPen,
@@ -93,7 +92,6 @@ import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
-import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { FinancialPerformanceTimeline } from '@/components/stock/FinancialPerformanceTimeline'
 import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
 import { StockLargeHolders } from '@/components/large-holders/StockLargeHolders'
@@ -124,12 +122,7 @@ import {
   physicalPlanStatisticsLabel,
   type PhysicalPlanDecision,
 } from '@/lib/physical-plan'
-import {
-  isComparedSymbol,
-  recordRecentSymbol,
-  toggleComparedSymbol,
-  WORKSPACE_EVENT,
-} from '@/lib/client/stock-workspace'
+import { recordRecentSymbol } from '@/lib/client/stock-workspace'
 import type { StockQuote } from '@/types/stock'
 
 interface StockDetailClientProps {
@@ -294,7 +287,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<StockDetailTab>('overview')
   const [fundamentalTab, setFundamentalTab] = useState<FundamentalTab>('summary')
-  const [compared, setCompared] = useState(false)
 
   const hardcoded = findTicker(ticker)
 
@@ -401,16 +393,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         setActiveTab(hash)
       }
     }
-    const syncCompared = () => setCompared(isComparedSymbol('JP', displayCode))
     readTab()
-    syncCompared()
     recordRecentSymbol({ market: 'JP', ticker: displayCode, name: name === '---' ? null : name })
     window.addEventListener('hashchange', readTab)
-    window.addEventListener(WORKSPACE_EVENT, syncCompared)
     return () => {
       if (legacyFocusTimer != null) window.clearTimeout(legacyFocusTimer)
       window.removeEventListener('hashchange', readTab)
-      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
     }
   }, [displayCode, name])
 
@@ -512,17 +500,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             {loading && !displayedQuote && !analysisDate && (
               <span className="text-[12px] text-[var(--color-text-tertiary)]" role="status">価格を読み込み中…</span>
             )}
-            <button
-              type="button"
-              onClick={() => setCompared(toggleComparedSymbol({ market: 'JP', ticker: displayCode, name }))}
-              className="btn"
-              data-variant={compared ? 'primary' : undefined}
-              aria-pressed={compared}
-              title={compared ? '比較から外す' : '比較へ追加'}
-            >
-              <GitCompareArrows size={14} aria-hidden="true" />
-              <span className="hidden sm:inline">{compared ? '比較中' : '比較に追加'}</span>
-            </button>
           </div>
         </div>
         <StockDetailTabs active={activeTab} onSelect={selectTab} />
@@ -601,7 +578,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               sector33: displaySector33,
             }}
           />
-          <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
         </>
       )}
 
