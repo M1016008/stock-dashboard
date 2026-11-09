@@ -110,9 +110,14 @@ never touched):
    `WRITERS_RESTORED` phase line, followed by `FAILED`.
 2. **Operator abort during the hold.** Send `kill -INT <CLI node pid>`. The CLI
    does not exit on SIGINT/SIGTERM/SIGHUP; it fails the next runtime-identity
-   check (within one second during sync) with `OPERATOR_ABORT_REQUESTED`, stops
+   check with `OPERATOR_ABORT_REQUESTED`, stops
    `sqlite3_rsync`, restores the writers, and exits non-zero. Do not use
    `kill -9` on the CLI while writers are held.
+   The monitor checks the hold deadline, then the abort flag and volume
+   identity, about once a second. The identity probes normally take about one
+   second together; each times out after 15 seconds and a timeout fails the
+   run. A stop can therefore lag the hold limit or the signal by that probe
+   time.
 3. **After any non-zero exit,** confirm:
    - no `sqlite3_rsync` process remains (`pgrep -fl sqlite3_rsync` prints nothing);
    - every label that was loaded before the run is loaded again

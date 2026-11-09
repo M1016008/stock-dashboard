@@ -79,10 +79,14 @@ function plistJson(file: string): Record<string, unknown> {
 }
 
 // diskutil -plist piped through plutil without a shell.
+// Identity probes run every second while writers are held and block the event
+// loop. Each normally takes under a second; a probe that hangs fails the run.
+const PROBE_TIMEOUT_MS = 15_000
+
 function diskutilPlist(target: string): Record<string, unknown> {
-  const xml = run('/usr/sbin/diskutil', ['info', '-plist', target], 30_000)
+  const xml = run('/usr/sbin/diskutil', ['info', '-plist', target], PROBE_TIMEOUT_MS)
   const result = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
-    input: xml, encoding: 'utf8', timeout: 30_000,
+    input: xml, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
   })
   if (result.status !== 0) throw new Error(`PLUTIL_FAILED:${result.stderr.trim()}`)
   return JSON.parse(result.stdout) as Record<string, unknown>
@@ -99,7 +103,7 @@ function physicalWholeDisk(mount: string): string {
 
 // NVMe serials come from system_profiler; USB serials from the IOUSBHostDevice tree.
 function physicalSerial(wholeDisk: string): string {
-  const profile = JSON.parse(run('/usr/sbin/system_profiler', ['-json', 'SPNVMeDataType'], 120_000)) as unknown
+  const profile = JSON.parse(run('/usr/sbin/system_profiler', ['-json', 'SPNVMeDataType'], PROBE_TIMEOUT_MS)) as unknown
   const stack: unknown[] = [profile]
   while (stack.length) {
     const node = stack.pop()
@@ -111,7 +115,7 @@ function physicalSerial(wholeDisk: string): string {
     }
   }
   let serial: string | null = null
-  for (const line of run('/usr/sbin/ioreg', ['-r', '-c', 'IOUSBHostDevice', '-l', '-w0']).split('\n')) {
+  for (const line of run('/usr/sbin/ioreg', ['-r', '-c', 'IOUSBHostDevice', '-l', '-w0'], PROBE_TIMEOUT_MS).split('\n')) {
     if (/^\+-o /.test(line)) serial = null
     const serialMatch = line.match(/"USB Serial Number" = "([^"]+)"/)
     if (serialMatch && serial === null) serial = serialMatch[1]

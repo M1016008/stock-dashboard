@@ -127,6 +127,7 @@ export async function runMonitoredSqliteRsync(args: {
   onProgress?: (progress: RsyncProgress) => void
 }): Promise<{ elapsedMs: number; sourceWalGrowthBytes: number; stderr: string }> {
   assertRegularFile(args.sqliteRsyncBinary)
+  fs.accessSync(args.sqliteRsyncBinary, fs.constants.X_OK)
   assertRegularFile(args.sourceDatabasePath)
   assertRegularFile(args.candidateDatabasePath)
   args.assertRuntimeIdentity()
@@ -139,9 +140,25 @@ export async function runMonitoredSqliteRsync(args: {
     { stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout.on('data', (chunk) => { stdout = `${stdout}${String(chunk)}`.slice(-4_000_000) })
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4_000_000) })
+  // A spawn failure is reported through 'error' and never through 'exit'.
+  // Without this handler Node would exit before the writer hold restores writers.
+  let spawnError: Error | null = null
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }))
+    child.once('error', (error) => {
+      spawnError = error
+      resolve({ code: child.exitCode, signal: child.signalCode })
+    })
+  })
 
   let monitorError: Error | null = null
-  while (child.exitCode === null && child.signalCode === null) {
+  while (child.exitCode === null && child.signalCode === null && spawnError === null) {
+    // Check the hold deadline first: the identity probe below can block.
+    if (Date.now() >= args.limits.deadlineMs) {
+      monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
+      child.kill('SIGTERM')
+      break
+    }
     try { args.assertRuntimeIdentity() } catch (error) {
       monitorError = error instanceof Error ? error : new Error(String(error))
     }
@@ -188,12 +205,12 @@ export async function runMonitoredSqliteRsync(args: {
   const killTimer = monitorError ? setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
   }, 5_000) : null
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) resolve({ code: child.exitCode, signal: child.signalCode })
-    else child.once('exit', (code, signal) => resolve({ code, signal }))
-  })
+  const result = spawnError !== null || child.exitCode !== null || child.signalCode !== null
+    ? { code: child.exitCode, signal: child.signalCode }
+    : await exited
   if (killTimer) clearTimeout(killTimer)
   if (monitorError) throw monitorError
+  if (spawnError !== null) throw new Error(`SQLITE_RSYNC_SPAWN_FAILED:${(spawnError as Error).message}`)
   if (result.code !== 0) {
     throw new Error(`SQLITE_RSYNC_FAILED:${result.code}:${result.signal}:${stderr.trim() || stdout.trim()}`)
   }
@@ -209,6 +226,13 @@ function remainingMs(deadlineMs: number): number {
 
 function pragma(sqliteBinary: string, databasePath: string, statement: string, timeoutMs: number): string {
   return command(sqliteBinary, ['-readonly', databasePath, statement], timeoutMs)
+}
+
+function assertNoPendingWal(databasePath: string): void {
+  const walPath = `${databasePath}-wal`
+  if (fs.existsSync(walPath) && fs.lstatSync(walPath).size !== 0) {
+    throw new Error(`WAL_NOT_CHECKPOINTED:${databasePath}`)
+  }
 }
 
 export function verifyReplica(args: {
@@ -229,6 +253,9 @@ export function verifyReplica(args: {
     'PRAGMA integrity_check;', remainingMs(args.deadlineMs))
   pragma(args.sqliteBinary, args.candidateDatabasePath,
     'SELECT count(*) FROM sqlite_schema;', remainingMs(args.deadlineMs))
+  // The restore clone copies only the main database file. Committed pages
+  // still in a WAL would be missing from it, so require a checkpointed candidate.
+  assertNoPendingWal(args.candidateDatabasePath)
   cloneReplicaSeed({
     priorGenerationRoot: args.candidateRoot,
     priorDatabasePath: args.candidateDatabasePath,
@@ -243,6 +270,8 @@ export function verifyReplica(args: {
   const restoreSha256 = fileSha256(args.restoreDatabasePath, args.deadlineMs)
   pragma(args.sqliteBinary, args.restoreDatabasePath,
     'SELECT count(*) FROM sqlite_schema;', remainingMs(args.deadlineMs))
+  assertNoPendingWal(args.candidateDatabasePath)
+  assertNoPendingWal(args.restoreDatabasePath)
   return {
     databaseSha256,
     quickCheck,
