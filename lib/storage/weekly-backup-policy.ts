@@ -30,6 +30,8 @@ export const WEEKLY_BACKUP_READER_LABELS = [
   'com.stockboard.analog-search',
   'com.stockboard.friend-readonly-gateway',
   'com.stockboard.web-health',
+  // Not a database client: checks internal SSD / OWC free space hourly.
+  'com.stockboard.dev-capacity-monitor',
 ] as const
 
 export type Market = 'JP' | 'US'

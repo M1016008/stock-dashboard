@@ -256,7 +256,8 @@ async function observeDynamic(): Promise<WeeklyBackupDynamicObservation> {
     }, 0),
     activeWriterLabels: plan.writerLabels.filter((label) => (loaded.get(label) ?? null) !== null),
     unknownWriterLabels: [...loaded.entries()]
-      .filter(([label, pid]) => pid !== null && !known.has(label))
+      // A loaded but idle job (PID "-") can still start during the hold.
+      .filter(([label]) => !known.has(label))
       .map(([label]) => label),
     writerLockOwners: activeWriterLockOwners(),
     updateWindowConflict: dailyUpdateWindowConflict(now),

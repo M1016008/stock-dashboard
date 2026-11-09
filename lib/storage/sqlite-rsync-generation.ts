@@ -145,32 +145,38 @@ export async function runMonitoredSqliteRsync(args: {
     try { args.assertRuntimeIdentity() } catch (error) {
       monitorError = error instanceof Error ? error : new Error(String(error))
     }
-    const currentWalBytes = walBytes(args.limits.sourceWalPath)
-    const growth = Math.abs(currentWalBytes - args.limits.sourceWalBytesAtStart)
-    const available = args.readDestinationFreeBytes?.() ?? freeBytes(args.limits.destinationMount)
-    const candidateGrowth = Math.max(0, args.limits.destinationFreeBytesAtStart - available)
-    const sourceStat = fs.lstatSync(args.sourceDatabasePath)
-    peakWalGrowthBytes = Math.max(peakWalGrowthBytes, growth)
-    const progress: RsyncProgress = {
-      at: new Date().toISOString(),
-      elapsedMs: Date.now() - started,
-      destinationFreeBytes: available,
-      sourceWalBytes: currentWalBytes,
-      sourceWalGrowthBytes: growth,
-      candidatePhysicalGrowthBytes: candidateGrowth,
-    }
-    try { args.onProgress?.(progress) } catch (error) {
-      monitorError = error instanceof Error ? error : new Error(String(error))
-    }
-    if (Date.now() >= args.limits.deadlineMs) monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
-    else if (available < args.limits.destinationReserveBytes) monitorError = new Error('DESTINATION_RESERVE_BREACHED')
-    else if (candidateGrowth > args.limits.maximumCandidateGrowthBytes) {
-      monitorError = new Error('CANDIDATE_GROWTH_LIMIT_EXCEEDED')
-    }
-    else if (growth > args.limits.maximumWalGrowthBytes) monitorError = new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
-    else if (sourceStat.size !== args.limits.sourceDatabaseSizeAtStart
-      || sourceStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) {
-      monitorError = new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+    // Any probe failure (for example a disconnected volume) must still stop and
+    // reap the child below before the writer hold restores writers.
+    try {
+      const currentWalBytes = walBytes(args.limits.sourceWalPath)
+      const growth = Math.abs(currentWalBytes - args.limits.sourceWalBytesAtStart)
+      const available = args.readDestinationFreeBytes?.() ?? freeBytes(args.limits.destinationMount)
+      const candidateGrowth = Math.max(0, args.limits.destinationFreeBytesAtStart - available)
+      const sourceStat = fs.lstatSync(args.sourceDatabasePath)
+      peakWalGrowthBytes = Math.max(peakWalGrowthBytes, growth)
+      const progress: RsyncProgress = {
+        at: new Date().toISOString(),
+        elapsedMs: Date.now() - started,
+        destinationFreeBytes: available,
+        sourceWalBytes: currentWalBytes,
+        sourceWalGrowthBytes: growth,
+        candidatePhysicalGrowthBytes: candidateGrowth,
+      }
+      try { args.onProgress?.(progress) } catch (error) {
+        monitorError = error instanceof Error ? error : new Error(String(error))
+      }
+      if (Date.now() >= args.limits.deadlineMs) monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
+      else if (available < args.limits.destinationReserveBytes) monitorError = new Error('DESTINATION_RESERVE_BREACHED')
+      else if (candidateGrowth > args.limits.maximumCandidateGrowthBytes) {
+        monitorError = new Error('CANDIDATE_GROWTH_LIMIT_EXCEEDED')
+      }
+      else if (growth > args.limits.maximumWalGrowthBytes) monitorError = new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
+      else if (sourceStat.size !== args.limits.sourceDatabaseSizeAtStart
+        || sourceStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) {
+        monitorError = new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+      }
+    } catch (error) {
+      monitorError ??= error instanceof Error ? error : new Error(String(error))
     }
     if (monitorError) {
       child.kill('SIGTERM')

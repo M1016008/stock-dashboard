@@ -128,7 +128,9 @@ assert.equal(manifest.priorGeneration.promotedAsVerified, false)
 
 const initialPlan = JSON.parse(fs.readFileSync(
   'docs/production-weekly-backup-initial-plan-20261101.json', 'utf8')) as WeeklyBackupPlan
-validateWeeklyBackupPlan(initialPlan)
+// The 2026-11-01 plan is expired and superseded (design B changed the runbook and
+// the kept-online label set). Only its frozen digest is checked here; the runner
+// rejects it at execution through RUNBOOK_SHA256_MISMATCH and the start window.
 const initialPlanHash = weeklyBackupPlanSha256(initialPlan)
 const frozenPlanHash = fs.readFileSync(
   'docs/production-weekly-backup-initial-plan-20261101.sha256', 'utf8').trim().split(/\s+/)[0]
@@ -138,7 +140,7 @@ assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, '0'.repeat(64)),
   /WEEKLY_BACKUP_PLAN_SHA256_MISMATCH/)
 assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, 'not-a-sha'),
   /INVALID_APPROVED_PLAN_SHA256/)
-assert.equal(initialPlan.runbookSha256, createHash('sha256')
+assert.notEqual(initialPlan.runbookSha256, createHash('sha256')
   .update(fs.readFileSync('docs/production-weekly-backup-runbook.md')).digest('hex'))
 
 function rejects(mutate: (nextPlan: WeeklyBackupPlan, nextObserved: WeeklyBackupObservation,

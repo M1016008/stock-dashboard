@@ -271,6 +271,49 @@ async function main(): Promise<void> {
       'A stale dynamic gate must fail before Writer Hold')
     assert.equal(fs.existsSync(path.join(destinationRoot, stalePlan.runId, 'COMPLETE.manifest.json')), false)
 
+    // An abort signal handled after verification (during postflight) must block publication.
+    const abortPlan = structuredClone(plan)
+    abortPlan.runId = 'weekly-runner-fixture-abort-before-publish'
+    let abortRequested = false
+    await assert.rejects(() => runWeeklyBackupGeneration({
+      plan: abortPlan,
+      expectedPlanSha256: weeklyBackupPlanSha256(abortPlan),
+      observation: { ...observation, now: new Date().toISOString() },
+      runbookPath,
+      approvedWriters,
+      writerDriver,
+      assertRuntimeIdentity: () => { if (abortRequested) throw new Error('OPERATOR_ABORT_REQUESTED:SIGINT') },
+      observeDynamicGate: async () => dynamicObservation(),
+      readDestinationFreeBytes: () => 900_000_000_000,
+      observePostflight: async () => {
+        abortRequested = true
+        return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
+      },
+      operations,
+    }), /OPERATOR_ABORT_REQUESTED/)
+    assert.equal(fs.existsSync(path.join(destinationRoot, abortPlan.runId, 'COMPLETE.manifest.json')), false)
+
+    // A start window that closed after observation must fail before any write.
+    const closedPlan = structuredClone(plan)
+    closedPlan.runId = 'weekly-runner-fixture-start-window-closed'
+    closedPlan.startsAt = new Date(Date.now() - 120_000).toISOString()
+    closedPlan.mustStartBefore = new Date(Date.now() - 1).toISOString()
+    await assert.rejects(() => runWeeklyBackupGeneration({
+      plan: closedPlan,
+      expectedPlanSha256: weeklyBackupPlanSha256(closedPlan),
+      observation: { ...observation, now: new Date(Date.now() - 60_000).toISOString() },
+      runbookPath,
+      approvedWriters,
+      writerDriver,
+      assertRuntimeIdentity: () => undefined,
+      observeDynamicGate: async () => dynamicObservation(),
+      readDestinationFreeBytes: () => 900_000_000_000,
+      observePostflight: async () => ({ dailySchedulesUnchanged: true,
+        webHealthy: true, analogHealthy: true }),
+      operations,
+    }), /START_WINDOW_CLOSED/)
+    assert.equal(fs.existsSync(path.join(destinationRoot, closedPlan.runId)), false)
+
     console.log(JSON.stringify({
       verdict: 'PASS',
       productionDatabaseOpened: false,

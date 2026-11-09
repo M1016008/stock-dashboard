@@ -97,7 +97,9 @@ Production run). Run the CLI detached from the terminal so that closing the
 terminal cannot kill it:
 
 `nohup <execute command> > <log path> 2>&1 &`, then follow the log with `tail -f`.
-Immediately before starting, record the loaded labels:
+Immediately before starting, record which approved writer labels are loaded
+(the plan's `writerLabels`; readers and the capacity monitor stay online and are
+never touched):
 `launchctl list | grep com.stockboard > <pre-run label file>`.
 
 1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
@@ -117,15 +119,19 @@ Immediately before starting, record the loaded labels:
      (`launchctl print gui/$(id -u)/<label>` returns 0), and no label that was
      unloaded or disabled before the run was loaded.
 4. **Manual restoration (only if the CLI died without restoring, e.g. SIGKILL
-   or power loss).** After step 3 shows no `sqlite3_rsync`, bootstrap each label
-   listed in the pre-run label file (and not disabled):
+   or power loss).** After step 3 shows no `sqlite3_rsync`, bootstrap only the
+   labels that are in the plan's `writerLabels`, were listed in the pre-run label
+   file, are not disabled, and are not loaded now:
    `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
    Then confirm Web/Analog health and the active writer locks. Leave the
    candidate directory in place; it is never published without a new run.
 
 Verification starts only after the writers are restored, so aborting during
-verification needs no writer action. An abort there leaves the candidate
-unpublished.
+verification needs no writer action. Send the signal to the CLI and to the
+running `sqlite3` child (`pkill -INT -f '<generation root>'`, or Ctrl-C if the
+CLI was started in the foreground): a check that is already running finishes
+only when its process ends. The CLI rechecks the abort flag after postflight,
+immediately before publishing, so the candidate stays unpublished.
 
 ## First Production approval must name
 

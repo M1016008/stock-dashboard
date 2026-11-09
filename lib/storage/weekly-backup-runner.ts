@@ -148,6 +148,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
 
   const generationRoot = path.join(args.plan.destinationRoot, args.plan.runId)
   if (fs.existsSync(generationRoot)) throw new Error('RUN_ID_COLLISION')
+  // The observation may predate this call by several slow probes; recheck the
+  // approved start window against the current time before the first write.
+  if (Date.now() >= Date.parse(args.plan.mustStartBefore)) throw new Error('START_WINDOW_CLOSED')
   args.onPhase?.('PREFLIGHT_PASSED')
 
   const markets = ['JP', 'US'] as const
@@ -282,6 +285,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     throw new Error('PRIOR_GENERATION_CHANGED')
   }
   const postflight = await args.observePostflight()
+  // Signals that arrived during synchronous verification are delivered while
+  // postflight awaits; recheck the abort flag before publishing.
+  args.assertRuntimeIdentity()
   if (Date.now() >= mustFinishBeforeMs) throw new Error('EXECUTION_DEADLINE_EXCEEDED')
   const manifest = buildWeeklyBackupCompleteManifest(args.plan, {
     generationId: args.plan.runId,
