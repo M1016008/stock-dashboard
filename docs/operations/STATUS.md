@@ -18,6 +18,12 @@
     (earnings-refresh が `jquants.env` を使うため)。PR #75 のインストーラは、インストールのたびに
     `runtime.env` から `jquants.env` へ同期する。
 
+### Backup 初回取得 (11/15) の後に検討する (今は着手しない)
+- **sqlite3_rsync のスナップショット一貫性を確認し、検出処理の単純化を検討する** (記録日: 2026-11-09)
+  - sqlite3_rsync が、コピー元が使用中でも一貫したスナップショットを写すかを、SQLite の公式ドキュメントで確認する。
+  - 正しければ、PR #76 の Writer 停止中の書込み検出処理 (両市場の状態の記録と比較、コピー中の毎秒の監視) を
+    単純化できないか検討する。
+
 ### オーナーの判断待ち
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
   Claude Code のレビュー実行は毎回 read-only で上書きしている (CLAUDE.md の Codex 独立レビュー節を参照)。
