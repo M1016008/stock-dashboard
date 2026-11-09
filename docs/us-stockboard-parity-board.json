@@ -685,7 +685,7 @@
       "remaining": "None within the implemented contract.",
       "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "a9fb47ccc3cef29645d65c307e824b1ec1d884f2",
+      "git": "8507d732df6cc5effa9e58ccb73159b05f1a9b22",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
