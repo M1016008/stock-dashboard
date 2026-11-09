@@ -158,7 +158,7 @@ export interface FutureRegionPixelInput {
 }
 
 /** Pixel bounds of the assumed interval, clipped to the visible chart pane. */
-export function futureRegionPixelRange(input: FutureRegionPixelInput): { left: number; right: number } | null {
+export function futureRegionPixelRange(input: FutureRegionPixelInput): { left: number; right: number; boundaryVisible: boolean } | null {
   const { anchorX, nextAnchorX, lastX, nextLastX, previousLastX, paneWidth } = input
   if (anchorX == null || nextAnchorX == null || lastX == null || !Number.isFinite(paneWidth) || paneWidth <= 0) return null
   const rawLeft = (anchorX + nextAnchorX) / 2
@@ -169,7 +169,7 @@ export function futureRegionPixelRange(input: FutureRegionPixelInput): { left: n
       : lastX
   const left = Math.min(Math.max(rawLeft, 0), paneWidth)
   const right = Math.min(Math.max(rawRight, 0), paneWidth)
-  return right > left ? { left, right } : null
+  return right > left ? { left, right, boundaryVisible: rawLeft >= 0 && rawLeft <= paneWidth } : null
 }
 
 function candleFor(bar: SmaLabBar, time: ChartTime): CandlePoint {

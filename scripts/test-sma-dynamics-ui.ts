@@ -146,6 +146,9 @@ assert.match(SMA_DYNAMICS_PREMISE, /現在の傾きの延長ではなく、株�
   assert.match(chart, /lineStyle: lwc\.LineStyle\.Dotted/, 'assumed SMA dotted')
   assert.match(chart, /lineStyle: lwc\.LineStyle\.LargeDashed/, 'assumed close dashed')
   assert.match(chart, /priceScale\('right'\)\.applyOptions\(\{ autoScale: true \}\)/, 'reset restores price auto-scale')
+  assert.match(chart, /index < runs\.length - 1 \|\| !endsOnValue \? \{ lastValueVisible: false/, 'no stale axis tag when the latest SMA is uncomputable')
+  assert.match(chart, /paintMarker\(\)\n    if \(!region\)/, 'the solver marker repaints even when the future region is off screen')
+  assert.match(chart, /boundary\.style\.display = region\.boundaryVisible \? 'block' : 'none'/, 'the as-of line is never drawn at a clipped edge')
   const pkg = JSON.parse(read('package.json')) as { dependencies: Record<string, string> }
   assert.ok(pkg.dependencies['lightweight-charts'], 'existing dependency, no new package')
 }
