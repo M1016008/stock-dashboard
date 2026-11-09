@@ -68,7 +68,7 @@
     - 例外: 10/27 (火) は batch-earnings の成功記録が無い。10/27 の update-latest は 10/28 04:56 に実行されたが、
       その実行では batch-earnings が記録されていない。理由は未調査。
   - 確認できた実行状況: batch_runs の記録では、10/23〜11/9 の平日のうち 10/27 を除く日に、夜間の update-latest 内で
-    batch-earnings が成功している。日中 3 回の earnings-refresh 単独の実行は、この期間すべて失敗している。
+    batch-earnings が成功している。日中 3 回の earnings-refresh 単独の実行は、10/23 13:48〜11/9 16:40 の記録ですべて失敗している。
     実データの鮮度や画面への影響の範囲は確認していない (batch_runs の記録だけでは判断できない)。
 
 ## 所在の記録 (削除しない)
