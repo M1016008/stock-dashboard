@@ -4,7 +4,7 @@
   "oneShot": true,
   "startsAt": "2026-11-15T08:30:00+09:00",
   "mustStartBefore": "2026-11-15T09:00:00+09:00",
-  "mustFinishBefore": "2026-11-19T12:00:00+09:00",
+  "mustFinishBefore": "2026-11-19T13:00:00+09:00",
   "destinationReserveBytes": 150000000000,
   "maximumCandidateGrowthBytes": 700000000000,
   "maximumCombinedWalBytes": 68719476736,
@@ -53,7 +53,7 @@
     "com.stockboard.web-health",
     "com.stockboard.dev-capacity-monitor"
   ],
-  "runbookSha256": "6a062de5a0322e7bfba9fba41af0516414043320b0d29144d723de77a9fe84e5",
+  "runbookSha256": "7e21073bc758b083d5b61dd719a611f203576f02b0267c260de872917729fcc9",
   "priorManifestPath": "/Volumes/StockBoard Backup/stockboard-production-backups/stockboard-offline-acquisition-20261023-v1/BACKUP_ACQUIRED_WITH_LIMITATIONS.manifest.json",
   "priorManifestSha256": "eaefec017376a0a94d2929f95aceb4b0dd5f251be8b189fdf2f8bb3032947e64",
   "sqliteVersion": "3.54.1",

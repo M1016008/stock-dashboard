@@ -130,8 +130,10 @@ Accepted risks (recorded, not coded):
    by the hold partway through leaves that partial state in the generation.
    The post-stop check skips a lock whose owner process has exited, so it does
    not catch this either. Mitigation: the pre-start check under "Abort and
-   writer restoration"; it narrows the gap to the seconds between that check
-   and the hold but does not close it.
+   writer restoration". It only shows that no writer was mid-job when it ran;
+   a job that starts between that check and the hold (which can take minutes:
+   the CLI observes again, probes identity and clones seeds first) is not
+   covered.
 5. The four files are recorded one after another, so a write between two of
    those records may be absorbed into a baseline or fall after a final record.
    Such a write happens before the copies start or after they finish.
@@ -147,10 +149,18 @@ Accepted risks (recorded, not coded):
 ## Abort and writer restoration
 
 The plan's `maximumWriterHoldMs` is the hold limit (3 hours for the first
-Production run). Run the CLI detached from the terminal so that closing the
-terminal cannot kill it:
+Production run). The CLI treats SIGHUP as an operator abort, so `nohup` alone
+does not protect it from a closing terminal. Start it as one command line in a
+single zsh, which records its PID, removes it from the shell's job table so that
+closing the terminal sends it no SIGHUP, and keeps the Mac from idle sleep for
+as long as the CLI runs (verification can take days):
 
-`nohup <execute command> > <log path> 2>&1 &`, then follow the log with `tail -f`.
+```
+nohup <execute command> > <log path> 2>&1 & cli_pid=$!; printf '%s\n' "$cli_pid" > <pid file>; disown; nohup /usr/bin/caffeinate -i -w "$cli_pid" > /dev/null 2>&1 & disown
+```
+
+Then follow the log with `tail -f`. `caffeinate` does not prevent sleep from
+closing the lid or from power loss.
 Immediately before starting, record which approved writer labels are loaded
 (the plan's `writerLabels`; readers and the capacity monitor stay online and are
 never touched):
@@ -159,14 +169,20 @@ writer label, also record its process group (`ps -o pgid= -p <pid>` for a
 running PID) and its definition hash
 (`shasum -a 256 ~/Library/LaunchAgents/<label>.plist`) in the same file.
 
-Pre-start check (accepted risk 4): start only when no writer is mid-job.
+Pre-start check (accepted risk 4): start only when no writer is seen mid-job.
+This shows the state at the moment of the check only.
 - `launchctl list | grep com.stockboard`: every writer label other than
   `com.stockboard.trigger-historical-scan` shows `-` for its PID.
-- `pgrep -P <trigger-historical-scan PID> -fl caffeinate` prints nothing (the
-  worker holds `caffeinate` only while a claimed write job is running).
-- the observe output shows `"writerLockOwners": []` and
-  `"updateWindowConflict": false`.
-If any check fails, wait and repeat; do not start until all pass.
+- the trigger worker has no claimed job: this read-only query on the JP
+  database prints `0` (the worker marks a job `RUNNING` when it claims it):
+  `<sqlite3> -readonly -cmd '.timeout 30000' <JP database> "SELECT (SELECT count(*) FROM historical_trigger_scan_jobs WHERE status='RUNNING') + (SELECT count(*) FROM trigger_outcome_analysis_jobs WHERE status='RUNNING') + (SELECT count(*) FROM trigger_path_research_jobs WHERE status='RUNNING') + (SELECT count(*) FROM trigger_ml_dataset_jobs WHERE status='RUNNING')"`
+- the observe output shows `"writerLockOwners": []` (live update locks other
+  than the resident trigger worker's own lease) and
+  `"updateWindowConflict": false` (only the two daily update jobs: neither is
+  running nor scheduled within the hold limit).
+If any check fails, wait and repeat; do not start until all pass. A `RUNNING`
+row that does not clear (for example after a worker crash) is reported to the
+owner instead of being changed.
 
 1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
    (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
