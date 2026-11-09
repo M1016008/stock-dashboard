@@ -17,7 +17,8 @@ PR、データを書き換えるコード、それ以外の Production 操作に
 ### やり方
 - Mac mini の `codex` CLI を使う。`~/.codex/config.toml` は `sandbox_mode = "danger-full-access"` なので、
   必ず `-c sandbox_mode='"read-only"' -c approval_policy='"never"'` で上書きする。
-- PR は、その branch の worktree で `codex exec` を実行し、`git diff origin/main...HEAD` を対象に指定する。
+- PR は、その branch の worktree で `codex exec` を実行し、`git diff origin/<PR の base>...HEAD` を対象に指定する
+  (base は `gh pr view <番号> --json baseRefName` で確認する)。
   `codex review --base` は独自の指示文と併用できないため使わない。
 - Codex に渡すのは、レビュー対象そのもの (PR 番号または実際の差分、または Production 操作で実際に
   実行するスクリプト・コマンド・Rollback 手順の全文) と、その目的・完了条件だけ。
