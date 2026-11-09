@@ -14,16 +14,18 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - **日本株の第一参照**: J-Quants API (Premium プラン契約)
 - **米国株の第一参照**: Tiingo EOD。企業開示・SIC分類は SEC EDGAR / Companyfacts
-- **補完ソース: 承認済み (ユーザー確認 2026-11-09)**。契約書やメール等の証拠の所在は、オーナーから
-  提示された時点で追記する。新しい有料契約、追加課金、承認範囲を超える公開・再配信は
-  オーナーの明示承認が必要。
+- **補完ソース: 下表の 4 取得元はオーナー申告により各社から承認取得済み (2026-11-09。証拠の所在は未記載)**。
+  契約書やメール等の証拠の所在は、オーナーから提示された時点で追記する。
+  - 承認範囲: 外部閲覧 (friend-readonly-gateway) について、極少人数 (上司 1 名) への表示を各社から承認済み。
+  - 承認範囲外: それ以外の公開・再配信。新しい有料契約、追加課金とあわせて、オーナーの明示承認が必要。
+  - キー・契約の有無や Production での稼働状況は日々変わるため、ここには書かず `docs/operations/STATUS.md` に記録する。
 
-  | 取得元 | 用途と Endpoint の範囲 (現行実装) | キー・契約の実在 (2026-11-09 確認) | Production での動作 (2026-11-09 確認) |
-  | --- | --- | --- | --- |
-  | Finnhub | 米国株の決算カレンダー。`/api/v1/calendar/earnings` のみ (`lib/finnhub.ts`) | `FINNHUB_API_KEY` は Mac mini 上のどの env ファイルにも未設定 | 停止中。キー未設定のため US 決算取得は無効 |
-  | Kabutan | テーマ: アクセスランキング `/info/accessranking/3_2` から各テーマ `/themes/...` を取得 (`scripts/batch-kabutan-themes.ts`)。材料ニュース: `/news/marketnews/?category=...` と記事 `/news/marketnews/?b=...` を取得 (`scripts/batch-kabutan-material-news.ts`)。銘柄ページ (`/stock/?code=...`) はリンクとして解析・表示するだけで取得しない | キー不要 | 稼働中 (`kabutan-themes` / `kabutan-material-news`、exit 0、鮮度 OK) |
-  | JPX | JPX 公式サイトからの直接取得 (J-Quants 経由とは別): (1) 決算発表予定 `/listing/event-schedules/financial-announcement/` (`lib/jpx-earnings.ts`)、(2) 上場銘柄一覧 `/markets/statistics-equities/misc/.../data_j.xlsx` (`scripts/audit-large-holder-instruments.ts`)、(3) `scripts/audit-large-holder-regulatory-current.ts --phase-16a8` 実行時のみ、REIT 銘柄一覧ページ `/equities/products/reits/issues/`、優先株 PDF `/equities/products/preferred-stocks/issues/...pdf`、`www2.jpx.co.jp/disc/...pdf` を規制範囲の証拠として取得。それ以外の ETF/ETN 銘柄一覧ページなどは出典リンクとして表示するだけで取得しない | キー不要 | (1) earnings-refresh に含まれ、J-Quants キーの読込み不備で 2026-10-23 から停止中。(2)(3) 定期実行なし (手動の監査スクリプトのみ。実行は都度オーナーの判断) |
-  | FMP | 次回決算日 (`earnings-calendar`) と Sector/Industry (`profile`) のアダプタ (`lib/fmp.ts`、`/stable`) | `FMP_API_KEY` は未設定。表示・再配信の書面上の権利は Repository 上で未確認 (`docs/us-fmp-provider-assessment.md` が要件として記載)。表示用のゲート `FMP_DISPLAY_LICENSE_APPROVED` は未設定 | 未使用 (Production から呼ぶ処理なし)。有効化には、キーの設置、表示ゲートの設定、Production 構成の変更について個別の承認が必要 |
+  | 取得元 | 用途と Endpoint の範囲 (現行実装) |
+  | --- | --- |
+  | Finnhub | 米国株の決算カレンダー。`/api/v1/calendar/earnings` のみ (`lib/finnhub.ts`) |
+  | Kabutan | テーマ: アクセスランキング `/info/accessranking/3_2` から各テーマ `/themes/...` を取得 (`scripts/batch-kabutan-themes.ts`)。材料ニュース: `/news/marketnews/?category=...` と記事 `/news/marketnews/?b=...` を取得 (`scripts/batch-kabutan-material-news.ts`)。銘柄ページ (`/stock/?code=...`) はリンクとして解析・表示するだけで取得しない |
+  | JPX | JPX 公式サイトからの直接取得 (J-Quants 経由とは別): (1) 決算発表予定 `/listing/event-schedules/financial-announcement/` (`lib/jpx-earnings.ts`)、(2) 上場銘柄一覧 `/markets/statistics-equities/misc/.../data_j.xlsx` (`scripts/audit-large-holder-instruments.ts`)、(3) `scripts/audit-large-holder-regulatory-current.ts --phase-16a8` 実行時のみ、REIT 銘柄一覧ページ `/equities/products/reits/issues/`、優先株 PDF `/equities/products/preferred-stocks/issues/...pdf`、`www2.jpx.co.jp/disc/...pdf` を規制範囲の証拠として取得。それ以外の ETF/ETN 銘柄一覧ページなどは出典リンクとして表示するだけで取得しない |
+  | FMP | 次回決算日 (`earnings-calendar`) と Sector/Industry (`profile`) のアダプタ (`lib/fmp.ts`、`/stable`)。表示はゲート `FMP_DISPLAY_LICENSE_APPROVED` で制御する |
 
 - **上記以外の補完**: 各市場の一次ソースで取得できないデータに限り別ソースを使う。**ただし都度判断・相談**
   (勝手に Yahoo Finance 等にフォールバックしない)
