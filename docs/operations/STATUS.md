@@ -34,6 +34,19 @@
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
   Claude Code のレビュー実行は毎回 read-only で上書きしている (CLAUDE.md の Codex 独立レビュー節を参照)。
 
+## 記録の訂正
+- **決算カレンダーの停止は誤り。止まっていたのは earnings-refresh 単独の実行だけ** (記録日: 2026-11-10)
+  - 訂正前の記述 (2026-11-09 の最初の監査): 「earnings-refresh は 10/23 から止まっており、決算カレンダーが16日古い」。
+  - 実際 (batch_runs の読み取りで確認):
+    - earnings-refresh 単独の実行 (07:10・14:10・16:30) は、10/23 13:48 から 11/9 16:40 まで毎回失敗していた
+      (`JQUANTS_API_KEY が未設定`)。2026-11-09 23:56 の env 適用後の実行で成功した。
+    - 一方、平日 21:10 の update-latest が内部で呼ぶ batch-earnings は、runtime.env のキーで動き、
+      10/23・10/26・10/28〜10/30・11/2〜11/6・11/9 に成功していた (J-Quants と JPX の両方を取得)。
+    - 例外: 10/27 (火) は batch-earnings の成功記録が無い。10/27 の update-latest は 10/28 04:56 に実行されたが、
+      その実行では batch-earnings が記録されていない。理由は未調査。
+  - 実際の影響: 決算カレンダーは夜間の update-latest で更新されていた (10/27 分を除き、遅れは最大でおよそ1営業日)。
+    日中 3 回の更新が行われなかったことが影響の範囲。
+
 ## 所在の記録 (削除しない)
 - 名前の誤った env ファイル `.env.loca` (2026-05-23 作成、秘密情報を含む):
   `/Volumes/OWC Express 1M2 80G/StockBoard Development/git-worktrees/claude/gracious-grothendieck-804715/.env.loca`
