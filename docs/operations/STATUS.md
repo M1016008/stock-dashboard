@@ -27,6 +27,8 @@
   - Writer Hold は、Writer を処理の途中で止めるリスクそのものを生んでいる。
   - sqlite3_rsync が使用中の DB でも一貫したスナップショットを写すなら、Writer を止めずに Backup を取る方式を検討する。
   - その場合の論点は、JP と US の時点のずれをどこまで許容するか。
+- **上の2項目の単純化では、PR #76 の行数を減らすことも目標にする** (記録日: 2026-11-09)
+  - 2026-11-09 時点で PR #76 は origin/main に対して追加約 830 行 (本体 470・テスト 159・文書 199)。
 
 ### オーナーの判断待ち
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
