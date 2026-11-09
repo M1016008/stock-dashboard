@@ -23,6 +23,10 @@
   - sqlite3_rsync が、コピー元が使用中でも一貫したスナップショットを写すかを、SQLite の公式ドキュメントで確認する。
   - 正しければ、PR #76 の Writer 停止中の書込み検出処理 (両市場の状態の記録と比較、コピー中の毎秒の監視) を
     単純化できないか検討する。
+- **Writer を止めずに Backup を取る方式を検討する** (記録日: 2026-11-09)
+  - Writer Hold は、Writer を処理の途中で止めるリスクそのものを生んでいる。
+  - sqlite3_rsync が使用中の DB でも一貫したスナップショットを写すなら、Writer を止めずに Backup を取る方式を検討する。
+  - その場合の論点は、JP と US の時点のずれをどこまで許容するか。
 
 ### オーナーの判断待ち
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
