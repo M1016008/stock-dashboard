@@ -78,7 +78,7 @@ import {
   type SolverDraft,
 } from '@/lib/sma-dynamics-scenario'
 import { SmaDynamicsChart, ZOOM_IN_FACTOR, ZOOM_OUT_FACTOR, type SmaDynamicsChartHandle } from './SmaDynamicsChart'
-import { ControlRow, CustomPeriodInput, periodStatusText, SegmentedControl, SmaPeriodPicker } from './SmaDynamicsControls'
+import { ControlRow, CustomPeriodInput, keepDatesTogether, periodStatusText, SegmentedControl, SmaPeriodPicker } from './SmaDynamicsControls'
 import { ChartLegend, formatPct, FutureValuesDetails, IssuesBand, priceFormatter, SlotReadout, SummaryTable, type ReadoutLayer } from './SmaDynamicsPanels'
 import { adaptationApplied, adaptDailyScenarioToTimeframe, projectDailyScenario } from '@/lib/sma-dynamics-daily-scenario'
 import { DailyScenarioPanel } from './SmaDailyScenarioPanel'
@@ -1155,7 +1155,7 @@ export function SmaDynamicsView({
             {unavailablePeriods.length > 0 && (
               <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-0.5 p-0 text-[11px] font-medium text-amber-800" data-sma-dynamics-period-notes>
                 {unavailablePeriods.map((summary) => (
-                  <li key={summary.period}><span className="font-mono font-bold">SMA{summary.period}</span>: {periodStatusText(summary, timeframe.barNoun)}</li>
+                  <li key={summary.period}><span className="font-mono font-bold">SMA{summary.period}</span>: {keepDatesTogether(periodStatusText(summary, timeframe.barNoun))}</li>
                 ))}
               </ul>
             )}
@@ -1185,7 +1185,7 @@ export function SmaDynamicsView({
             result={available}
             periods={periods}
             fmt={fmt}
-            statusText={(period) => periodStatusText(available.periods.find((item) => item.period === period)!, timeframe.barNoun)}
+            statusText={(period) => keepDatesTogether(periodStatusText(available.periods.find((item) => item.period === period)!, timeframe.barNoun))}
           />
         </DetailsSection>
       )}

@@ -341,6 +341,12 @@ const CONTROL_BUTTONS = SMA_LAB_TIMEFRAMES.length + SMA_LAB_PERIODS.length + 8 +
   assert.match(invalid, /role="status"[^>]*data-sma-dynamics-issues/)
   for (const copy of ['同じ日付の重複行', '終値が0以下の日', '始値・高値・安値が不正な日']) assert.ok(invalid.includes(copy), copy)
 
+  const { load: gapLoad } = fixtureLoad('jp-7003-gap')
+  const gap = render(gapLoad)
+  assert.ok(gap.includes('SMA75'))
+  assert.ok(gap.includes('計算不可: 窓内に欠損または無効な終値 1本 (2026-07-17)'))
+  assert.match(gap, /data-sma-dynamics-period-notes="true"/)
+
   const { load: anchorLoad } = fixtureLoad('jp-anchor-invalid')
   const unavailable = render(anchorLoad)
   assert.ok(unavailable.includes(describeSmaLabUnavailable('anchor_invalid', '2026-10-16')))
