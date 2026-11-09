@@ -19,6 +19,14 @@ const productionEnvPath = path.join(configDir, 'production.env')
 // update-latest (the EDINET holdings refresh is skipped without it), so a missing file must
 // never stop the daily update: the plist uses --env-file-if-exists.
 const edinetEnvPath = path.join(configDir, 'edinet.env')
+// The generated command runs on this same Node (process.execPath) and uses --env-file-if-exists
+// (Node >= 22.9) plus util.parseEnv. Production runs v24.11.1; CI pins Node 24.
+{
+  const [major, minor] = process.versions.node.split('.').map(Number)
+  if (major < 22 || (major === 22 && minor < 9)) {
+    throw new Error(`install-local-auto-update requires Node >= 22.9 (running ${process.versions.node})`)
+  }
+}
 
 function marketDayRetrySchedule(): string {
   // launchd Weekday: 1=Monday ... 5=Friday.
@@ -49,10 +57,6 @@ if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
 if (fs.existsSync(edinetEnvPath)) {
   if ((fs.statSync(edinetEnvPath).mode & 0o077) !== 0) {
     throw new Error(`Canonical machine env must be owner-only: ${edinetEnvPath}`)
-  }
-  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
-  if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 12)) {
-    throw new Error(`install-local-auto-update requires Node >= 20.12 (running ${process.versions.node})`)
   }
   const edinetText = fs.readFileSync(edinetEnvPath, 'utf8')
   const assignments = edinetText.split('\n').filter((line) => /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line))
