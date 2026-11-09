@@ -685,7 +685,7 @@
       "remaining": "None within the implemented contract.",
       "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "8507d732df6cc5effa9e58ccb73159b05f1a9b22",
+      "git": "2d20364b0b02c63a6318f081f20fcfff35970e44",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -700,11 +700,14 @@
         ],
         "implementationPaths": [
           "components/stock/sma-dynamics/SmaDynamicsSection.tsx",
-          "lib/sma-dynamics-timeframes.ts"
+          "lib/sma-dynamics-timeframes.ts",
+          "components/stock/sma-dynamics/SmaDynamicsChart.tsx",
+          "lib/sma-dynamics-chart-model.ts"
         ],
         "testPaths": [
           "scripts/test-sma-dynamics.ts",
-          "scripts/test-sma-dynamics-ui.ts"
+          "scripts/test-sma-dynamics-ui.ts",
+          "scripts/test-sma-dynamics-lab.ts"
         ]
       }
     },
