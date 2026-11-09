@@ -330,7 +330,7 @@ export function UsStockDetailClient({
         />
       )}
 
-      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ → AI */}
+      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ */}
       {analysisParamsReady && activeTab === 'scenario' && (
         <>
           <ScenarioProjectionChart
