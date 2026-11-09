@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseEnv } from 'node:util'
 import {
   calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
 } from './lib/launchagent-install'
@@ -49,9 +50,14 @@ if (fs.existsSync(edinetEnvPath)) {
   if ((fs.statSync(edinetEnvPath).mode & 0o077) !== 0) {
     throw new Error(`Canonical machine env must be owner-only: ${edinetEnvPath}`)
   }
-  const edinetEnvLines = fs.readFileSync(edinetEnvPath, 'utf8').split('\n')
-    .map((line) => line.trim()).filter((line) => line && !line.startsWith('#'))
-  if (edinetEnvLines.length !== 1 || !/^EDINET_API_KEY=\S+/.test(edinetEnvLines[0])) {
+  const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+  if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 12)) {
+    throw new Error(`install-local-auto-update requires Node >= 20.12 (running ${process.versions.node})`)
+  }
+  const edinetText = fs.readFileSync(edinetEnvPath, 'utf8')
+  const assignments = edinetText.split('\n').filter((line) => /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line))
+  const parsed = parseEnv(edinetText)
+  if (assignments.length !== 1 || Object.keys(parsed).length !== 1 || !(parsed.EDINET_API_KEY ?? '').trim()) {
     throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY (non-empty)')
   }
 } else {

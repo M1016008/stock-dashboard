@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { parseEnv } from 'node:util'
 import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.large-holder-update'
@@ -43,9 +44,19 @@ const productionEnvKeys = envKeys(productionEnv)
 for (const key of requiredMachineKeys) {
   if (!productionEnvKeys.has(key)) throw new Error(`Canonical production env is missing ${key}`)
 }
+// Each scoped file must hold exactly one assignment (any case/indent/export form counts), for the
+// expected key, whose value is non-empty as parsed by Node's own --env-file parser.
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 12)) {
+  throw new Error(`install-local-large-holder-update requires Node >= 20.12 (running ${process.versions.node})`)
+}
 for (const [path, key] of [[jquantsEnv, 'JQUANTS_API_KEY'], [edinetEnv, 'EDINET_API_KEY']] as const) {
-  const keys = [...envKeys(path)]
-  if (keys.length !== 1 || keys[0] !== key) throw new Error(`${path} must contain exactly one key: ${key}`)
+  const text = readFileSync(path, 'utf8')
+  const assignments = text.split('\n').filter((line) => /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line))
+  const parsed = parseEnv(text)
+  if (assignments.length !== 1 || Object.keys(parsed).length !== 1 || !(parsed[key] ?? '').trim()) {
+    throw new Error(`${path} must contain exactly one key: ${key} (non-empty)`)
+  }
 }
 const schedule = [1, 2, 3, 4, 5].flatMap((weekday) => scheduleTimes.map((time) => {
   const [hour, minute] = time.split(':').map(Number)
