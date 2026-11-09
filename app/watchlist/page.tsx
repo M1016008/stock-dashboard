@@ -6,7 +6,6 @@ import { useSearchParams } from 'next/navigation'
 import {
   AlertTriangle,
   Download,
-  GitCompareArrows,
   RefreshCw,
   Star,
   Trash2,
@@ -19,8 +18,6 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 import {
-  getCompareSymbols,
-  toggleComparedSymbol,
   type WorkspaceMarket,
   type WorkspaceSymbol,
 } from '@/lib/client/stock-workspace'
@@ -50,7 +47,6 @@ export default function WatchlistPage() {
   const [marketView, setMarketView] = useState<MarketView>('ALL')
   const [quotes, setQuotes] = useState<Record<string, StockQuote | null>>({})
   const [loading, setLoading] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const tickers = useWatchlistStore((state) => state.tickers)
   const usTickers = useWatchlistStore((state) => state.usTickers)
   const clearAll = useWatchlistStore((state) => state.clearAll)
@@ -129,34 +125,6 @@ export default function WatchlistPage() {
     }
   }, [fetchQuotes])
 
-  const toggleSelection = (market: WorkspaceMarket, ticker: string) => {
-    const key = `${market}:${ticker}`
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(key)) next.delete(key)
-      else if (next.size < 4) next.add(key)
-      return next
-    })
-  }
-
-  const addSelectedToComparison = () => {
-    const compared = getCompareSymbols()
-    const existing = new Set(compared.map((symbol) => `${symbol.market}:${symbol.ticker}`))
-    let slots = Math.max(0, 4 - compared.length)
-    for (const row of allRows) {
-      const key = `${row.market}:${row.ticker}`
-      if (!selected.has(key) || existing.has(key) || slots === 0) continue
-      toggleComparedSymbol({
-        market: row.market,
-        ticker: row.ticker,
-        name: row.quote?.name,
-      })
-      existing.add(key)
-      slots -= 1
-    }
-    setSelected(new Set())
-  }
-
   const downloadTvWatchlist = () => {
     const symbols = visibleJpTickers.map((ticker) => {
       const master = findTicker(ticker)
@@ -187,7 +155,7 @@ export default function WatchlistPage() {
       <PageTitle
         eyebrow="監視"
         title="ウォッチリスト"
-        subtitle="日本株・米国株の監視銘柄、急変の確認、銘柄比較をまとめて扱います。日次終値データを60秒ごとに再確認します。"
+        subtitle="日本株・米国株の監視銘柄と急変の確認をまとめて扱います。日次終値データを60秒ごとに再確認します。"
         badge={activeUniverseMeta?.shortLabel}
         rightSlot={
           <button type="button" onClick={() => void fetchQuotes()} disabled={loading} className="btn">
@@ -233,12 +201,6 @@ export default function WatchlistPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {selected.size > 0 && (
-            <button type="button" onClick={addSelectedToComparison} className="btn" data-variant="primary">
-              <GitCompareArrows size={14} aria-hidden />
-              {selected.size}銘柄を比較
-            </button>
-          )}
           {visibleJpTickers.length > 0 && (
             <button
               type="button"
@@ -280,8 +242,6 @@ export default function WatchlistPage() {
             <WatchSection
               market="JP"
               rows={allRows.filter((row) => row.market === 'JP')}
-              selected={selected}
-              onToggleSelection={toggleSelection}
               note={activeUniverseMeta
                 ? `${activeUniverseMeta.shortLabel}表示中 · 保存済み ${tickers.length}銘柄`
                 : 'J-Quants日次データ'}
@@ -294,8 +254,6 @@ export default function WatchlistPage() {
             <WatchSection
               market="US"
               rows={allRows.filter((row) => row.market === 'US')}
-              selected={selected}
-              onToggleSelection={toggleSelection}
               note={activeUniverseMeta
                 ? '米国株 日次EOD（調整後） · ユニバース絞り込みは日本株のみ'
                 : '米国株 日次EOD（調整後）'}
@@ -311,15 +269,11 @@ export default function WatchlistPage() {
 function WatchSection({
   market,
   rows,
-  selected,
-  onToggleSelection,
   note,
   emptyDetail,
 }: {
   market: WorkspaceMarket
   rows: WatchRow[]
-  selected: Set<string>
-  onToggleSelection: (market: WorkspaceMarket, ticker: string) => void
   note: string
   emptyDetail: string
 }) {
@@ -349,14 +303,6 @@ function WatchSection({
               <li key={key} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-3 py-2.5">
                 <div className="flex flex-col items-center gap-1 pt-0.5">
                   <WatchlistButton ticker={row.ticker} market={row.market} size="sm" />
-                  <input
-                    type="checkbox"
-                    checked={selected.has(key)}
-                    onChange={() => onToggleSelection(row.market, row.ticker)}
-                    aria-label={`${row.ticker}を比較対象に選択`}
-                    disabled={!selected.has(key) && selected.size >= 4}
-                    className="h-4 w-4 accent-[var(--color-brand-700)]"
-                  />
                 </div>
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5">
@@ -387,7 +333,6 @@ function WatchSection({
             <table className="w-full min-w-[840px] border-collapse text-[12px]">
               <thead>
                 <tr className="border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
-                  <th scope="col" style={{ ...th, width: 38 }} aria-label="比較選択" />
                   <th scope="col" style={{ ...th, width: 38 }} aria-label="ウォッチ操作" />
                   <th scope="col" style={th}>コード</th>
                   <th scope="col" style={th}>銘柄名</th>
@@ -402,16 +347,6 @@ function WatchSection({
               <tbody>
                 {items.map(({ row, key, quote, href, name, alertLabel }) => (
                   <tr key={key} className="border-b border-[var(--color-border-soft)] last:border-b-0 hover:bg-[#fff8e6]">
-                    <td style={td}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(key)}
-                        onChange={() => onToggleSelection(row.market, row.ticker)}
-                        aria-label={`${row.ticker}を比較対象に選択`}
-                        disabled={!selected.has(key) && selected.size >= 4}
-                        className="h-3.5 w-3.5 accent-[var(--color-brand-700)]"
-                      />
-                    </td>
                     <td style={td}>
                       <WatchlistButton ticker={row.ticker} market={row.market} size="sm" />
                     </td>

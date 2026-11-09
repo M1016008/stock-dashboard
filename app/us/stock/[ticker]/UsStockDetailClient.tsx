@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   BrainCircuit,
   ChartCandlestick,
-  GitCompareArrows,
   Landmark,
   LayoutDashboard,
   Loader2,
@@ -35,12 +34,7 @@ import {
 import { useUsPhysicalMomentum } from '@/components/us/stock-detail/useUsPhysicalMomentum'
 import type { StockQuote } from '@/types/stock'
 import type { NextUsEarnings } from '@/lib/queries/us-earnings'
-import {
-  isComparedSymbol,
-  recordRecentSymbol,
-  toggleComparedSymbol,
-  WORKSPACE_EVENT,
-} from '@/lib/client/stock-workspace'
+import { recordRecentSymbol } from '@/lib/client/stock-workspace'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 type UsStockDetailTab = 'overview' | 'chart' | 'fundamental' | 'scenario' | 'ml'
@@ -75,7 +69,6 @@ export function UsStockDetailClient({
   const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
   const [fundamentalView, setFundamentalView] = useState<UsFundamentalView>('summary')
-  const [compared, setCompared] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -185,15 +178,11 @@ export function UsStockDetailClient({
         setFundamentalView(hash)
       }
     }
-    const syncCompared = () => setCompared(isComparedSymbol('US', quote.ticker))
     readTab()
-    syncCompared()
     recordRecentSymbol({ market: 'US', ticker: quote.ticker, name: quote.name })
     window.addEventListener('hashchange', readTab)
-    window.addEventListener(WORKSPACE_EVENT, syncCompared)
     return () => {
       window.removeEventListener('hashchange', readTab)
-      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
     }
   }, [quote])
 
@@ -292,18 +281,6 @@ export function UsStockDetailClient({
                 <div className="mt-1 font-mono text-[11px]">価格日</div>
               </div>
             )}
-            <button
-              type="button"
-              onClick={() => setCompared(toggleComparedSymbol({ market: 'US', ticker: quote.ticker, name: quote.name }))}
-              className="btn max-sm:min-h-11! max-sm:min-w-11!"
-              data-variant={compared ? 'primary' : undefined}
-              aria-pressed={compared}
-              aria-label={compared ? '比較から外す' : '比較へ追加'}
-              title={compared ? '比較から外す' : '比較へ追加'}
-            >
-              <GitCompareArrows size={14} aria-hidden />
-              <span className="hidden sm:inline">{compared ? '比較中' : '比較に追加'}</span>
-            </button>
           </div>
         </div>
         {quote.priceQualityWarning && (
