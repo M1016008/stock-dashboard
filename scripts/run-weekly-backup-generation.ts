@@ -29,6 +29,7 @@ import {
   type WeeklyBackupPlan,
 } from '@/lib/storage/weekly-backup-policy'
 import { runWeeklyBackupGeneration } from '@/lib/storage/weekly-backup-runner'
+import { fileSha256 } from '@/lib/storage/sqlite-rsync-generation'
 import {
   createLaunchdWriterHoldDriver,
   launchdJobPid,
@@ -68,10 +69,6 @@ function run(file: string, args: string[], timeoutMs = 60_000): string {
     throw new Error(`${path.basename(file)}_FAILED:${result.error?.message ?? result.stderr.trim() ?? result.status}`)
   }
   return result.stdout
-}
-
-function sha256File(file: string): string {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
 function plistJson(file: string): Record<string, unknown> {
@@ -148,7 +145,7 @@ function writerIdentities(): LaunchdRuntimeIdentity[] {
     const program = typeof definition.Program === 'string'
       ? definition.Program
       : String((definition.ProgramArguments as string[] | undefined)?.[0] ?? '')
-    return { label, plistPath, program, definitionSha256: sha256File(plistPath) }
+    return { label, plistPath, program, definitionSha256: fileSha256(plistPath) }
   })
 }
 
@@ -267,10 +264,10 @@ async function observeDynamic(): Promise<WeeklyBackupDynamicObservation> {
     updateWindowConflict: dailyUpdateWindowConflict(now),
     webHealthy: await healthy(3000),
     analogHealthy: await healthy(3105),
-    priorManifestSha256: sha256File(plan.priorManifestPath),
+    priorManifestSha256: fileSha256(plan.priorManifestPath),
     sqliteVersion: run(plan.sqliteBinaryPath, ['--version']).trim().split(/\s+/)[0],
-    sqliteBinarySha256: sha256File(plan.sqliteBinaryPath),
-    sqliteRsyncBinarySha256: sha256File(plan.sqliteRsyncBinaryPath),
+    sqliteBinarySha256: fileSha256(plan.sqliteBinaryPath),
+    sqliteRsyncBinarySha256: fileSha256(plan.sqliteRsyncBinaryPath),
     sqliteToolsArchiveSha3: toolsArchiveSha3(),
   }
 }
