@@ -131,6 +131,9 @@ export async function runMonitoredSqliteRsync(args: {
   assertRegularFile(args.sourceDatabasePath)
   assertRegularFile(args.candidateDatabasePath)
   args.assertRuntimeIdentity()
+  // Writers are stopped, so any WAL write (even one reusing the same length) changes its mtime.
+  const walMtimeMs = () => (fs.existsSync(args.limits.sourceWalPath) ? fs.lstatSync(args.limits.sourceWalPath).mtimeMs : null)
+  const walMtimeMsAtStart = walMtimeMs()
   const started = Date.now()
   let stderr = ''
   let stdout = ''
@@ -192,6 +195,7 @@ export async function runMonitoredSqliteRsync(args: {
         || sourceStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) {
         monitorError = new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
       }
+      else if (walMtimeMs() !== walMtimeMsAtStart) monitorError = new Error('SOURCE_WAL_CHANGED_DURING_SYNC')
     } catch (error) {
       monitorError ??= error instanceof Error ? error : new Error(String(error))
     }
@@ -221,6 +225,7 @@ export async function runMonitoredSqliteRsync(args: {
   if (peakWalGrowthBytes > args.limits.maximumWalGrowthBytes) throw new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
   if (finalStat.size !== args.limits.sourceDatabaseSizeAtStart
     || finalStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) throw new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+  if (walMtimeMs() !== walMtimeMsAtStart) throw new Error('SOURCE_WAL_CHANGED_DURING_SYNC')
   args.assertRuntimeIdentity()
   return { elapsedMs: Date.now() - started, sourceWalGrowthBytes: peakWalGrowthBytes, stderr: stderr.trim() }
 }

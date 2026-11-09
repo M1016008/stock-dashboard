@@ -94,9 +94,10 @@ Accepted risks (recorded, not coded): only `com.stockboard.*` LaunchAgents and
 update locks are checked for writers, so do not run manual `sqlite3`/Node tools
 against Production during the hold. While writers are stopped, do not operate
 on the StockBoard repository or databases from the Codex app or from another
-Claude Code session. A write by such a tool is caught only if it changes the WAL
-length or the main file's size/mtime; SQLite can reuse a WAL at the same length
-without touching the main file, and that write is not detected. Observe mode calls
+Claude Code session. A write by such a tool changes the WAL's mtime (even when
+SQLite reuses the WAL at the same length) or the main file's size/mtime; the
+monitor checks these every second and once more after sqlite3_rsync exits, and
+fails the run without publishing. Observe mode calls
 `/api/health`, which writes the same storage-probe telemetry as the existing
 `com.stockboard.web-health` job; it does not write to the databases.
 

@@ -133,6 +133,8 @@ function physicalSerial(wholeDisk: string): string {
 function volumeIdentity(mount: string): { mount: string; uuid: string; serial: string; freeBytes: number } {
   const info = diskutilPlist(mount)
   if (info.MountPoint !== mount) throw new Error(`MOUNT_IDENTITY_MISMATCH:${mount}`)
+  if (mount === plan.destinationMount && (info.FilesystemType !== 'apfs'
+    || info.Encryption !== true || info.WritableVolume !== true)) throw new Error(`DESTINATION_NOT_ENCRYPTED_WRITABLE_APFS:${mount}`)
   const stats = fs.statfsSync(mount, { bigint: true })
   return {
     mount,

@@ -177,6 +177,36 @@ try {
     },
   }), /SOURCE_DATABASE_CHANGED_DURING_SYNC/)
 
+  // A WAL rewrite at the same length (only its mtime moves) also fails the run.
+  const walProbe = path.join(sourceRoot, 'same-length.wal')
+  fs.writeFileSync(walProbe, '')
+  fs.utimesSync(walProbe, new Date(0), new Date(0))
+  const walCandidate = path.join(candidateRoot, 'wal-changed.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: walCandidate })
+  let walIdentityChecks = 0
+  await assert.rejects(() => runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC,
+    sourceDatabasePath: capacityOrigin,
+    candidateDatabasePath: walCandidate,
+    assertRuntimeIdentity: () => {
+      walIdentityChecks += 1
+      if (walIdentityChecks === 2) fs.utimesSync(walProbe, new Date(), new Date())
+    },
+    limits: {
+      deadlineMs: Date.now() + 60_000,
+      destinationMount: os.tmpdir(),
+      destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: tmpFree,
+      maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: walProbe,
+      sourceWalBytesAtStart: 0,
+      maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: capacitySourceStat.size,
+      sourceDatabaseMtimeMsAtStart: capacitySourceStat.mtimeMs,
+    },
+  }), /SOURCE_WAL_CHANGED_DURING_SYNC/)
+
   assert.throws(() => verifyReplica({
     sqliteBinary: SQLITE,
     candidateRoot,
