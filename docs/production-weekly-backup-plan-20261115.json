@@ -53,7 +53,7 @@
     "com.stockboard.web-health",
     "com.stockboard.dev-capacity-monitor"
   ],
-  "runbookSha256": "7e21073bc758b083d5b61dd719a611f203576f02b0267c260de872917729fcc9",
+  "runbookSha256": "f87a8d351f8a1262678c43b623fb35b7daaa2650dca639061706bf06ca142556",
   "priorManifestPath": "/Volumes/StockBoard Backup/stockboard-production-backups/stockboard-offline-acquisition-20261023-v1/BACKUP_ACQUIRED_WITH_LIMITATIONS.manifest.json",
   "priorManifestSha256": "eaefec017376a0a94d2929f95aceb4b0dd5f251be8b189fdf2f8bb3032947e64",
   "sqliteVersion": "3.54.1",
