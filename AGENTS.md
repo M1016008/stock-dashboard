@@ -67,7 +67,9 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
     の E039/E043 event-path store と `v5-max-r016` F1 feature store
     (`lib/research/six-stage-real-data-contract.ts` が hash を照合)、
     Phase 15D の封印モデル (`docs/phase-15f-operations.md`)。
-  - 保護はファイル権限ではなく、読み込み時の hash 照合に依存している。誤って書き込まないこと。
+  - 読み込み時の検査は、Manifest に記録された hash 値と期待値の一致、event store のファイルサイズ、
+    F1 Manifest ファイルの hash だけ。SQLite 本体の hash は検査しておらず、ファイル権限による保護もない。
+    同じサイズのまま中身が変わっても検出できないので、誤って書き込まないこと。
   - **未確認事項**: 「保全確認済みの研究資産 15,890 行」は、2026-11-09 時点で所在と実体を特定できていない。
     推測で場所を記載しない。
 
