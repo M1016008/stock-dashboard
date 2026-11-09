@@ -157,10 +157,10 @@ for (const item of SMA_DYNAMICS_FIXTURES) {
 // The future hatch is bounded by the actual forecast interval, not the pane edge.
 assert.deepEqual(futureRegionPixelRange({
   anchorX: 100, nextAnchorX: 110, lastX: 150, nextLastX: 160, previousLastX: 140, paneWidth: 400,
-}), { left: 105, right: 155 })
+}), { left: 105, right: 155, boundaryVisible: true })
 assert.deepEqual(futureRegionPixelRange({
   anchorX: -20, nextAnchorX: -10, lastX: 390, nextLastX: null, previousLastX: 380, paneWidth: 400,
-}), { left: 0, right: 395 })
+}), { left: 0, right: 395, boundaryVisible: false }, 'a clipped shade must not draw the as-of line at the pane edge')
 assert.equal(futureRegionPixelRange({
   anchorX: 420, nextAnchorX: 430, lastX: 450, nextLastX: 460, previousLastX: 440, paneWidth: 400,
 }), null)

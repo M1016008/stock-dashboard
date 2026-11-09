@@ -149,17 +149,18 @@ export function SmaDynamicsChart({
     const previousLastX = timeScale.logicalToCoordinate((current.lastSlot - 1) as Logical)
     const hasFuture = current.lastSlot > current.anchorSlot || current.frozenClose.length > 0
     const region = hasFuture ? futureRegionPixelRange({ anchorX, nextAnchorX, lastX, nextLastX, previousLastX, paneWidth }) : null
+    paintMarker()
     if (!region) {
       shade.style.display = 'none'
       boundary.style.display = 'none'
       return
     }
-    paintMarker()
     shade.style.display = 'block'
     shade.style.left = `${region.left}px`
     shade.style.width = `${region.right - region.left}px`
     shade.style.height = `${paneHeight}px`
-    boundary.style.display = 'block'
+    // The shade may be clipped at the pane edge, but the as-of line marks a real position only.
+    boundary.style.display = region.boundaryVisible ? 'block' : 'none'
     boundary.style.left = `${region.left}px`
     boundary.style.height = `${paneHeight}px`
     // Tags stay inside their own region: the future tag falls back from the full text to its first word
@@ -179,7 +180,7 @@ export function SmaDynamicsChart({
         if (short.offsetWidth > room) label.style.display = 'none'
       }
     }
-    if (boundaryLabelRef.current) boundaryLabelRef.current.style.display = region.left >= ACTUAL_TAG_MIN_WIDTH ? '' : 'none'
+    if (boundaryLabelRef.current) boundaryLabelRef.current.style.display = region.boundaryVisible && region.left >= ACTUAL_TAG_MIN_WIDTH ? '' : 'none'
   }
 
   // LWC applies range/size changes on its next frame, so coordinates are read one frame later.
@@ -301,8 +302,10 @@ export function SmaDynamicsChart({
 
     const tint = (color: string, muted: boolean) => (muted ? withAlpha(color, SMA_LAB_MUTED_ALPHA) : color)
     // A missing value must break the line (the chart library would bridge it), so each run is its own series.
-    // The axis value tag stays on the last run only; a single-point run needs a marker to be visible.
+    // The axis value tag stays on the last run only, and only when the series ends on a value: a stale
+    // tag would contradict an uncomputable latest SMA. A single-point run needs a marker to be visible.
     const addLine = (data: ReadonlyArray<{ time: number; value?: number }>, options: Record<string, unknown>) => {
+      const endsOnValue = data.length > 0 && data[data.length - 1].value != null
       const runs = splitLineRuns(data as ReadonlyArray<LineDatum>)
       if (runs.length === 0) runs.push([])
       let first: ISeriesApi<SeriesType> | null = null
@@ -312,7 +315,7 @@ export function SmaDynamicsChart({
           priceLineVisible: false,
           priceFormat,
           ...options,
-          ...(index < runs.length - 1 ? { lastValueVisible: false, title: '' } : {}),
+          ...(index < runs.length - 1 || !endsOnValue ? { lastValueVisible: false, title: '' } : {}),
           ...(single ? { pointMarkersVisible: true, pointMarkersRadius: 2 } : {}),
         })
         series.setData(run.map((point) => ({ ...point, time: point.time as Time })))
