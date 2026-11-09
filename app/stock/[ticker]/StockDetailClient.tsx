@@ -92,7 +92,6 @@ import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
-import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { FinancialPerformanceTimeline } from '@/components/stock/FinancialPerformanceTimeline'
 import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
 import { StockLargeHolders } from '@/components/large-holders/StockLargeHolders'
@@ -579,7 +578,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               sector33: displaySector33,
             }}
           />
-          <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
         </>
       )}
 

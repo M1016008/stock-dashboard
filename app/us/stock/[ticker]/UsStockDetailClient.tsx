@@ -15,7 +15,6 @@ import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
-import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
@@ -331,7 +330,7 @@ export function UsStockDetailClient({
         />
       )}
 
-      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ → AI */}
+      {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ */}
       {analysisParamsReady && activeTab === 'scenario' && (
         <>
           <ScenarioProjectionChart
@@ -355,7 +354,6 @@ export function UsStockDetailClient({
               source: 'US EOD',
             }}
           />
-          <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
         </>
       )}
 
