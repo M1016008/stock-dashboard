@@ -205,15 +205,15 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     maximumHoldMs: args.plan.maximumWriterHoldMs,
     driver: args.writerDriver,
     operation: async (assertHoldValid) => {
-      const stoppedObservation = await args.observeDynamicGate()
-      assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
-      assertCombinedWalLimit(args.plan)
-      // One baseline for the whole hold: a write to either market's database or WAL
-      // at any point between here and the final comparison fails the run.
+      // Baseline first, before the slower post-stop probes: a write to either market's
+      // database or WAL between here and the final comparison fails the run.
       const sourceFiles = markets.flatMap((market) => [args.plan.sourceDatabasePaths[market],
         `${args.plan.sourceDatabasePaths[market]}-wal`])
       const sourceState = () => JSON.stringify(sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null)))
       const sourceStateAtHoldStart = sourceState()
+      const stoppedObservation = await args.observeDynamicGate()
+      assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
+      assertCombinedWalLimit(args.plan)
       const acquired = {} as Record<Market, Acquisition>
       for (const market of markets) {
         await assertHoldValid()

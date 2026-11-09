@@ -96,12 +96,19 @@ latency is the worst case given under "Abort and writer restoration". Only `com.
 update locks are checked for writers, so do not run manual `sqlite3`/Node tools
 against Production during the hold. While writers are stopped, do not operate
 on the StockBoard repository or databases from the Codex app or from another
-Claude Code session. A write by such a tool changes the WAL's mtime (even when
-SQLite reuses the WAL at the same length) or the main file's size/mtime; the
-monitor checks these every second during each copy, and the runner compares
-both markets' database and WAL files (device, inode, size, mtime, ctime) from
-just after the writers stop to just before they are restored; any difference
-fails the run without publishing. Observe mode calls
+Claude Code session. Guarantee (owner-approved 2026-11-09): an incomplete
+generation is never published. The runner records both markets' database and
+WAL files (device, inode, size, mtime, ctime) as the first step of the copy
+operation, which starts once every writer process group has exited and one
+writer-state check (`launchctl print` per writer) has passed, and compares them again after the last copy;
+any write to either market in that interval (including a WAL reused at the same
+length) fails the run without publishing, and the per-copy monitor also checks
+every second. Writes outside that interval are not detected but cannot produce
+an inconsistent generation: one in the instant before the baseline is included
+consistently (SQLite commits are atomic), and one after the final comparison
+happens after both copies have finished. Also accepted: a WAL that is created,
+written and removed entirely between samples while absent at both endpoints is
+not seen; a committed transaction would still change the main file. Observe mode calls
 `/api/health`, which writes the same storage-probe telemetry as the existing
 `com.stockboard.web-health` job; it does not write to the databases.
 
