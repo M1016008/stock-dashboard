@@ -90,27 +90,45 @@ Pinned SQLite 3.54.1 tooling is stored outside Production under
 Each one-shot plan fixes the sqlite3 and sqlite3_rsync SHA-256 values plus the
 upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
 
-Accepted risks (recorded, not coded; owner-approved 2026-11-09): each runtime
-identity check runs `system_profiler` once per volume; the resulting stop
-latency is the worst case given under "Abort and writer restoration". Only `com.stockboard.*` LaunchAgents and
-update locks are checked for writers, so do not run manual `sqlite3`/Node tools
-against Production during the hold. While writers are stopped, do not operate
-on the StockBoard repository or databases from the Codex app or from another
-Claude Code session. Guarantee (owner-approved 2026-11-09): an incomplete
-generation is never published. The runner records both markets' database and
-WAL files (device, inode, size, mtime, ctime) as the first step of the copy
-operation, which starts once every writer process group has exited and one
-writer-state check (`launchctl print` per writer) has passed, and compares them again after the last copy;
-any write to either market in that interval (including a WAL reused at the same
-length) fails the run without publishing, and the per-copy monitor also checks
-every second. Writes outside that interval are not detected but cannot produce
-an inconsistent generation: one in the instant before the baseline is included
-consistently (SQLite commits are atomic), and one after the final comparison
-happens after both copies have finished. Also accepted: a WAL that is created,
-written and removed entirely between samples while absent at both endpoints is
-not seen; a committed transaction would still change the main file. Observe mode calls
-`/api/health`, which writes the same storage-probe telemetry as the existing
-`com.stockboard.web-health` job; it does not write to the databases.
+### Guarantee and accepted risks (owner-approved 2026-11-09)
+
+Guarantee: each market's database in a published generation is a
+transaction-consistent SQLite snapshot. For each of the four source files (JP
+and US database and WAL), the runner records device, inode, size, mtime and
+ctime as the first step of the copy operation (which starts once every writer
+process group has exited and one `launchctl print` check per writer has passed)
+and records them again after the last copy. A write that changes a file between
+its two records, including a WAL reused at the same length, fails the run
+without publishing; the per-copy monitor also checks the market being copied
+every second. Consistency of work that spans several transactions or both
+markets is protected for approved writers by the existing update-lock and
+daily-window checks, and for anything else only by the operating rule below.
+
+Operating rule: while writers are stopped, do not run manual `sqlite3`/Node
+tools against Production, and do not operate on the StockBoard repository or
+databases from the Codex app or from another Claude Code session.
+
+Accepted risks (recorded, not coded):
+1. Only `com.stockboard.*` LaunchAgents and update locks are checked for
+   writers; other writers are covered by the operating rule and the detection
+   above.
+2. Observe mode calls `/api/health`, which writes the same storage-probe
+   telemetry as the existing `com.stockboard.web-health` job; it does not write
+   to the databases.
+3. A manual job that commits part of its work just before the baseline and the
+   rest after the final record can leave JP and US (or one database) at
+   different points of that job; the operating rule is the only protection.
+4. The four files are recorded one after another, so a write between two of
+   those records may be absorbed into a baseline or fall after a final record.
+   Such a write happens before the copies start or after they finish.
+5. A write after a file's final record (before writers are restarted) is not
+   detected; both copies are already complete.
+6. A WAL that is created, written and removed entirely between samples while
+   absent at both records is not seen; a committed transaction would still
+   change the main file.
+7. Each runtime identity check runs `system_profiler` once per volume; the
+   resulting stop latency is the worst case given under "Abort and writer
+   restoration".
 
 ## Abort and writer restoration
 

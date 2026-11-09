@@ -320,6 +320,32 @@ async function main(): Promise<void> {
     }), /SOURCE_CHANGED_DURING_HOLD/)
     assert.equal(fs.existsSync(path.join(destinationRoot, crossPlan.runId, 'COMPLETE.manifest.json')), false)
 
+    // The baseline is taken before the post-stop gate, so a write during that gate fails the run.
+    const gatePlan = structuredClone(plan)
+    gatePlan.runId = 'weekly-runner-fixture-write-during-stopped-gate'
+    let gateCalls = 0
+    await assert.rejects(() => runWeeklyBackupGeneration({
+      plan: gatePlan,
+      expectedPlanSha256: weeklyBackupPlanSha256(gatePlan),
+      observation: { ...observation, now: new Date().toISOString() },
+      runbookPath,
+      approvedWriters,
+      writerDriver,
+      assertRuntimeIdentity: () => undefined,
+      observeDynamicGate: async () => {
+        gateCalls += 1
+        // Call 1 is before the hold; call 2 is the post-stop gate inside it.
+        if (gateCalls === 2) fs.utimesSync(gatePlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 9_000))
+        return dynamicObservation()
+      },
+      readDestinationFreeBytes: () => 900_000_000_000,
+      observePostflight: async () => ({ dailySchedulesUnchanged: true,
+        webHealthy: true, analogHealthy: true }),
+      operations,
+    }), /SOURCE_CHANGED_DURING_HOLD/)
+    assert.equal(gateCalls, 2)
+    assert.equal(fs.existsSync(path.join(destinationRoot, gatePlan.runId, 'COMPLETE.manifest.json')), false)
+
     // A start window that closed after observation must fail before any write.
     const closedPlan = structuredClone(plan)
     closedPlan.runId = 'weekly-runner-fixture-start-window-closed'
