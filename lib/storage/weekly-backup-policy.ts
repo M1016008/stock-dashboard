@@ -4,7 +4,7 @@ import path from 'node:path'
 export const WEEKLY_BACKUP_SCHEMA_VERSION = 1 as const
 export const MINIMUM_DESTINATION_RESERVE_BYTES = 150_000_000_000
 export const MAXIMUM_WRITER_HOLD_MS = 8 * 60 * 60 * 1_000
-export const MAXIMUM_VERIFICATION_MS = 40 * 60 * 60 * 1_000
+export const MAXIMUM_VERIFICATION_MS = 96 * 60 * 60 * 1_000
 
 export const WEEKLY_BACKUP_WRITER_LABELS = [
   'com.stockboard.classification-sync',
@@ -108,8 +108,8 @@ export type MarketVerification = {
   quickCheck: 'ok' | string
   integrityCheck: 'ok' | string
   readOnlyReopen: boolean
-  restoreQuickCheck: 'ok' | string
-  restoreIntegrityCheck: 'ok' | string
+  restoreSha256: string
+  restoreReadOnlyReopen: boolean
   sourceWalGrowthBytes: number
   candidatePhysicalGrowthBytes: number
 }
@@ -336,7 +336,7 @@ function assertVerification(market: Market, expectedGeneration: string, value: M
   if (value.syncStatus !== 'PASS') throw new Error(`${market}_SYNC_NOT_PASS`)
   if (!/^[a-f0-9]{64}$/.test(value.databaseSha256)) throw new Error(`${market}_HASH_INVALID`)
   if (value.quickCheck !== 'ok' || value.integrityCheck !== 'ok' || !value.readOnlyReopen
-    || value.restoreQuickCheck !== 'ok' || value.restoreIntegrityCheck !== 'ok') {
+    || value.restoreSha256 !== value.databaseSha256 || !value.restoreReadOnlyReopen) {
     throw new Error(`${market}_SQLITE_VERIFICATION_INCOMPLETE`)
   }
   if (value.sourceWalGrowthBytes < 0 || value.sourceWalGrowthBytes > plan.maximumWalGrowthBytes) {

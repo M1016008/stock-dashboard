@@ -184,8 +184,8 @@ async function main(): Promise<void> {
           quickCheck: 'ok',
           integrityCheck: 'ok',
           readOnlyReopen: true,
-          restoreQuickCheck: 'ok',
-          restoreIntegrityCheck: 'ok',
+          restoreSha256: fileSha256(restoreDatabasePath),
+          restoreReadOnlyReopen: true,
         }
       },
       publishVerifiedGeneration,

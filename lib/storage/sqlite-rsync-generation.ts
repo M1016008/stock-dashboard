@@ -31,8 +31,8 @@ export type ReplicaVerification = {
   quickCheck: string
   integrityCheck: string
   readOnlyReopen: boolean
-  restoreQuickCheck: string
-  restoreIntegrityCheck: string
+  restoreSha256: string
+  restoreReadOnlyReopen: boolean
 }
 
 function command(binary: string, args: string[], timeoutMs: number): string {
@@ -230,17 +230,20 @@ export function verifyReplica(args: {
     candidateDatabasePath: args.restoreDatabasePath,
     deadlineMs: args.deadlineMs,
   })
-  const restoreQuickCheck = pragma(args.sqliteBinary, args.restoreDatabasePath,
-    'PRAGMA quick_check;', remainingMs(args.deadlineMs))
-  const restoreIntegrityCheck = pragma(args.sqliteBinary, args.restoreDatabasePath,
-    'PRAGMA integrity_check;', remainingMs(args.deadlineMs))
+  // The restore smoke copy is an APFS clone of the candidate, so it shares the
+  // candidate's blocks. Re-running integrity_check on it would read the same
+  // blocks again; byte identity plus a read-only reopen proves the restore path.
+  const databaseSha256 = fileSha256(args.candidateDatabasePath, args.deadlineMs)
+  const restoreSha256 = fileSha256(args.restoreDatabasePath, args.deadlineMs)
+  pragma(args.sqliteBinary, args.restoreDatabasePath,
+    'SELECT count(*) FROM sqlite_schema;', remainingMs(args.deadlineMs))
   return {
-    databaseSha256: fileSha256(args.candidateDatabasePath, args.deadlineMs),
+    databaseSha256,
     quickCheck,
     integrityCheck,
     readOnlyReopen: true,
-    restoreQuickCheck,
-    restoreIntegrityCheck,
+    restoreSha256,
+    restoreReadOnlyReopen: true,
   }
 }
 

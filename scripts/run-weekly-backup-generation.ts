@@ -279,7 +279,23 @@ async function observe(): Promise<WeeklyBackupObservation> {
   }
 }
 
+// An operator abort (Ctrl-C, or `kill -INT <pid>`) must not kill this process
+// while writers are held: the runner polls assertRuntimeIdentity every second
+// during sqlite3_rsync, so throwing there stops the copy and lets the writer
+// hold restore every writer before the process exits.
+let operatorAbortSignal: NodeJS.Signals | null = null
+
+function installOperatorAbortHandlers(): void {
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.on(signal, () => {
+      if (operatorAbortSignal === null) operatorAbortSignal = signal
+      console.error(`[weekly-backup] ${signal} received: stopping and restoring writers before exit`)
+    })
+  }
+}
+
 function assertRuntimeIdentity(): void {
+  if (operatorAbortSignal !== null) throw new Error(`OPERATOR_ABORT_REQUESTED:${operatorAbortSignal}`)
   for (const [mount, uuid, serial] of [
     [plan.sourceMount, plan.sourceVolumeUuid, plan.sourcePhysicalSerial],
     [plan.destinationMount, plan.destinationVolumeUuid, plan.destinationPhysicalSerial],
@@ -302,6 +318,7 @@ async function main(): Promise<void> {
   }
   if (argv.get('--confirm') !== CONFIRMATION) throw new Error('EXECUTION_CONFIRMATION_REQUIRED')
   if (argv.get('--expected-writers-sha256') !== digest) throw new Error('WRITER_DEFINITIONS_CHANGED_SINCE_APPROVAL')
+  installOperatorAbortHandlers()
 
   const result = await runWeeklyBackupGeneration({
     plan,

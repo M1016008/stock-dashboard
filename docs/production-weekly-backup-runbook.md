@@ -23,17 +23,20 @@ weekly scheduling are not authorized by this document.
    the same hold and generation ID.
 6. Abort if the source WAL grows, the 150 GB destination reserve is crossed,
    the approved candidate-growth budget is crossed, a mount/identity changes,
-   or the writer hold reaches eight hours. Restore only labels that were loaded
+   or the writer hold reaches the plan's maximum (at most eight hours). Restore only labels that were loaded
    before the hold; never enable an intentionally disabled label.
 7. After both syncs, restore the prior writer state and verify that daily
    schedules are unchanged. Destination-only verification may continue while
    Production runs.
-8. For both markets require SHA-256, `quick_check`, full `integrity_check`, a
-   read-only reopen, and the same checks on an isolated APFS restore clone.
-   Verification has one shared approval-plan deadline of at most 40 hours,
-   including checks, restore clone creation, and hashing. It runs only against
-   the candidate/restore files on the backup volume and must fit inside the
-   overall execution window.
+8. For both markets require SHA-256, `quick_check`, full `integrity_check`, and
+   a read-only reopen of the candidate. Then create an isolated APFS restore
+   clone and require that its SHA-256 equals the candidate's and that it reopens
+   read-only. The restore clone shares the candidate's blocks, so
+   `integrity_check` runs once per market, on the candidate only (owner
+   decision 2026-11-09, design B). Verification has one shared approval-plan
+   deadline of at most 96 hours, including checks, restore clone creation, and
+   hashing. It runs only against the candidate/restore files on the backup
+   volume and must fit inside the overall execution window.
 9. Recheck both market generation IDs and all checkpoint hashes. Publish a new
    `COMPLETE.manifest.json` atomically only after every check passes.
 
@@ -86,6 +89,43 @@ Pinned SQLite 3.54.1 tooling is stored outside Production under
 `/Volumes/OWC Express 1M2 80G/StockBoard Development/tools/sqlite-3.54.1`.
 Each one-shot plan fixes the sqlite3 and sqlite3_rsync SHA-256 values plus the
 upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
+
+## Abort and writer restoration
+
+The plan's `maximumWriterHoldMs` is the hold limit (3 hours for the first
+Production run). Run the CLI detached from the terminal so that closing the
+terminal cannot kill it:
+
+`nohup <execute command> > <log path> 2>&1 &`, then follow the log with `tail -f`.
+Immediately before starting, record the loaded labels:
+`launchctl list | grep com.stockboard > <pre-run label file>`.
+
+1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
+   (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
+   error propagates to the Writer Hold, which restores every label that was
+   loaded before the hold, then the CLI exits non-zero. The candidate stays
+   unpublished. The log shows `SQLITE_RSYNC_DEADLINE_EXCEEDED` and no
+   `WRITERS_RESTORED` phase line, followed by `FAILED`.
+2. **Operator abort during the hold.** Send `kill -INT <CLI node pid>`. The CLI
+   does not exit on SIGINT/SIGTERM/SIGHUP; it fails the next runtime-identity
+   check (within one second during sync) with `OPERATOR_ABORT_REQUESTED`, stops
+   `sqlite3_rsync`, restores the writers, and exits non-zero. Do not use
+   `kill -9` on the CLI while writers are held.
+3. **After any non-zero exit,** confirm:
+   - no `sqlite3_rsync` process remains (`pgrep -fl sqlite3_rsync` prints nothing);
+   - every label that was loaded before the run is loaded again
+     (`launchctl print gui/$(id -u)/<label>` returns 0), and no label that was
+     unloaded or disabled before the run was loaded.
+4. **Manual restoration (only if the CLI died without restoring, e.g. SIGKILL
+   or power loss).** After step 3 shows no `sqlite3_rsync`, bootstrap each label
+   listed in the pre-run label file (and not disabled):
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
+   Then confirm Web/Analog health and the active writer locks. Leave the
+   candidate directory in place; it is never published without a new run.
+
+Verification starts only after the writers are restored, so aborting during
+verification needs no writer action. An abort there leaves the candidate
+unpublished.
 
 ## First Production approval must name
 
