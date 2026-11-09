@@ -208,6 +208,12 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
       const stoppedObservation = await args.observeDynamicGate()
       assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
       assertCombinedWalLimit(args.plan)
+      // One baseline for the whole hold: a write to either market's database or WAL
+      // at any point between here and the final comparison fails the run.
+      const sourceFiles = markets.flatMap((market) => [args.plan.sourceDatabasePaths[market],
+        `${args.plan.sourceDatabasePaths[market]}-wal`])
+      const sourceState = () => JSON.stringify(sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null)))
+      const sourceStateAtHoldStart = sourceState()
       const acquired = {} as Record<Market, Acquisition>
       for (const market of markets) {
         await assertHoldValid()
@@ -246,6 +252,7 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
         }
         await assertHoldValid()
       }
+      if (sourceState() !== sourceStateAtHoldStart) throw new Error('SOURCE_CHANGED_DURING_HOLD')
       return acquired
     },
   })

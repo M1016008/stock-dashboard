@@ -90,13 +90,17 @@ Pinned SQLite 3.54.1 tooling is stored outside Production under
 Each one-shot plan fixes the sqlite3 and sqlite3_rsync SHA-256 values plus the
 upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
 
-Accepted risks (recorded, not coded): only `com.stockboard.*` LaunchAgents and
+Accepted risks (recorded, not coded; owner-approved 2026-11-09): each runtime
+identity check runs `system_profiler` once per volume; the resulting stop
+latency is the worst case given under "Abort and writer restoration". Only `com.stockboard.*` LaunchAgents and
 update locks are checked for writers, so do not run manual `sqlite3`/Node tools
 against Production during the hold. While writers are stopped, do not operate
 on the StockBoard repository or databases from the Codex app or from another
 Claude Code session. A write by such a tool changes the WAL's mtime (even when
 SQLite reuses the WAL at the same length) or the main file's size/mtime; the
-monitor checks these every second and once more after sqlite3_rsync exits, and
+monitor checks these every second during each copy, and the runner compares
+both markets' database and WAL files (device, inode, size, mtime, ctime) from
+just after the writers stop to just before they are restored; any difference
 fails the run without publishing. Observe mode calls
 `/api/health`, which writes the same storage-probe telemetry as the existing
 `com.stockboard.web-health` job; it does not write to the databases.
@@ -111,7 +115,10 @@ terminal cannot kill it:
 Immediately before starting, record which approved writer labels are loaded
 (the plan's `writerLabels`; readers and the capacity monitor stay online and are
 never touched):
-`launchctl list | grep com.stockboard > <pre-run label file>`.
+`launchctl list | grep com.stockboard > <pre-run label file>`. For each
+writer label, also record its process group (`ps -o pgid= -p <pid>` for a
+running PID) and its definition hash
+(`shasum -a 256 ~/Library/LaunchAgents/<label>.plist`) in the same file.
 
 1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
    (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
@@ -138,10 +145,17 @@ never touched):
      (`launchctl print gui/$(id -u)/<label>` returns 0), and no label that was
      unloaded or disabled before the run was loaded.
 4. **Manual restoration (only if the CLI died without restoring, e.g. SIGKILL
-   or power loss).** After step 3 shows no `sqlite3_rsync`, bootstrap only the
-   labels that are in the plan's `writerLabels`, were listed in the pre-run label
-   file, are not disabled, and are not loaded now:
-   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
+   or power loss).** In this order:
+   1. Stop a surviving copy: `pkill -TERM -f 'sqlite-3.54.1/sqlite3_rsync'`; if
+      `pgrep -fl sqlite3_rsync` still prints it after 5 seconds, repeat with
+      `-KILL`. Continue only when it prints nothing.
+   2. For each recorded process group, `pgrep -g <pgid>` must print nothing
+      (the old writer has fully exited).
+   3. `shasum -a 256` of each plist must equal the recorded hash. If any
+      differs, do not bootstrap it; report to the owner.
+   4. Bootstrap only the labels that are in the plan's `writerLabels`, were
+      listed in the pre-run label file, are not disabled, and are not loaded now:
+      `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
    Then confirm Web/Analog health and the active writer locks. Leave the
    candidate directory in place; it is never published without a new run.
 

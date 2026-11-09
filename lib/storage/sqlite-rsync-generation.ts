@@ -145,16 +145,19 @@ export async function runMonitoredSqliteRsync(args: {
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4_000_000) })
   // A spawn failure is reported through 'error' and never through 'exit'.
   // Without this handler Node would exit before the writer hold restores writers.
+  // 'error' also fires when a kill fails; only a missing pid means the spawn failed.
+  // Otherwise keep waiting for 'exit' so writers are never restored while the child runs.
   let spawnError: Error | null = null
+  let monitorError: Error | null = null
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once('exit', (code, signal) => resolve({ code, signal }))
-    child.once('error', (error) => {
+    child.on('error', (error) => {
+      if (child.pid !== undefined) { monitorError ??= error; return }
       spawnError = error
       resolve({ code: child.exitCode, signal: child.signalCode })
     })
   })
 
-  let monitorError: Error | null = null
   while (child.exitCode === null && child.signalCode === null && spawnError === null) {
     // Check the hold deadline first: the identity probe below can block.
     if (Date.now() >= args.limits.deadlineMs) {

@@ -293,6 +293,33 @@ async function main(): Promise<void> {
     }), /OPERATOR_ABORT_REQUESTED/)
     assert.equal(fs.existsSync(path.join(destinationRoot, abortPlan.runId, 'COMPLETE.manifest.json')), false)
 
+    // A write to the other market while JP is copying must fail the whole run.
+    const crossPlan = structuredClone(plan)
+    crossPlan.runId = 'weekly-runner-fixture-cross-market-write'
+    await assert.rejects(() => runWeeklyBackupGeneration({
+      plan: crossPlan,
+      expectedPlanSha256: weeklyBackupPlanSha256(crossPlan),
+      observation: { ...observation, now: new Date().toISOString() },
+      runbookPath,
+      approvedWriters,
+      writerDriver,
+      assertRuntimeIdentity: () => undefined,
+      observeDynamicGate: async () => dynamicObservation(),
+      readDestinationFreeBytes: () => 900_000_000_000,
+      observePostflight: async () => ({ dailySchedulesUnchanged: true,
+        webHealthy: true, analogHealthy: true }),
+      operations: {
+        ...operations,
+        runMonitoredSqliteRsync: async (syncArgs) => {
+          if (syncArgs.sourceDatabasePath === crossPlan.sourceDatabasePaths.JP) {
+            fs.utimesSync(crossPlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 5_000))
+          }
+          return operations.runMonitoredSqliteRsync(syncArgs)
+        },
+      },
+    }), /SOURCE_CHANGED_DURING_HOLD/)
+    assert.equal(fs.existsSync(path.join(destinationRoot, crossPlan.runId, 'COMPLETE.manifest.json')), false)
+
     // A start window that closed after observation must fail before any write.
     const closedPlan = structuredClone(plan)
     closedPlan.runId = 'weekly-runner-fixture-start-window-closed'
