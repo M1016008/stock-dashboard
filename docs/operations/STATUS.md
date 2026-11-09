@@ -32,8 +32,8 @@
 
 ### 米国株の同等化とクロスチェックの段階で検討する (今は着手しない)
 - **parity 監査の運用負担を確認する** (記録日: 2026-11-10)
-  - parity 監査 (`scripts/audit-us-jp-parity.ts`) は、根拠として登録したファイルの変更のたびに
-    `docs/us-stockboard-parity-board.json` の更新を要する。
+  - parity 監査 (`scripts/audit-us-jp-parity.ts`) は、根拠として登録したファイルの内容が、その行の `git` revision の時点と
+    異なると失敗する。そのため、根拠ファイルを変更するたびに `docs/us-stockboard-parity-board.json` の該当行の更新を要する。
   - 米国株の同等化とクロスチェックの段階で、運用の負担に見合う仕組みかを確認する。
   - 生成スクリプト (`scripts/build-us-jp-parity-board.ts`) の元データが古く、現在の JSON と一致しない。
     JSON は手で更新されている。監査の見直しの際に、スクリプトを最新化するか削除するかを判断する。
