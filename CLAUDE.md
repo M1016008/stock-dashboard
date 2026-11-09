@@ -6,7 +6,8 @@ Claude Code が実装を担当し、Codex が独立レビューを行う。最�
 
 ### レビューが必須になるとき
 1. Production 操作の承認をオーナーに求める前: 変更差分、実行手順、Rollback 手順
-2. PR を Draft から外す前、Draft 以外で main 向け PR を作る前、main への Merge の承認を求める前: PR の差分全体
+2. PR を Draft から外す前、Draft 以外で main 向け PR を作る前、既存 PR のベースを main に変更する前、
+   main への Merge の承認を求める前: PR の差分全体
 3. データを書き換えるコード (Backup 用 CLI、JP 修復など): 実行、Merge、承認依頼のいずれよりも前
 4. 文書だけの変更: 軽く1回
 
