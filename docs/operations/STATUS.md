@@ -30,6 +30,19 @@
 - **上の2項目の単純化では、PR #76 の行数を減らすことも目標にする** (記録日: 2026-11-09)
   - 2026-11-09 時点で PR #76 は origin/main に対して追加約 830 行 (本体 470・テスト 159・文書 199)。
 
+### 調査項目 (今は着手しない)
+- **10/27 (火) に batch-earnings の記録が無い理由** (記録日: 2026-11-10)
+  - 10/27 の update-latest は 10/28 04:56 に実行され success だが、その実行では batch-earnings (earnings_calendar) の
+    batch_runs 行が無い。optional 処理を飛ばす条件 (`UPDATE_LATEST_CRITICAL_ONLY` や時間帯の判定) が関係したかを確認する。
+
+### 別の作業として検討する (11/15 の後)
+- **J-Quants `/fins/earnings-date` で JPX 公式 Excel を置き換える** (記録日: 2026-11-10)
+  - 現在の `/equities/earnings-calendar` は、翌営業日に発表する 3月期・9月期決算の会社だけを返す (J-Quants 公式仕様)。
+    全上場会社分は JPX 公式 Excel (J-Quants 以外のデータ源) で補っている。
+  - `/fins/earnings-date` は、決算期によらず全上場銘柄 (REIT 等を含む) の予定日と、変更・未定の履歴を返す。
+  - 最初に、契約中の J-Quants プランでこのアプリからこの API を呼べるか (参照可能期間を含む) を確認する。
+    その後、件数と JPX 公式 Excel との差を比べてから置き換えを判断する。
+
 ### オーナーの判断待ち
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
   Claude Code のレビュー実行は毎回 read-only で上書きしている (CLAUDE.md の Codex 独立レビュー節を参照)。
