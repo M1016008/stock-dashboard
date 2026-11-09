@@ -78,7 +78,6 @@ assert.ok(navPageIds('jp').includes('sectors'), 'Industry analysis must remain u
 assert.ok(navPageIds('jp').includes('periodExplorer'), 'Period Explorer must be available under stock discovery.')
 assert.ok(navPageIds('jp').includes('hexStage'), 'Market-wide six-stage analysis must remain under Analysis & AI.')
 assert.ok(navPageIds('jp').includes('ma25mMonitor'), 'Monthly MA monitoring must move to Monitor.')
-assert.ok(navPageIds('jp').includes('customCharts'), 'Synthetic charts must move to Analysis & AI.')
 assert.ok(!navPageIds('jp').includes('historicalPatterns'), 'Historical pattern search must not duplicate MA Lens in navigation.')
 assert.ok(!navPageIds('jp').includes('sectorStructure'), 'Sector structure must stay a view inside sector analysis.')
 assert.ok(navPageIds('us').includes('usMarketMomentum'), 'US market momentum must be available under Market & Industry.')
@@ -119,7 +118,6 @@ const areaCases: Array<[string, string | null, HeaderArea]> = [
   ['/screener', null, 'jp'],
   ['/stock/7203', null, 'jp'],
   ['/watchlist', null, 'jp'],
-  ['/custom-charts', null, 'jp'],
   ['/us', null, 'us'],
   ['/us/screener', null, 'us'],
   ['/us/period-explorer', null, 'us'],
@@ -211,7 +209,6 @@ const expectedCounterparts: Array<[string, string | null, Record<HeaderArea, str
   ['/large-holders/investors/123', null, { jp: '/', us: '/us', commodities: '/commodities' }],
   // Shared pages are never given a market query.
   ['/watchlist', null, { jp: '/', us: '/us', commodities: '/commodities' }],
-  ['/custom-charts', null, { jp: '/', us: '/us', commodities: '/commodities' }],
   // Tickers are never mapped across markets.
   ['/stock/7203', null, { jp: '/', us: '/us', commodities: '/commodities' }],
   ['/us/stock/AAPL', null, { jp: '/', us: '/us', commodities: '/commodities' }],

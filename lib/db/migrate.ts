@@ -2790,31 +2790,6 @@ const STATEMENTS = [
     PRIMARY KEY (mode, table_name, partition_key)
   )`,
   `CREATE INDEX IF NOT EXISTS turso_sync_partitions_status_idx ON turso_sync_partitions(mode, status, table_name)`,
-  `CREATE TABLE IF NOT EXISTS fx_rates_daily (
-    pair TEXT NOT NULL,
-    date TEXT NOT NULL,
-    rate REAL NOT NULL,
-    source TEXT NOT NULL DEFAULT 'csv',
-    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    PRIMARY KEY (pair, date)
-  )`,
-  `CREATE INDEX IF NOT EXISTS fx_rates_daily_date_idx ON fx_rates_daily(date)`,
-  `CREATE TABLE IF NOT EXISTS custom_charts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    formula TEXT NOT NULL,
-    formula_ast_json TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'valuation',
-    base_date TEXT,
-    display_currency TEXT NOT NULL DEFAULT 'LOCAL',
-    missing_policy TEXT NOT NULL DEFAULT 'intersection',
-    indicator_config_json TEXT NOT NULL,
-    favorite INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-  )`,
-  `CREATE INDEX IF NOT EXISTS custom_charts_sort_idx ON custom_charts(favorite DESC, sort_order ASC, updated_at DESC)`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */

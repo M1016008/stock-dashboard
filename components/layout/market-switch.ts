@@ -58,7 +58,7 @@ export const MARKET_SPECIFIC_PAGE_IDS = {
  * Market-agnostic pages listed under several markets. They have no market
  * query, so a market switch from them goes home instead of appending one.
  */
-export const SHARED_PAGE_IDS = ['watchlist', 'customCharts'] as const satisfies readonly PageId[]
+export const SHARED_PAGE_IDS = ['watchlist'] as const satisfies readonly PageId[]
 
 export function hrefPath(href: string): string {
   return href.split(/[?#]/)[0] || '/'

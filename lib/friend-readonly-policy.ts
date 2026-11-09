@@ -1,7 +1,6 @@
 export const FRIEND_READ_ONLY_ACCESS_MODE = 'friend-read-only' as const
 
 export const FRIEND_READ_ONLY_JSON_POST_PATHS = new Set([
-  '/api/custom-charts/evaluate',
   '/api/integrated-screener',
   '/api/integrated-screener/reason',
   '/api/trigger-discovery/historical-scan',

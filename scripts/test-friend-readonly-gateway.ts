@@ -92,7 +92,6 @@ async function main() {
   assert.equal(originRequests[3].body, miniChartsBody)
 
   for (const path of [
-    '/api/custom-charts/evaluate',
     '/api/integrated-screener',
     '/api/integrated-screener/reason',
     '/api/trigger-discovery/historical-scan',
@@ -103,7 +102,7 @@ async function main() {
     })
     assert.equal(response.status, 200, `${path} read transport must be forwarded`)
   }
-  assert.equal(originRequests.length, 9)
+  assert.equal(originRequests.length, 8)
 
   for (const path of [
     '/api/us/trigger-discovery/search',
@@ -114,13 +113,13 @@ async function main() {
     })
     assert.equal(response.status, 200, `${path} US read transport must be forwarded`)
   }
-  assert.equal(originRequests.length, 11)
+  assert.equal(originRequests.length, 10)
 
   const wrongContentType = await fetch(`${base}/api/trigger-discovery/search`, {
     method: 'POST', headers: { 'content-type': 'text/plain' }, body: searchBody,
   })
   assert.equal(wrongContentType.status, 415)
-  assert.equal(originRequests.length, 11)
+  assert.equal(originRequests.length, 10)
 
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
     const response = await fetch(`${base}/api/trigger-discovery/saved`, { method })
@@ -130,7 +129,7 @@ async function main() {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: searchBody,
   })
   assert.equal(nearMatch.status, 405)
-  assert.equal(originRequests.length, 11, 'Mutating requests must not reach the origin')
+  assert.equal(originRequests.length, 10, 'Mutating requests must not reach the origin')
 
   for (const path of [
     '/admin/db',
@@ -145,7 +144,7 @@ async function main() {
     const response = await fetch(`${base}${path}`)
     assert.equal(response.status, 404, `${path} must be hidden`)
   }
-  assert.equal(originRequests.length, 11, 'Private paths must not reach the origin')
+  assert.equal(originRequests.length, 10, 'Private paths must not reach the origin')
 
   assert.deepEqual(friendReadonlyDecision('POST', '/stock/6098'), {
     allowed: false, status: 405, code: 'READ_ONLY_ACCESS',

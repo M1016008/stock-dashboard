@@ -211,15 +211,6 @@ export const PAGE_CATALOG = {
     commandBadge: '分析',
     searchTerms: 'トレード ワークベンチ 注文',
   },
-  customCharts: {
-    href: '/custom-charts',
-    label: '合成チャート',
-    description: '複数銘柄を数式で合成・比較',
-    icon: ChartCandlestick,
-    commandVerb: '作成',
-    commandBadge: '分析',
-    searchTerms: '比較 独自チャート',
-  },
   watchlist: {
     href: '/watchlist',
     label: 'ウォッチリスト',
@@ -490,7 +481,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'stages', label: '6ステージ', pageIds: ['hexStage', 'transitions'], column: 1 },
         { id: 'ma-similarity', label: 'MA・類似分析', pageIds: ['maLens'], column: 1 },
-        { id: 'validation', label: '検証・実践', pageIds: ['backtest', 'tradeWorkbench', 'customCharts'], column: 2 },
+        { id: 'validation', label: '検証・実践', pageIds: ['backtest', 'tradeWorkbench'], column: 2 },
       ],
     },
     {
@@ -538,7 +529,7 @@ export const NAVIGATION_BY_AREA = {
       icon: Activity,
       sections: [
         { id: 'us-models', label: '構造・AI', pageIds: ['usMlLens', 'usTransitions'], column: 1 },
-        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usTradeWorkbench', 'customCharts'], column: 2 },
+        { id: 'us-validation', label: '検証・実践', pageIds: ['usBacktest', 'usTradeWorkbench'], column: 2 },
       ],
     },
     {

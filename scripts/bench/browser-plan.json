@@ -23,7 +23,6 @@
     { "id": "commodities", "path": "/commodities" },
     { "id": "commodity-detail", "path": "/commodities/us/CL" },
     { "id": "commodities-screener", "path": "/commodities/screener" },
-    { "id": "custom-charts", "path": "/custom-charts", "allowFailures": ["/api/custom-charts/evaluate"], "allowConsole": ["/api/custom-charts/evaluate"] },
     { "id": "earnings", "path": "/earnings" },
     { "id": "earnings-us", "path": "/us/earnings" },
     { "id": "hex-stage", "path": "/hex-stage" },

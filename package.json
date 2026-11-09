@@ -180,7 +180,6 @@
     "test:historical-sector-universe": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-historical-sector-universe.ts",
     "verify:financial-foundation:toyota": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/verify-financial-foundation-toyota.ts",
     "verify:financial-foundation:backfill": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/verify-financial-foundation-backfill.ts",
-    "test:custom-charts": "tsx scripts/test-custom-charts.ts",
     "test:pms": "tsx scripts/test-physical-momentum.ts",
     "test:physical-plan": "tsx scripts/test-physical-plan.ts",
     "test:us-shared-tools": "tsx scripts/test-us-shared-tools.ts",
