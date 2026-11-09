@@ -154,6 +154,29 @@ try {
   }), /RUNTIME_DEVICE_IDENTITY_CHANGED/)
   assert.ok(identityChecks > 1)
 
+  // A source write seen during or right after the sync fails the run instead of publishing.
+  const changedCandidate = path.join(candidateRoot, 'source-changed.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: changedCandidate })
+  await assert.rejects(() => runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC,
+    sourceDatabasePath: capacityOrigin,
+    candidateDatabasePath: changedCandidate,
+    assertRuntimeIdentity: () => undefined,
+    limits: {
+      deadlineMs: Date.now() + 60_000,
+      destinationMount: os.tmpdir(),
+      destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: tmpFree,
+      maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: `${capacityOrigin}-wal`,
+      sourceWalBytesAtStart: 0,
+      maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: capacitySourceStat.size,
+      sourceDatabaseMtimeMsAtStart: capacitySourceStat.mtimeMs - 1,
+    },
+  }), /SOURCE_DATABASE_CHANGED_DURING_SYNC/)
+
   assert.throws(() => verifyReplica({
     sqliteBinary: SQLITE,
     candidateRoot,

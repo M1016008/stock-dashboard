@@ -17,7 +17,6 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
@@ -30,6 +29,8 @@ import {
 } from '@/lib/storage/weekly-backup-policy'
 import { runWeeklyBackupGeneration } from '@/lib/storage/weekly-backup-runner'
 import { fileSha256 } from '@/lib/storage/sqlite-rsync-generation'
+import { resolveThroughExistingAncestor } from '@/lib/runtime/isolation'
+import { launchAgentPlistPath } from './lib/launchagent-install'
 import {
   createLaunchdWriterHoldDriver,
   launchdJobPid,
@@ -63,10 +64,14 @@ const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as WeeklyBackupPlan
 validateWeeklyBackupPlan(plan)
 assertWeeklyBackupPlanSha256(plan, expectedPlanSha256)
 // Downstream containment checks are lexical, so no planned path may pass through a symlink.
-const destinationRootOrParent = fs.existsSync(plan.destinationRoot) ? plan.destinationRoot : path.dirname(plan.destinationRoot)
-for (const planned of [plan.sourceMount, plan.destinationMount, destinationRootOrParent, ...MARKETS.map((m) => plan.sourceDatabasePaths[m])]) {
-  if (fs.realpathSync(planned) !== planned) throw new Error(`PLANNED_PATH_NOT_CANONICAL:${planned}`)
+for (const planned of [plan.sourceMount, plan.destinationMount, plan.destinationRoot, plan.priorManifestPath,
+  plan.sqliteBinaryPath, plan.sqliteRsyncBinaryPath,
+  ...MARKETS.flatMap((market) => [plan.sourceDatabasePaths[market], plan.priorDatabasePaths[market]])]) {
+  if (resolveThroughExistingAncestor(planned) !== planned) throw new Error(`PLANNED_PATH_NOT_CANONICAL:${planned}`)
 }
+// The pinned tools run against Production during observation, so verify them before any spawn.
+if (fileSha256(plan.sqliteBinaryPath) !== plan.sqliteBinarySha256
+  || fileSha256(plan.sqliteRsyncBinaryPath) !== plan.sqliteRsyncBinarySha256) throw new Error('SQLITE_TOOL_SHA256_MISMATCH')
 
 function run(file: string, args: string[], timeoutMs = 60_000): string {
   const result = spawnSync(file, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
@@ -137,13 +142,9 @@ function volumeIdentity(mount: string): { mount: string; uuid: string; serial: s
   }
 }
 
-function launchAgentPlist(label: string): string {
-  return path.join(os.homedir(), 'Library', 'LaunchAgents', `${label}.plist`)
-}
-
 function writerIdentities(): LaunchdRuntimeIdentity[] {
   return plan.writerLabels.map((label) => {
-    const plistPath = launchAgentPlist(label)
+    const plistPath = launchAgentPlistPath(label)
     if (!fs.existsSync(plistPath)) throw new Error(`WRITER_PLIST_MISSING:${label}`)
     const definition = plistJson(plistPath)
     const program = typeof definition.Program === 'string'
@@ -192,7 +193,7 @@ function activeWriterLockOwners(): string[] {
 }
 
 function scheduledMinutes(label: string): Array<{ weekday: number | null; minuteOfDay: number }> {
-  const definition = plistJson(launchAgentPlist(label))
+  const definition = plistJson(launchAgentPlistPath(label))
   const raw = definition.StartCalendarInterval
   const entries = (Array.isArray(raw) ? raw : raw ? [raw] : []) as Array<Record<string, number>>
   return entries.map((entry) => ({

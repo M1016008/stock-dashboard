@@ -250,6 +250,8 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     },
   })
   args.onPhase?.('WRITERS_RESTORED')
+  // A hold that overran while writers were stopping or restarting can never publish.
+  if (held.receipt.holdDurationMs > args.plan.maximumWriterHoldMs) throw new Error('WRITER_HOLD_LIMIT_EXCEEDED')
 
   const verificationStartedAt = Date.now()
   const verificationDeadlineMs = Math.min(

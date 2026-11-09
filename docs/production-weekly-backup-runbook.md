@@ -92,8 +92,11 @@ upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
 
 Accepted risks (recorded, not coded): only `com.stockboard.*` LaunchAgents and
 update locks are checked for writers, so do not run manual `sqlite3`/Node tools
-against Production during the hold; a write by one is still caught by the WAL
-growth and source size/mtime checks and fails the run. Observe mode calls
+against Production during the hold. While writers are stopped, do not operate
+on the StockBoard repository or databases from the Codex app or from another
+Claude Code session. A write by such a tool is caught only if it changes the WAL
+length or the main file's size/mtime; SQLite can reuse a WAL at the same length
+without touching the main file, and that write is not detected. Observe mode calls
 `/api/health`, which writes the same storage-probe telemetry as the existing
 `com.stockboard.web-health` job; it does not write to the databases.
 
@@ -124,9 +127,10 @@ never touched):
    `kill -9` on the CLI while writers are held.
    The monitor checks the hold deadline, then the abort flag and volume
    identity, about once a second. The identity probes normally take about one
-   second together; each times out after 15 seconds and a timeout fails the
-   run. A stop can therefore lag the hold limit or the signal by that probe
-   time.
+   second together. Each of the up to four probes per volume (diskutil, plutil,
+   system_profiler, ioreg) times out after 15 seconds and a timeout fails the
+   run, so in the worst case a stop can lag the hold limit or the signal by
+   about two minutes.
 3. **After any non-zero exit,** confirm:
    - no `sqlite3_rsync` process remains (`pgrep -fl sqlite3_rsync` prints nothing);
    - every label that was loaded before the run is loaded again
