@@ -16,7 +16,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   2016-11-10 より前の株価データは、以前の Premium 契約時に取得・保存したもの。
   プラン変更後もこのデータを利用してよいことは、オーナーが確認済み (2026-11-10)。
 - **米国株の第一参照**: Tiingo EOD。企業開示・SIC分類は SEC EDGAR / Companyfacts
-- **補完ソース: 下表の 4 取得元はオーナー申告により各社から承認取得済み (2026-11-09。証拠の所在は未記載)**。
+- **補完ソース: 下表の取得元はオーナー申告により各社から承認取得済み (Finnhub・Kabutan・JPX・FMP は 2026-11-09、会社四季報は 2026-11-11。証拠の所在は未記載)**。
   契約書やメール等の証拠の所在は、オーナーから提示された時点で追記する。
   - 承認範囲: 外部閲覧 (friend-readonly-gateway) について、極少人数 (上司 1 名) への表示を各社から承認済み。
   - 承認範囲外: それ以外の公開・再配信。新しい有料契約、追加課金とあわせて、オーナーの明示承認が必要。
@@ -28,6 +28,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   | Kabutan | テーマ: アクセスランキング `/info/accessranking/3_2` から各テーマ `/themes/...` を取得 (`scripts/batch-kabutan-themes.ts`)。材料ニュース: `/news/marketnews/?category=...` と記事 `/news/marketnews/?b=...` を取得 (`scripts/batch-kabutan-material-news.ts`)。銘柄ページ (`/stock/?code=...`) はリンクとして解析・表示するだけで取得しない |
   | JPX | JPX 公式サイトからの直接取得 (J-Quants 経由とは別): (1) 決算発表予定 `/listing/event-schedules/financial-announcement/` (`lib/jpx-earnings.ts`)、(2) 上場銘柄一覧 `/markets/statistics-equities/misc/.../data_j.xlsx` (`scripts/audit-large-holder-instruments.ts`)、(3) `scripts/audit-large-holder-regulatory-current.ts --phase-16a8` 実行時のみ、REIT 銘柄一覧ページ `/equities/products/reits/issues/`、優先株 PDF `/equities/products/preferred-stocks/issues/...pdf`、`www2.jpx.co.jp/disc/...pdf` を規制範囲の証拠として取得。それ以外の ETF/ETN 銘柄一覧ページなどは出典リンクとして表示するだけで取得しない |
   | FMP | 次回決算日 (`earnings-calendar`) と Sector/Industry (`profile`) のアダプタ (`lib/fmp.ts`、`/stable`)。表示はゲート `FMP_DISPLAY_LICENSE_APPROVED` で制御する |
+  | 会社四季報 (東洋経済新報社) | 業種の 60 分類 (`stock_classification.major_category`)。StockBoard の外のツールが作る CSV (`/Volumes/OWC Express 1M2 80G/会社四季報CSV/会社四季報_最新.csv`) を、classification-sync (`scripts/sync-classification-csv.ts`) が取り込む。同じ CSV から業種細分類 (`sub_industry`) と四季報プロフィール (`stock_shikiho_profiles`) も取り込む。承認の条件は「数名での利用に限る」。その条件のもとで、(1) 四季報オンラインからのツールによる自動取得、(2) 60 分類以外の項目 (細分類、四季報プロフィール) の利用、(3) それらの外部閲覧 (Gateway) での上司 1 名への表示、の 3 点を承認済み (オーナー申告、2026-11-11)。数名での利用を超える公開・再配信は承認範囲外 |
 
 - **上記以外の補完**: 各市場の一次ソースで取得できないデータに限り別ソースを使う。**ただし都度判断・相談**
   (勝手に Yahoo Finance 等にフォールバックしない)
