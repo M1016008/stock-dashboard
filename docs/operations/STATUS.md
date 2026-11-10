@@ -22,6 +22,31 @@
   - PR #80 (SMA 修正の移植) の検証は合成データ (Fixture) だけで行った。
   - P1 のデプロイ前に、実データ (本番 DB の読み取り専用コピー等) で、SMA の計算結果が本番の現在の表示と一致することを確認する。
 
+- **P1 の後の最初の日曜: US モデル更新の正常化を判定する** (記録日: 2026-11-10)
+  - 背景: weekly-optimization のログに残る 109 回の実行 (2026-07-25〜11-08 JST) は、すべて status=failed で、
+    US の段階 (`us-features-models`) が完了した回はない。最新の 11/8 の実行は、作りかけ DB
+    `stockboard-us.db.tiingo_adj_ohlc_ratio_v1.building` を `sqlite3 -readonly` で開けず失敗した (原因は未特定)。
+    その前の回は、SIGTERM による停止や、作りかけ DB の価格の日付が元の DB より古いことによる検証失敗
+    (`ohlcvMaxDate` の不足) など、別の理由で失敗している。
+  - 記録の場所:
+    - 実行の状態: `~/Library/Application Support/StockBoard/weekly-optimization-state.json`
+      (run 全体の `status` と、各 step の `status`・`startedAt`・`finishedAt`)
+    - ログ: `~/Library/Logs/StockBoard/weekly-optimization.log` と `.err`
+      (`ROLLBACK us-features-models` や `STOP` の行の有無)
+    - US モデルの鮮度: `~/Library/Logs/StockBoard/data-freshness-guard.log` の `usModelAge=…h`
+  - 成功の判定 (すべて満たすこと):
+    1. state の run 全体が `status: "completed"` で、6 つの step (jp-features-models、us-features-models、
+       jp-analog-index、us-analog-index、dashboard-cache、database-maintenance) がすべて `completed`。
+    2. その run の開始以降に追記されたログに、`ROLLBACK us-features-models` と `STOP` の行がない。
+       `.err` にも、その run の開始以降の新しいエラーがない (ログは過去の分も残っているため、範囲を限定して確認する)。
+    3. その後の data-freshness-guard で `usModelAge` が 8 日 (192 時間) 以下
+       (guard 自身の判定基準。`scripts/guard-data-freshness.ts` の `usModelAgeHours <= 8 * 24`)。
+    4. US の分析 DB のメタデータ (`us_analytics_metadata`) の `ohlcv_price_basis`・`derived_price_basis`・
+       `analog_index_price_basis` が `tiingo_adj_ohlc_ratio_v1` で、`derived_price_date`・`analog_index_price_date` が
+       価格の最新日と一致する (読み取り専用で確認)。
+  - 失敗した場合は、P1 で入れる記録 (失敗時の `-wal`・`-shm` の状態と、同じファイルを開いているプロセス) で原因を調べる。
+    手動での再実行は、別途承認を得る。
+
 ### Backup 初回取得 (11/15) の後に検討する (今は着手しない)
 - **sqlite3_rsync のスナップショット一貫性を確認し、検出処理の単純化を検討する** (記録日: 2026-11-09)
   - sqlite3_rsync が、コピー元が使用中でも一貫したスナップショットを写すかを、SQLite の公式ドキュメントで確認する。
