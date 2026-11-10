@@ -790,7 +790,7 @@ async function main(): Promise<void> {
   const releaseOnSignal = (signal: NodeJS.Signals) => {
     if (signalExitStarted) return
     signalExitStarted = true
-    void updateLockForSignal?.release()
+    void Promise.resolve(updateLockForSignal?.release())
       .catch(() => undefined)
       .finally(() => {
         processLock.release()

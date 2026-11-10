@@ -487,6 +487,7 @@ assert.match(weeklyOptimization, /await waitForStepProcessesExit\(\)\n      resu
 assert.doesNotMatch(weeklyOptimization, /SIGKILL/, 'the safe stop must never escalate to SIGKILL')
 const foundationSignal = read('scripts/ensure-us-adjusted-foundation.ts')
 assert.match(foundationSignal, /process\.on\('SIGTERM', releaseOnSignal\)/)
+assert.match(foundationSignal, /Promise\.resolve\(updateLockForSignal\?\.release\(\)\)/)
 assert.match(weeklyOptimization, /buildRunKey/)
 assert.match(weeklyOptimization, /implementationFingerprint/)
 assert.match(weeklyOptimization, /same week, data dates, and implementation/)
