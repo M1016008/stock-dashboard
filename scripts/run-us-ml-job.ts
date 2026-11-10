@@ -5,7 +5,7 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -128,18 +128,23 @@ function sqliteReadonly(dbPath: string, sql: string): string {
   try {
     return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
   } catch (error) {
+    // Diagnostics must never replace the original sqlite3 error.
     const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
     console.error(`US ML sqlite read failed: ${dbPath}`)
     for (const file of files) {
-      const stat = fs.statSync(file, { throwIfNoEntry: false })
-      console.error(stat ? `  ${file}: size=${stat.size} mtime=${stat.mtime.toISOString()} ino=${stat.ino}` : `  ${file}: missing`)
+      try {
+        const stat = fs.statSync(file, { throwIfNoEntry: false })
+        console.error(stat ? `  ${file}: size=${stat.size} mtime=${stat.mtime.toISOString()} ino=${stat.ino}` : `  ${file}: missing`)
+      } catch (statError) {
+        console.error(`  ${file}: stat failed: ${statError instanceof Error ? statError.message : String(statError)}`)
+      }
     }
-    try {
-      console.error(execFileSync('lsof', ['-n', '--', ...files], { encoding: 'utf8', timeout: 10_000 }).trim())
-    } catch (lsofError) {
-      // lsof exits 1 when nothing has the files open; keep whatever it printed.
-      console.error(`  lsof: ${String((lsofError as { stdout?: string }).stdout ?? '').trim() || 'no open handles reported'}`)
-    }
+    // Same lsof contract as lib/storage/storage-recovery.ts: status 1 with no output means no open handles.
+    const present = files.filter(fs.existsSync)
+    const lsof = spawnSync('/usr/sbin/lsof', ['-n', '--', ...present], { encoding: 'utf8', timeout: 10_000 })
+    console.error(present.length === 0 ? '  lsof: skipped (no files present)' : lsof.status === 1 && !lsof.stdout?.trim() && !lsof.stderr?.trim()
+      ? '  lsof: no open handles'
+      : `  lsof: status=${lsof.status} signal=${lsof.signal ?? '-'} error=${lsof.error?.message ?? '-'}\n${lsof.stdout ?? ''}${lsof.stderr ?? ''}`.trimEnd())
     throw error
   }
 }
