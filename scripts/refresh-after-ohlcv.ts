@@ -10,7 +10,7 @@ import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
 import { runDailyTriggerEvaluations } from '@/lib/server/trigger-daily-evaluations'
 import { composeTriggerNotificationsForBatch } from '@/lib/server/trigger-notification-composition'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock, assertInheritedUpdateLockOwner } from '@/lib/server/update-lock'
 
 type RunResult = {
   code: number | null
@@ -116,6 +116,11 @@ async function main(): Promise<void> {
 
   const criticalOnly = process.env.REFRESH_AFTER_OHLCV_CRITICAL_ONLY === '1'
   const skipLock = process.env.REFRESH_AFTER_OHLCV_SKIP_LOCK === '1'
+  const inheritedJobType = process.env.STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE?.trim() ?? ''
+  const inheritedOwner = process.env.STOCKBOARD_PARENT_UPDATE_LOCK_OWNER?.trim() ?? ''
+  if (skipLock) {
+    await assertInheritedUpdateLockOwner(inheritedJobType, inheritedOwner, ['update_latest'])
+  }
   const lock = skipLock ? null : await acquireExclusiveUpdateLock('post_ohlcv_refresh')
   if (!skipLock && !lock) {
     console.log('Post-OHLCV refresh skipped: post_ohlcv_refresh lock is already active')
@@ -150,7 +155,11 @@ async function main(): Promise<void> {
 
     // 個別銘柄の6ステージを業種・細分類ごとに集計する。スナップショット
     // 更新の直後に走らせ、画面の構造変化表示だけが古く残らないようにする。
-    await runRequired('scripts/batch-sector-structure.ts', { SECTOR_STRUCTURE_SKIP_LOCK: '1' })
+    await runRequired('scripts/batch-sector-structure.ts', {
+      SECTOR_STRUCTURE_SKIP_LOCK: '1',
+      STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE: lock?.jobType ?? inheritedJobType,
+      STOCKBOARD_PARENT_UPDATE_LOCK_OWNER: lock?.owner ?? inheritedOwner,
+    })
     await lock?.heartbeat()
 
     await runRequired('scripts/batch-physical-momentum.ts', {

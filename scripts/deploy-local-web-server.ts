@@ -7,6 +7,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { stockboardBuildProvenance, writeStockboardBuildManifest } from '@/lib/jp-ohlcv-repair-runtime-manifest'
 import { assertLargeHolderReleaseConfiguration } from '@/lib/large-holders/release-preflight'
 
 const cwd = process.cwd()
@@ -99,6 +100,9 @@ function assertLaunchAgentRunning(label: string): void {
 
 const largeHolderPreflight = assertLargeHolderReleaseConfiguration()
 console.log(`Large Holder release configuration preflight passed (${largeHolderPreflight.checkedKeys.length} paths)`)
+// The build input must be a clean commit; it is re-read after the build so a
+// source change during tests or the build cannot be attributed to that commit.
+const buildProvenance = stockboardBuildProvenance(cwd)
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
 runNpm('test:status-health')
@@ -131,6 +135,10 @@ if (!fs.existsSync(path.join(stagePath, 'BUILD_ID'))) {
   throw new Error(`Staged build is incomplete: ${stagePath}`)
 }
 assertRequiredRoutes(stagePath)
+if (JSON.stringify(stockboardBuildProvenance(cwd)) !== JSON.stringify(buildProvenance)) {
+  throw new Error('Build input changed during the deployment build')
+}
+writeStockboardBuildManifest(stagePath, buildProvenance)
 if (process.env.STOCKBOARD_DEPLOY_SKIP_SCHEMA === '1') {
   console.log('Schema ensure skipped for a code-only deployment (STOCKBOARD_DEPLOY_SKIP_SCHEMA=1)')
 } else {

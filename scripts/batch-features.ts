@@ -35,6 +35,11 @@ const HISTORICAL_PERCENTILE_LOOKBACK = 250
 const PROGRESS_EVERY = 50
 const LOOKBACK_DAYS = Number(process.env.FEATURE_LOOKBACK_DAYS ?? 900)
 const FORCE_REBUILD = process.env.FEATURE_FORCE_REBUILD === '1'
+const RECOMPUTE_FROM_DATE = process.env.FEATURE_RECOMPUTE_FROM_DATE?.trim() || null
+
+if (RECOMPUTE_FROM_DATE && !/^\d{4}-\d{2}-\d{2}$/.test(RECOMPUTE_FROM_DATE)) {
+  throw new Error(`invalid FEATURE_RECOMPUTE_FROM_DATE: ${RECOMPUTE_FROM_DATE}`)
+}
 
 // timescale ごとの MA カラム名 (daily_snapshots 上)
 const MA_COLUMNS: Record<Timescale, readonly [string, string, string, string, string]> = {
@@ -118,13 +123,16 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
       [ticker],
     ),
   ])
-  const lastFeatureDate = FORCE_REBUILD
+  const replacingExisting = FORCE_REBUILD || RECOMPUTE_FROM_DATE != null
+  const lastFeatureDate = replacingExisting
     ? null
     : [state?.lastProcessedDate, existing?.maxDate]
         .filter((date): date is string => Boolean(date))
         .sort()
         .at(-1) ?? null
-  const startDate = lastFeatureDate ? dateDaysBefore(lastFeatureDate, LOOKBACK_DAYS) : null
+  const startDate = RECOMPUTE_FROM_DATE
+    ? null
+    : lastFeatureDate ? dateDaysBefore(lastFeatureDate, LOOKBACK_DAYS) : null
 
   const snapshots = await execAll<Record<string, number | string | null>>(
     `
@@ -212,7 +220,8 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
         : null
       const snapDate = snap.date as string
 
-      if (lastFeatureDate && snapDate <= lastFeatureDate) continue
+      if (RECOMPUTE_FROM_DATE && snapDate < RECOMPUTE_FROM_DATE) continue
+      if (!RECOMPUTE_FROM_DATE && lastFeatureDate && snapDate <= lastFeatureDate) continue
 
       features.push({
         ticker,
@@ -269,7 +278,7 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
     const insert = db
       .insert(featureSnapshots)
       .values(features.slice(i, i + CHUNK))
-    if (!FORCE_REBUILD) {
+    if (!replacingExisting) {
       await insert.onConflictDoNothing()
       continue
     }
@@ -363,7 +372,10 @@ async function main() {
   let rowsInserted = 0
   const errors: string[] = []
 
-  console.log(`Feature compute 開始: ${tickers.length} 銘柄 (FORCE_REBUILD=${FORCE_REBUILD})`)
+  console.log(
+    `Feature compute 開始: ${tickers.length} 銘柄 `
+    + `(FORCE_REBUILD=${FORCE_REBUILD}, RECOMPUTE_FROM=${RECOMPUTE_FROM_DATE ?? 'none'})`,
+  )
   const startTime = Date.now()
 
   for (const [i, { ticker }] of tickers.entries()) {

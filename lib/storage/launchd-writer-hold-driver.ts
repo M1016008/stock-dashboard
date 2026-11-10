@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type {
   ApprovedWriterIdentity,
@@ -77,6 +78,33 @@ function launchdPrint(label: string, run: CommandRunner, uid: number): CommandRe
   return run('/bin/launchctl', ['print', `gui/${uid}/${label}`], 5_000)
 }
 
+// Identity of the job launchd actually loaded, from the top-level (one tab
+// deep) `path`, `program`, and `working directory` keys of `launchctl print`.
+// Nested blocks are ignored; a missing or repeated path/program is ambiguous.
+export type LoadedLaunchdJob = Readonly<{ path: string; program: string; workingDirectory: string | null }>
+
+export function parseLoadedLaunchdJob(label: string, stdout: string): LoadedLaunchdJob {
+  const values = (key: string) => [...stdout.matchAll(new RegExp(`^\\t${key} = (.*)$`, 'gm'))]
+    .map((match) => match[1]!.trim())
+  const single = (key: string, required: boolean): string | null => {
+    const found = values(key)
+    if (found.length > 1 || (required && found.length === 0) || found.some((value) => !value)) {
+      throw new Error(`LAUNCHD_JOB_IDENTITY_AMBIGUOUS:${label}:${key}`)
+    }
+    return found[0] ?? null
+  }
+  return {
+    path: single('path', true)!,
+    program: single('program', true)!,
+    workingDirectory: single('working directory', false),
+  }
+}
+
+function assertLoadedJob(identity: LaunchdRuntimeIdentity, job: LoadedLaunchdJob): void {
+  if (job.path !== identity.plistPath) throw new Error(`WRITER_LOADED_PATH_MISMATCH:${identity.label}`)
+  if (job.program !== identity.program) throw new Error(`WRITER_LOADED_PROGRAM_MISMATCH:${identity.label}`)
+}
+
 function processGroupId(pid: number, run: CommandRunner): number | null {
   const result = run('/bin/ps', ['-o', 'pgid=', '-p', String(pid)], 5_000)
   if (result.status !== 0) {
@@ -125,6 +153,67 @@ export function launchdJobPid(label: string, options: {
   return match ? Number(match[1]) : null
 }
 
+// Read-only: every loaded label in the gui/<uid> domain with the prefix.
+export function listLoadedLaunchdLabels(prefix: string, options: {
+  run?: CommandRunner
+  uid?: number
+} = {}): string[] {
+  const run = options.run ?? systemCommandRunner
+  const uid = options.uid ?? process.getuid?.()
+  if (!Number.isInteger(uid)) throw new Error('LAUNCHD_UID_UNAVAILABLE')
+  const result = run('/bin/launchctl', ['print', `gui/${uid}`], 5_000)
+  if (result.status !== 0) commandFailure('LAUNCHCTL_PRINT_DOMAIN', result)
+  const block = result.stdout.match(/^\s*services = \{\n([\s\S]*?)^\s*\}/m)
+  if (!block) throw new Error('LAUNCHCTL_PRINT_DOMAIN_AMBIGUOUS:no services block')
+  return block[1]!.split('\n').map((line) => line.trim().split(/\s+/).at(-1) ?? '')
+    .filter((label) => label.startsWith(prefix))
+}
+
+// Read-only: the runtime WorkingDirectory, after the plist definition is
+// verified. A loaded job must have been loaded from the approved plist and
+// program, and its actual working directory must equal the plist's; an
+// unloaded job will start from the verified plist.
+export function readLaunchdWorkingDirectory(identity: LaunchdRuntimeIdentity, options: {
+  run?: CommandRunner
+  uid?: number
+} = {}): string | null {
+  const run = options.run ?? systemCommandRunner
+  const uid = options.uid ?? process.getuid?.()
+  if (!Number.isInteger(uid)) throw new Error('LAUNCHD_UID_UNAVAILABLE')
+  assertDefinition(identity, run)
+  const result = run('/usr/bin/plutil', ['-extract', 'WorkingDirectory', 'raw', '-o', '-', identity.plistPath], 5_000)
+  const configured = result.status === 0 ? result.stdout.trim() : null
+  const print = launchdPrint(identity.label, run, uid as number)
+  if (isMissingLaunchdJob(print)) return configured
+  if (print.status !== 0) commandFailure('LAUNCHCTL_PRINT', print)
+  const job = parseLoadedLaunchdJob(identity.label, print.stdout)
+  assertLoadedJob(identity, job)
+  if (job.workingDirectory !== configured) throw new Error(`WRITER_LOADED_WORKING_DIRECTORY_MISMATCH:${identity.label}`)
+  return job.workingDirectory
+}
+
+// Read-only: an approved-absent service has nothing at its exact plist path
+// (not even a dangling symlink) and no loaded job under its label.
+export function assertLaunchdServiceAbsent(identity: { label: string; plistPath: string }, options: {
+  run?: CommandRunner
+  uid?: number
+} = {}): void {
+  const run = options.run ?? systemCommandRunner
+  const uid = options.uid ?? process.getuid?.()
+  if (!Number.isInteger(uid)) throw new Error('LAUNCHD_UID_UNAVAILABLE')
+  if (typeof identity.plistPath !== 'string' || !path.isAbsolute(identity.plistPath)
+      || path.basename(identity.plistPath) !== `${identity.label}.plist`) {
+    throw new Error(`ABSENT_SERVICE_PLIST_PATH_INVALID:${identity.label}`)
+  }
+  if (fs.lstatSync(identity.plistPath, { throwIfNoEntry: false })) {
+    throw new Error(`ABSENT_SERVICE_DEFINITION_PRESENT:${identity.label}`)
+  }
+  const print = launchdPrint(identity.label, run, uid as number)
+  if (isMissingLaunchdJob(print)) return
+  if (print.status === 0) throw new Error(`ABSENT_SERVICE_LOADED:${identity.label}`)
+  commandFailure('LAUNCHCTL_PRINT', print)
+}
+
 export function createLaunchdWriterHoldDriver(
   approved: readonly LaunchdRuntimeIdentity[],
   options: {
@@ -132,6 +221,8 @@ export function createLaunchdWriterHoldDriver(
     uid?: number
     now?: () => number
     sleep?: (milliseconds: number) => Promise<void>
+    // Also require a loaded job's actual path/program to be the approved ones.
+    verifyLoadedJob?: boolean
   } = {},
 ): WriterHoldDriver {
   const run = options.run ?? systemCommandRunner
@@ -146,6 +237,7 @@ export function createLaunchdWriterHoldDriver(
     const result = launchdPrint(label, run, uid as number)
     const loaded = result.status === 0
     if (!loaded && !isMissingLaunchdJob(result)) commandFailure('LAUNCHCTL_PRINT', result)
+    if (loaded && options.verifyLoadedJob) assertLoadedJob(identity, parseLoadedLaunchdJob(label, result.stdout))
     const pidMatch = loaded ? result.stdout.match(/^\s*pid\s*=\s*(\d+)\s*$/m) : null
     const pid = pidMatch ? Number(pidMatch[1]) : null
     return {

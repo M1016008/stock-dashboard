@@ -29,6 +29,10 @@ const CONFIG_KEY = `monthly_ma_monitor_${PERIODS.join('_')}`
 const CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.MONTHLY_MA_MONITOR_CONCURRENCY ?? 2)))
 const RETENTION_CALENDAR_DAYS = Math.max(60, Number(process.env.MONTHLY_MA_MONITOR_RETENTION_DAYS ?? 220))
 const FORCE_REBUILD = process.env.MONTHLY_MA_MONITOR_FORCE_REBUILD === '1'
+const RECOMPUTE_FROM_DATE = process.env.MONTHLY_MA_MONITOR_RECOMPUTE_FROM_DATE?.trim() || null
+if (RECOMPUTE_FROM_DATE && !/^\d{4}-\d{2}-\d{2}$/.test(RECOMPUTE_FROM_DATE)) {
+  throw new Error(`invalid MONTHLY_MA_MONITOR_RECOMPUTE_FROM_DATE: ${RECOMPUTE_FROM_DATE}`)
+}
 const PROGRESS_EVERY = Math.max(1, Number(process.env.MONTHLY_MA_MONITOR_PROGRESS_EVERY ?? 100))
 const WARMUP_CALENDAR_DAYS = Math.max(...PERIODS) * 32 + 160
 
@@ -207,12 +211,12 @@ async function writeTicker(ticker: string, latestSourceDate: string, retentionCu
         return maValue == null ? [] : [{ ...row, targetValue: maValue }]
       }),
       {
-        seed: FORCE_REBUILD ? undefined : eventState(latest),
-        emitAfterDate: FORCE_REBUILD ? null : latest?.date ?? null,
+        seed: FORCE_REBUILD || RECOMPUTE_FROM_DATE ? undefined : eventState(latest),
+        emitAfterDate: FORCE_REBUILD || RECOMPUTE_FROM_DATE ? null : latest?.date ?? null,
       },
     )
     for (const point of points) {
-      if (point.date < retentionCutoff) continue
+      if (point.date < retentionCutoff || (RECOMPUTE_FROM_DATE && point.date < RECOMPUTE_FROM_DATE)) continue
       monthlyRows.push({
         ticker, period, date: point.date, close: point.close, maValue: point.targetValue,
         distancePct: point.distancePct, absDistancePct: point.absDistancePct,
@@ -266,8 +270,8 @@ async function writeTicker(ticker: string, latestSourceDate: string, retentionCu
       }]
     })
     const points = buildMonthlyMaMonitorSeries(observations, {
-      seed: FORCE_REBUILD ? undefined : eventState(latest),
-      emitAfterDate: FORCE_REBUILD ? null : latest?.date ?? null,
+      seed: FORCE_REBUILD || RECOMPUTE_FROM_DATE ? undefined : eventState(latest),
+      emitAfterDate: FORCE_REBUILD || RECOMPUTE_FROM_DATE ? null : latest?.date ?? null,
     })
     for (const point of points) {
       const metadata = metadataByDate.get(point.date)
@@ -287,7 +291,9 @@ async function writeTicker(ticker: string, latestSourceDate: string, retentionCu
         lastCrossDirection: point.lastCrossDirection, crossAgeSessions: point.crossAgeSessions,
         primaryStatus: point.primaryStatus, approachScore: point.approachScore,
       }
-      if (point.date >= retentionCutoff && metadata.isCluster && metadata.isMaximal) {
+      if (point.date >= retentionCutoff
+          && (!RECOMPUTE_FROM_DATE || point.date >= RECOMPUTE_FROM_DATE)
+          && metadata.isCluster && metadata.isMaximal) {
         clusterDailyRows.push(base)
       }
       if (point.date === points.at(-1)?.date) {
@@ -300,6 +306,9 @@ async function writeTicker(ticker: string, latestSourceDate: string, retentionCu
     // 計算仕様や元データが変わった場合に、再生成されなくなった古い行を残さない。
     await execRun(`DELETE FROM monthly_ma_monitor_daily WHERE ticker = ?`, [ticker])
     await execRun(`DELETE FROM monthly_ma_cluster_daily WHERE ticker = ?`, [ticker])
+  } else if (RECOMPUTE_FROM_DATE) {
+    await execRun(`DELETE FROM monthly_ma_monitor_daily WHERE ticker = ? AND date >= ?`, [ticker, RECOMPUTE_FROM_DATE])
+    await execRun(`DELETE FROM monthly_ma_cluster_daily WHERE ticker = ? AND date >= ?`, [ticker, RECOMPUTE_FROM_DATE])
   }
   await upsertMonthlyRows(monthlyRows)
   await upsertClusterDailyRows(clusterDailyRows)
@@ -332,7 +341,10 @@ async function main(): Promise<void> {
           [latestSourceDate, CONFIG_KEY, FORCE_REBUILD ? 1 : 0, latestSourceDate],
         )
 
-    console.log(`Monthly MA monitor: ${tickers.length} tickers, periods=${PERIODS.join(',')}, latest=${latestSourceDate}, concurrency=${CONCURRENCY}`)
+    console.log(
+      `Monthly MA monitor: ${tickers.length} tickers, periods=${PERIODS.join(',')}, `
+      + `latest=${latestSourceDate}, concurrency=${CONCURRENCY}, recompute_from=${RECOMPUTE_FROM_DATE ?? 'none'}`,
+    )
     let nextIndex = 0
     let processed = 0
     let succeeded = 0

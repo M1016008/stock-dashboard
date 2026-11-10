@@ -5,7 +5,7 @@
 
 import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
-import { db } from '@/lib/db/client'
+import { client, db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
 import {
@@ -14,6 +14,7 @@ import {
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { runAttestedCurrentServingProjection } from '@/lib/research/six-stage-current-serving-runner-process'
+import { assertNoPendingJpOhlcvRepair } from '@/lib/jp-ohlcv-coverage'
 
 type RunResult = {
   code: number | null
@@ -183,6 +184,13 @@ async function main() {
     return
   }
 
+  try {
+    await assertNoPendingJpOhlcvRepair(client)
+  } catch (error) {
+    await lock.release()
+    throw error
+  }
+
   const [run] = await db
     .insert(batchRuns)
     .values({
@@ -199,6 +207,8 @@ async function main() {
   const refreshAfterOhlcvEnv: EnvOverrides = {
     REFRESH_AFTER_OHLCV_SKIP_LOCK: '1',
     REFRESH_AFTER_OHLCV_CRITICAL_ONLY: '1',
+    STOCKBOARD_PARENT_UPDATE_LOCK_JOB_TYPE: lock.jobType,
+    STOCKBOARD_PARENT_UPDATE_LOCK_OWNER: lock.owner,
     UPDATE_CHILD_TIMEOUT_MINUTES: process.env.REFRESH_AFTER_OHLCV_TIMEOUT_MINUTES ?? '180',
   }
 

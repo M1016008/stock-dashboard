@@ -573,6 +573,23 @@ export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
   importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const jquantsDailyCoverageIssues = sqliteTable(
+  'jquants_daily_coverage_issues',
+  {
+    date:       text('date').notNull(),
+    ticker:     text('ticker').notNull(),
+    kind:       text('kind').notNull(),
+    status:     text('status').notNull(),
+    detail:     text('detail'),
+    observedAt: integer('observed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.date, t.ticker, t.kind] }),
+    openIdx: index('jquants_daily_coverage_issues_open_idx').on(t.status, t.date, t.kind),
+  }),
+)
+
 export const updateLocks = sqliteTable('update_locks', {
   jobType:        text('job_type').primaryKey(),
   status:         text('status').notNull(),
@@ -1926,6 +1943,7 @@ export const triggerEvaluations = sqliteTable(
     attemptCount: integer('attempt_count').notNull().default(1),
     errorCategory: text('error_category'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    supersededByEvaluationId: text('superseded_by_evaluation_id'),
   },
   (t) => ({
     runSignatureIdx: uniqueIndex('trigger_evaluations_run_signature_idx').on(t.runSignature),
@@ -2077,6 +2095,8 @@ export const triggerEvaluationBatches = sqliteTable(
     durationMs: real('duration_ms').notNull().default(0),
     errorCategory: text('error_category'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    repairKey: text('repair_key'),
+    supersedesBatchId: text('supersedes_batch_id'),
   },
   (t) => ({
     sourceDateIdx: uniqueIndex('trigger_evaluation_batches_source_date_idx')

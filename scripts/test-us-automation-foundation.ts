@@ -809,7 +809,7 @@ assert.match(featureHealth, /ML_FEATURE_HEALTH_STRICT_SCOPE/)
 assert.match(featureHealth, /SERVING_CHECK_KEYS/)
 
 const jpFastMlServing = read('scripts/run-ml-serving-fast.ts')
-assert.match(jpFastMlServing, /ML_FEATURE_HEALTH_STRICT_SCOPE: 'serving'/)
+assert.match(jpFastMlServing, /ML_FEATURE_HEALTH_STRICT_SCOPE: process\.env\.ML_DAILY_HEALTH_SCOPE \?\? 'serving'/)
 assert.match(featureHealth, /ML feature health gate failed/)
 
 const memoryGuard = read('lib/system/memory-guard.ts')

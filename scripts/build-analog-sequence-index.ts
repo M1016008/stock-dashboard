@@ -13,7 +13,9 @@ import {
   MA_SEQUENCE_INDEX_STRIDE,
   MA_SEQUENCE_MONTHLY_PERIODS,
   MA_SEQUENCE_PERIODS,
+  MA_SEQUENCE_LEGACY_STRICT_VERSION,
   MA_SEQUENCE_VERSION,
+  resolveMaSequenceBuildVersion,
   MA_SEQUENCE_WEEKLY_PERIODS,
   MA_SEQUENCE_YEARLY_PERIODS,
   buildMaSequenceEmbedding,
@@ -24,7 +26,16 @@ import {
 } from '@/lib/ml/ma-sequence'
 import { encodeAnalogPriceChunk } from '@/lib/ml/analog-price-chunks'
 
+// Normally MA_SEQUENCE_VERSION (3). Only the one-time JP repair pins 2, which
+// selects the strict historical stage classification and writes version-2 meta.
+// The pin is JP-only: a US build never reads it and always uses MA_SEQUENCE_VERSION.
 type Market = 'JP' | 'US'
+
+function buildVersion(market: Market): number {
+  return market === 'JP'
+    ? resolveMaSequenceBuildVersion(process.env.JP_REPAIR_ANALOG_META_VERSION)
+    : MA_SEQUENCE_VERSION
+}
 type Mode = 'full' | 'incremental'
 
 type TickerRow = { ticker: string }
@@ -144,7 +155,7 @@ function targetPath(market: Market, source: string): string {
     ? path.resolve(configured)
     : path.join(
         path.dirname(source),
-        `analog-sequence-${market.toLowerCase()}-v${MA_SEQUENCE_VERSION}.db`,
+        `analog-sequence-${market.toLowerCase()}-v${buildVersion(market)}.db`,
       )
 }
 
@@ -516,6 +527,8 @@ async function main(): Promise<void> {
   lowerProcessPriority()
   const market = normalizeMarket(process.argv[2] ?? process.env.ANALOG_INDEX_MARKET)
   const mode = normalizeMode(process.argv[3] ?? process.env.ANALOG_INDEX_MODE)
+  const sequenceVersion = buildVersion(market)
+  const legacyStrictStages = sequenceVersion === MA_SEQUENCE_LEGACY_STRICT_VERSION
   const source = sourcePath(market)
   const target = targetPath(market, source)
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
@@ -547,7 +560,7 @@ async function main(): Promise<void> {
   const existingPriceChunksSourceDate = await getValue(targetClient, 'price_chunks_source_date')
   const existingPriceChunksCompleted = await getValue(targetClient, 'price_chunks_completed')
   const reuseIdenticalFullHistory = mode === 'full'
-    && existingVersion === MA_SEQUENCE_VERSION
+    && existingVersion === sequenceVersion
     && existingPriceCompleted === '1'
     && Boolean(existingPriceSourceDate)
     && (
@@ -561,7 +574,7 @@ async function main(): Promise<void> {
   }
   if (
     mode === 'incremental'
-    && existingVersion === MA_SEQUENCE_VERSION
+    && existingVersion === sequenceVersion
     && existingSourceDate === sourceDate
     && existingCompleted === '1'
     && existingPriceSourceDate === sourceDate
@@ -577,7 +590,7 @@ async function main(): Promise<void> {
   }
   if (
     mode === 'incremental'
-    && existingVersion === MA_SEQUENCE_VERSION
+    && existingVersion === sequenceVersion
     && existingSourceDate === sourceDate
     && existingCompleted === '1'
   ) {
@@ -647,13 +660,13 @@ async function main(): Promise<void> {
   const resumeTicker = mode === 'full'
     && !reuseIdenticalFullHistory
     && existingCompleted !== '1'
-    && existingVersion === MA_SEQUENCE_VERSION
+    && existingVersion === sequenceVersion
     && existingSourceDate === sourceDate
     ? await getValue(targetClient, 'progress_ticker')
     : null
   await setMeta(targetClient, {
     market,
-    version: String(MA_SEQUENCE_VERSION),
+    version: String(sequenceVersion),
     feature_schema: [
       `D:${MA_SEQUENCE_PERIODS.join(',')}`,
       `W:${MA_SEQUENCE_WEEKLY_PERIODS.join(',')}`,
@@ -728,7 +741,7 @@ async function main(): Promise<void> {
     }
     if (mode === 'full' && pricesChanged) changedPriceTickers.add(ticker)
     const incrementalExisting = (mode === 'incremental' || reuseExisting) && Boolean(latestIndexed)
-    const priorIndexByDate = mode === 'full' && pricesChanged && existingVersion === MA_SEQUENCE_VERSION
+    const priorIndexByDate = mode === 'full' && pricesChanged && existingVersion === sequenceVersion
       ? new Map(
           (await all<ExistingIndexValue>(
             targetClient,
@@ -759,7 +772,7 @@ async function main(): Promise<void> {
       incrementalExisting ? [ticker, INCREMENTAL_LOOKBACK_ROWS] : [ticker],
     ))
     for (const segment of splitContinuous(rows)) {
-      const prepared = prepareMaSequence(segment)
+      const prepared = prepareMaSequence(segment, { legacyStrictStages })
       const anchorIndexes: number[] = incrementalExisting
         ? prepared.rows
           .map((row, index) => ({ date: row.date, index }))
