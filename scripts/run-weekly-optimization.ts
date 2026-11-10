@@ -4,7 +4,7 @@
 // the two large SQLite databases never compete for memory or write bandwidth.
 
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -61,9 +61,9 @@ const lockPath = path.join(supportDir, 'weekly-optimization.lock')
 const statePath = path.join(supportDir, 'weekly-optimization-state.json')
 const dryRun = process.argv.includes('--dry-run') || process.env.WEEKLY_OPTIMIZATION_DRY_RUN === '1'
 const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
-let activeChild: ChildProcess | null = null
 let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null
+const signalledPids = new Set<number>()
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -386,16 +386,13 @@ async function runStep(step: Step): Promise<{
   await waitForMemoryHeadroom({ label: step.label })
   console.log(`\n[weekly-optimization] START ${step.id}: npm run ${step.npmScript}`)
   return new Promise((resolve, reject) => {
-    activeChild = spawn('npm', ['run', step.npmScript], {
+    const child = spawn('npm', ['run', step.npmScript], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...process.env, ...step.env }),
       stdio: 'inherit',
     })
-    activeChild.once('error', reject)
-    activeChild.once('close', (exitCode, signal) => {
-      activeChild = null
-      resolve({ exitCode, signal })
-    })
+    child.once('error', reject)
+    child.once('close', (exitCode, signal) => resolve({ exitCode, signal }))
   })
 }
 
@@ -416,16 +413,69 @@ async function republishValidatedModels(step: Step): Promise<void> {
   }
 }
 
-function installSignalHandlers(): void {
-  const handler = (signal: NodeJS.Signals) => {
-    shutdownSignal = signal
-    console.error(`[weekly-optimization] received ${signal}`)
-    if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
-      activeChild.kill('SIGTERM')
+// Every live descendant of this runner (children, grandchildren, ...), excluding the ps this runs.
+// Only descendants are ever signalled: other processes, even in the same process group, are not.
+function stepProcesses(): number[] {
+  let table = ''
+  try {
+    table = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8' })
+  } catch {
+    return []
+  }
+  const rows = table.trim().split('\n').map((line) => line.trim().split(/\s+/))
+    .map(([pid, ppid, comm]) => ({ pid: Number(pid), ppid: Number(ppid), comm }))
+  const descendants = new Set<number>()
+  for (let grew = true; grew;) {
+    grew = false
+    for (const row of rows) {
+      if (descendants.has(row.pid) || (row.ppid !== process.pid && !descendants.has(row.ppid))) continue
+      descendants.add(row.pid)
+      grew = true
     }
   }
-  process.once('SIGINT', handler)
-  process.once('SIGTERM', handler)
+  return rows
+    .filter((row) => descendants.has(row.pid) && !(row.ppid === process.pid && /(^|\/)ps$/.test(row.comm ?? '')))
+    .map((row) => row.pid)
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Wait for the current descendants and for every PID signalled at shutdown (a grandchild whose
+// parent exits first is re-parented and stops being a descendant, but must still be waited for).
+async function waitForStepProcessesExit(): Promise<void> {
+  for (let waitedSeconds = 0; ; waitedSeconds += 5) {
+    const remaining = [...new Set([...stepProcesses(), ...[...signalledPids].filter(pidAlive)])]
+    if (remaining.length === 0) return
+    if (waitedSeconds % 60 === 0) {
+      console.error(`[weekly-optimization] waiting for step processes to exit: ${remaining.join(',')}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+  }
+}
+
+function installSignalHandlers(): void {
+  const handler = (signal: NodeJS.Signals) => {
+    if (shutdownSignal) return
+    shutdownSignal = signal
+    console.error(`[weekly-optimization] received ${signal}; stopping every step process`)
+    for (const pid of stepProcesses()) {
+      signalledPids.add(pid)
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+  process.on('SIGINT', handler)
+  process.on('SIGTERM', handler)
   process.once('exit', releaseProcessLock)
 }
 
@@ -478,6 +528,7 @@ async function main(): Promise<void> {
   writeState(state)
 
   for (const [index, step] of configuredSteps.entries()) {
+    if (shutdownSignal) break
     const result = state.steps[index]
     if (result.status === 'completed') {
       console.log(`[weekly-optimization] RESUME ${step.id}: same week, data dates, and implementation`)
@@ -511,10 +562,11 @@ async function main(): Promise<void> {
       writeState(state)
     }
     if (shutdownSignal) {
+      // Roll back and release the lock only after every step process has exited.
+      await waitForStepProcessesExit()
       result.status = 'failed'
       result.error = `interrupted by ${shutdownSignal}`
       writeState(state)
-      break
     }
     if (result.status === 'failed') {
       if (step.modelDbPath && modelSnapshot && modelSnapshot.length > 0) {

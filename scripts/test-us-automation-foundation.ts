@@ -468,6 +468,18 @@ assert.match(freshnessGuard, /optional source disabled/)
 assert.doesNotMatch(freshnessGuard, /kickstart\(['"]com\.stockboard\.us-ml-weekly/)
 
 const weeklyOptimization = read('scripts/run-weekly-optimization.ts')
+// Safe stop: SIGTERM reaches every step descendant (never ancestors or other processes), the runner
+// waits for all of them to exit, and only then rolls back and releases its lock.
+assert.match(weeklyOptimization, /function stepProcesses\(\): number\[\]/)
+assert.match(weeklyOptimization, /descendants\.has\(row\.pid\) && !\(row\.ppid === process\.pid/, 'only descendants are signalled')
+assert.doesNotMatch(weeklyOptimization, /pgid/, 'process-group membership alone must never select a process')
+assert.match(weeklyOptimization, /\.\.\.\[\.\.\.signalledPids\]\.filter\(pidAlive\)/)
+assert.match(weeklyOptimization, /process\.on\('SIGTERM', handler\)/)
+assert.match(weeklyOptimization, /await waitForStepProcessesExit\(\)\n      result\.status = 'failed'\n      result\.error = `interrupted by \$\{shutdownSignal\}`/)
+assert.doesNotMatch(weeklyOptimization, /SIGKILL/, 'the safe stop must never escalate to SIGKILL')
+const foundationSignal = read('scripts/ensure-us-adjusted-foundation.ts')
+assert.match(foundationSignal, /void childExited\n      \.then\(\(\) => updateLockForSignal\?\.release\(\)\)/)
+assert.match(foundationSignal, /process\.on\('SIGTERM', releaseOnSignal\)/)
 assert.match(weeklyOptimization, /buildRunKey/)
 assert.match(weeklyOptimization, /implementationFingerprint/)
 assert.match(weeklyOptimization, /same week, data dates, and implementation/)
