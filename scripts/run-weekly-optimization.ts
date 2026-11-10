@@ -65,6 +65,7 @@ let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null
 const signalledPids = new Set<number>()
 let resignalTimer: NodeJS.Timeout | null = null
+let rollbackInProgress = false
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -499,10 +500,16 @@ function installSignalHandlers(): void {
   const handler = (signal: NodeJS.Signals) => {
     if (shutdownSignal) return
     shutdownSignal = signal
+    if (rollbackInProgress) {
+      // Never interrupt a rollback: let it finish, then the run stops as failed.
+      console.error(`[weekly-optimization] received ${signal} during rollback; finishing the rollback first`)
+      return
+    }
     console.error(`[weekly-optimization] received ${signal}; stopping every step process`)
     signalStepProcesses()
     // Keep re-signalling (new descendants, a failed ps) even while the step's npm is still open.
-    resignalTimer = setInterval(signalStepProcesses, 5_000)
+    // unref: the timer never keeps the runner alive on its own.
+    resignalTimer = setInterval(signalStepProcesses, 5_000).unref()
   }
   process.on('SIGINT', handler)
   process.on('SIGTERM', handler)
@@ -600,6 +607,7 @@ async function main(): Promise<void> {
     }
     if (result.status === 'failed') {
       if (step.modelDbPath && modelSnapshot && modelSnapshot.length > 0) {
+        rollbackInProgress = true
         try {
           const demoted = await restoreValidatedModels(step.modelDbPath, modelSnapshot)
           console.warn(
@@ -611,6 +619,8 @@ async function main(): Promise<void> {
           result.error = `${result.error ?? 'step failed'}; rollback failed: ${rollbackError}`
           writeState(state)
           console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
+        } finally {
+          rollbackInProgress = false
         }
       }
       console.error(`[weekly-optimization] STOP ${step.id}: downstream publication was not started`)
@@ -632,7 +642,7 @@ async function main(): Promise<void> {
     finishedAt: state.finishedAt,
     steps: state.steps,
   }, null, 2))
-  if (failed.length > 0) process.exitCode = 1
+  if (failed.length > 0 || shutdownSignal) process.exitCode = 1
 }
 
 main().catch((error) => {
