@@ -790,15 +790,15 @@ async function main(): Promise<void> {
   const releaseOnSignal = (signal: NodeJS.Signals) => {
     if (signalExitStarted) return
     signalExitStarted = true
-    void updateLockForSignal?.release()
+    void Promise.resolve(updateLockForSignal?.release())
       .catch(() => undefined)
       .finally(() => {
         processLock.release()
         process.exit(signal === 'SIGINT' ? 130 : 143)
       })
   }
-  process.once('SIGINT', releaseOnSignal)
-  process.once('SIGTERM', releaseOnSignal)
+  process.on('SIGINT', releaseOnSignal)
+  process.on('SIGTERM', releaseOnSignal)
   const lock = await acquireUsStockboardUpdateLock(
     'us_adjusted_foundation',
     72 * 60 * 60,
