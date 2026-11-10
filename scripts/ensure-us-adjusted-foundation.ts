@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
@@ -174,8 +174,6 @@ function sourceSnapshotProcessIsActive(): boolean {
   }
 }
 
-let activeNpmChild: ChildProcess | null = null
-
 async function runNpm(script: string, env: Record<string, string>): Promise<void> {
   await waitForMemoryHeadroom({ label: `npm run ${script}` })
   await new Promise<void>((resolve, reject) => {
@@ -189,9 +187,7 @@ async function runNpm(script: string, env: Record<string, string>): Promise<void
         USE_LOCAL_DB: '1',
       }),
     })
-    activeNpmChild = child
     child.on('close', (code, signal) => {
-      activeNpmChild = null
       if (code === 0) resolve()
       else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
     })
@@ -794,13 +790,7 @@ async function main(): Promise<void> {
   const releaseOnSignal = (signal: NodeJS.Signals) => {
     if (signalExitStarted) return
     signalExitStarted = true
-    // Release the locks only after the running child has exited (it receives the same SIGTERM).
-    const child = activeNpmChild
-    const childExited = child && child.exitCode === null && child.signalCode === null
-      ? new Promise<void>((resolve) => child.once('close', () => resolve()))
-      : Promise.resolve()
-    void childExited
-      .then(() => updateLockForSignal?.release())
+    void updateLockForSignal?.release()
       .catch(() => undefined)
       .finally(() => {
         processLock.release()
