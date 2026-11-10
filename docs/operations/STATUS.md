@@ -226,6 +226,13 @@
 | Kabutan | キー不要 | 稼働中 (`kabutan-themes` / `kabutan-material-news`、exit 0、鮮度 OK) | 2026-11-09 |
 | JPX | キー不要 | (1) 決算発表予定: 平日 21:10 の update-latest 内の batch-earnings で取得 (10/23〜11/9 の確認範囲で、10/27 を除き batch_runs に成功の記録あり)。earnings-refresh 単独の実行 (07:10・14:10・16:30) は 10/23〜11/9 に失敗していたが、2026-11-09 23:56 の env 適用後の実行で成功 (下の「記録の訂正」参照)。(2)(3) 定期実行なし (手動の監査スクリプトのみ。実行は都度オーナーの判断) | 2026-11-10 |
 | FMP | `FMP_API_KEY` は未設定。表示用のゲート `FMP_DISPLAY_LICENSE_APPROVED` も未設定 | 未使用 (Production から呼ぶ処理なし)。有効化には、キーの設置、表示ゲートの設定、Production 構成の変更について個別の承認が必要 | 2026-11-09 |
+| 会社四季報 | API キーは無い。StockBoard の外の「会社四季報データ取得ツール」(`~/Downloads/scrape_data_mac`、launchd `jp.local.scrape-data`、毎日 15:30) が、四季報オンラインにオーナーのアカウントでログインして CSV を作る (`/Volumes/OWC Express 1M2 80G/会社四季報CSV/会社四季報_最新.csv`) | 稼働中。classification-sync (毎日 16:05・16:15・16:30・17:00・18:00 と 6 時間ごと) がこの CSV を取り込み、11/10 は 3,804 銘柄・60 分類・細分類 476 種を取り込んだ | 2026-11-11 |
+
+- **業種の 60 分類・細分類・四季報プロフィールは、StockBoard の外のツールに依存している** (記録日: 2026-11-11)
+  - 3 つとも、上の表の「会社四季報データ取得ツール」が作る CSV だけが元になっている。ツールは StockBoard のリポジトリにも
+    Production の Runtime にも含まれない。ツールの移動や変更は行わない (オーナー指示)。
+  - ツールが止まると、classification-sync は「CSV が変わっていない」として取り込みを省くため、分類とプロフィールが
+    古いまま残る。data-freshness-guard はこの CSV の鮮度を見ていない。
 
 ## 記録の訂正
 - **決算カレンダーの停止は誤り。止まっていたのは earnings-refresh 単独の実行だけ** (記録日: 2026-11-10)
