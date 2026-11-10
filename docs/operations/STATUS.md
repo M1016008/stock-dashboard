@@ -67,6 +67,15 @@
   - 生成スクリプト (`scripts/build-us-jp-parity-board.ts`) の元データが古く、現在の JSON と一致しない。
     JSON は手で更新されている。監査の見直しの際に、スクリプトを最新化するか削除するかを判断する。
 
+### weekly-optimization を止めるときの既知の制約 (記録日: 2026-11-10、今回は直さない)
+- 止め方は runner の PID への `kill -TERM` (PR #88)。runner は子孫がすべて終わってから ROLLBACK とロック解放を行う。
+- ただし各段階の中のスクリプトが持つ DB のロックは、その孫が終わる前に解放されうる。
+  - `ensure-us-adjusted-foundation.ts` は直下の npm の終了だけを待つ。npm は SIGTERM ですぐ終わるため、
+    隔離試験では孫が終わる 8 秒前にプロセスロックと更新ロックが外れた。
+  - `run-ml-learning.ts` は合図を受けるとまずロックを解放し、子に SIGTERM、10 秒後に SIGKILL を送る。
+- 運用上の対策: 合図を送る前に、数分以内に他の Writer の予定がないことを確認する。
+- 実際に止める操作を使った場合は、その時点で改めて扱いを検討する。
+
 ### 調査項目 (今は着手しない)
 - **10/27 (火) に batch-earnings の記録が無い理由** (記録日: 2026-11-10)
   - 10/27 の update-latest は 10/28 04:56 に実行され success だが、その実行では batch-earnings (earnings_calendar) の
