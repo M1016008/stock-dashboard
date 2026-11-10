@@ -64,6 +64,7 @@ const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-
 let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null
 const signalledPids = new Set<number>()
+let resignalTimer: NodeJS.Timeout | null = null
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -433,11 +434,14 @@ function stepProcesses(): number[] | null {
   for (let pid = process.pid; pid > 1 && !ancestors.has(pid); pid = parentOf.get(pid) ?? 0) ancestors.add(pid)
   const group = rows.find((row) => row.pid === process.pid)?.pgid ?? -1
   const launchdOwnsGroup = ancestors.has(group) && parentOf.get(group) === 1
+  // Roots: this runner and every signalled process still alive (its subtree may have been re-parented).
+  const roots = new Set([process.pid, ...[...signalledPids].filter((pid) => parentOf.has(pid))])
   const descendants = new Set<number>()
   for (let grew = true; grew;) {
     grew = false
     for (const row of rows) {
-      if (descendants.has(row.pid) || (row.ppid !== process.pid && !descendants.has(row.ppid))) continue
+      if (descendants.has(row.pid) || row.pid === process.pid) continue
+      if (!roots.has(row.ppid) && !descendants.has(row.ppid)) continue
       descendants.add(row.pid)
       grew = true
     }
@@ -478,7 +482,12 @@ async function waitForStepProcessesExit(): Promise<void> {
     // Descendants that appear after the signal are signalled too; a failed ps keeps waiting.
     const current = signalStepProcesses()
     const remaining = [...new Set([...(current ?? []), ...[...signalledPids].filter(pidAlive)])]
-    if (current && remaining.length === 0) return
+    if (current && remaining.length === 0) {
+      // Stop re-signalling before rollback publication starts its own child processes.
+      if (resignalTimer) clearInterval(resignalTimer)
+      resignalTimer = null
+      return
+    }
     if (waitedSeconds % 60 === 0) {
       console.error(`[weekly-optimization] waiting for step processes to exit: ${remaining.join(',')}`)
     }
@@ -492,6 +501,8 @@ function installSignalHandlers(): void {
     shutdownSignal = signal
     console.error(`[weekly-optimization] received ${signal}; stopping every step process`)
     signalStepProcesses()
+    // Keep re-signalling (new descendants, a failed ps) even while the step's npm is still open.
+    resignalTimer = setInterval(signalStepProcesses, 5_000)
   }
   process.on('SIGINT', handler)
   process.on('SIGTERM', handler)
@@ -610,7 +621,7 @@ async function main(): Promise<void> {
   const failed = state.steps.filter((step) => step.status === 'failed')
   state.heartbeatAt = isoNow()
   state.finishedAt = isoNow()
-  state.status = failed.length === 0 ? 'completed' : 'failed'
+  state.status = failed.length === 0 && !shutdownSignal ? 'completed' : 'failed'
   writeState(state)
   releaseProcessLock()
 
