@@ -131,6 +131,11 @@ assert.match(analytics, /COALESCE\(m\.adj_close, m\.close\)/)
 assert.match(analytics, /isUsInvestableSymbol\(row\.ticker\) \? row\.active : 0/)
 
 const mlJob = read('scripts/run-us-ml-job.ts')
+// A failed read-only sqlite3 call logs the DB/-wal/-shm state and open handles, then rethrows unchanged.
+assert.match(mlJob, /US ML sqlite read failed: \$\{dbPath\}/)
+assert.match(mlJob, /\[dbPath, `\$\{dbPath\}-wal`, `\$\{dbPath\}-shm`\]/)
+assert.match(mlJob, /execFileSync\('lsof', \['-n', '--', \.\.\.files\], \{ encoding: 'utf8', timeout: 10_000 \}\)/)
+assert.match(mlJob, /throw error\n  \}\n\}/)
 assert.match(mlJob, /acquireUsMlProcessLock/)
 assert.match(mlJob, /us-ml-job\.lock/)
 assert.match(mlJob, /another US ML job is active/)

@@ -121,16 +121,36 @@ async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: Env
   })
 }
 
-function sqliteInt(dbPath: string, sql: string): number {
+// On failure, record the DB/-wal/-shm state and open handles before rethrowing, so an
+// intermittent "unable to open database file" can be diagnosed from the log alone.
+function sqliteReadonly(dbPath: string, sql: string): string {
   if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
-  const output = execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
-  const value = Number(output)
+  try {
+    return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  } catch (error) {
+    const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+    console.error(`US ML sqlite read failed: ${dbPath}`)
+    for (const file of files) {
+      const stat = fs.statSync(file, { throwIfNoEntry: false })
+      console.error(stat ? `  ${file}: size=${stat.size} mtime=${stat.mtime.toISOString()} ino=${stat.ino}` : `  ${file}: missing`)
+    }
+    try {
+      console.error(execFileSync('lsof', ['-n', '--', ...files], { encoding: 'utf8', timeout: 10_000 }).trim())
+    } catch (lsofError) {
+      // lsof exits 1 when nothing has the files open; keep whatever it printed.
+      console.error(`  lsof: ${String((lsofError as { stdout?: string }).stdout ?? '').trim() || 'no open handles reported'}`)
+    }
+    throw error
+  }
+}
+
+function sqliteInt(dbPath: string, sql: string): number {
+  const value = Number(sqliteReadonly(dbPath, sql))
   return Number.isFinite(value) ? value : 0
 }
 
 function sqliteText(dbPath: string, sql: string): string {
-  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
-  return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  return sqliteReadonly(dbPath, sql)
 }
 
 function checkpointDirectory(env: NodeJS.ProcessEnv): string {
