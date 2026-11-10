@@ -78,12 +78,14 @@ for (const scale of [1, 1_000_000]) {
     [low, scale + near, scale],
     [low, scale, scale + near],
   ]
-  for (const values of nearTieCases) {
-    // 類似 (ml) の索引は版 2 で、厳密な大小比較のまま。許容幅への統一は版 3 への移行で行う (STATUS)。
-    for (const [label, classify] of classifiers.filter(([label]) => label !== 'ml')) {
-      assert.equal(classify(...values), null, `${label} near tie ${values.join('/')}`)
+  // 類似 (ml) の索引は版 2 で、厳密な大小比較のまま。許容幅への統一は版 3 への移行で行う (STATUS)。
+  const strictMlStages = [1, 2, 6, 5, 3, 4]
+  nearTieCases.forEach((values, index) => {
+    for (const [label, classify] of classifiers) {
+      const expected = label === 'ml' ? strictMlStages[index] : null
+      assert.equal(classify(...values), expected, `${label} near tie ${values.join('/')}`)
     }
-  }
+  })
 }
 
 for (const [label, classify] of classifiers) {
