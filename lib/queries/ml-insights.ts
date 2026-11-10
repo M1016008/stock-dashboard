@@ -845,7 +845,8 @@ export async function getMlModelStatus(): Promise<MlModelStatus> {
       modelType: row.model_type,
       direction: row.direction === 'down' ? 'down' : row.direction === 'wait' ? 'wait' : 'up',
       horizonDays: Number(row.horizon_days),
-      metrics: parseJson(row.metrics_json, {}),
+      // accuracy is measured on the training rows themselves; it is not predictive accuracy, so it is not served.
+      metrics: (({ accuracy: _inSampleAccuracy, ...metrics }) => metrics)(parseJson<Record<string, unknown>>(row.metrics_json, {})),
       trainedAt: row.trained_at,
     })),
     rlPolicyEvaluations: rlPolicyRows.map((row) => ({

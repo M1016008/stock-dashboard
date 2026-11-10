@@ -194,7 +194,6 @@ type MlPerformance = {
     hitRate?: number | null
     maxDrawdownPct?: number | null
     metrics?: {
-      accuracy?: number
       positiveRate?: number
     }
   }
@@ -214,7 +213,6 @@ type MlModelStatus = {
       trainStartDate?: string
       trainEndDate?: string
       samples?: number
-      accuracy?: number
       positiveRate?: number
     }
   }>
@@ -1179,7 +1177,6 @@ export default function BacktestPage() {
               <div className="bt-rank-list">
                 {mlPerformance.filter((item) => item.sectorType === 'all').slice(0, 6).map((item, index) => {
                   const mainRate = item.direction === 'up' ? item.upRate : item.downRate
-                  const accuracy = item.payload?.metrics?.accuracy
                   const precision = item.payload?.precisionAt20
                   return (
                     <div className="bt-rank" key={`${item.asOfDate}-${item.direction}-${item.horizonDays}-${item.sectorName}-${item.payload?.modelName ?? index}`}>
@@ -1192,13 +1189,11 @@ export default function BacktestPage() {
                           N={item.sampleCount.toLocaleString()}
                           {' / '}
                           {precision == null
-                            ? item.medianReturnPct == null
-                              ? `学習精度 ${accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`}`
-                              : `中央値 ${fmtPct(item.medianReturnPct)}`
+                            ? `中央値 ${fmtPct(item.medianReturnPct)}`
                             : `上位20的中 ${Math.round(precision * 100)}%`}
                         </p>
                       </div>
-                      <strong>{mainRate == null ? (precision == null ? (accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`) : `${Math.round(precision * 100)}%`) : `${Math.round(mainRate * 100)}%`}</strong>
+                      <strong>{mainRate == null ? (precision == null ? '-' : `${Math.round(precision * 100)}%`) : `${Math.round(mainRate * 100)}%`}</strong>
                     </div>
                   )
                 })}
@@ -1253,11 +1248,9 @@ export default function BacktestPage() {
                       </strong>
                       <p>
                         {model.metrics.trainStartDate ?? '2008-05-07'}〜{model.metrics.trainEndDate ?? '-'}
-                        {' / '}
-                        N={Number(model.metrics.samples ?? 0).toLocaleString()}
                       </p>
                     </div>
-                    <strong>{model.metrics.accuracy == null ? '-' : `${Math.round(model.metrics.accuracy * 100)}%`}</strong>
+                    <strong>N={Number(model.metrics.samples ?? 0).toLocaleString()}</strong>
                   </div>
                 ))}
                 {!mlModelStatus?.models?.length && <p className="bt-empty">モデル状態は未作成です</p>}
