@@ -379,11 +379,12 @@ async function restoreValidatedModels(dbPath: string, snapshot: ModelSnapshotRow
   }
 }
 
-async function runStep(step: Step): Promise<{
+async function runStep(step: Step, rollbackPublication = false): Promise<{
   exitCode: number | null
   signal: NodeJS.Signals | null
 }> {
   await waitForMemoryHeadroom({ label: step.label })
+  if (shutdownSignal && !rollbackPublication) return { exitCode: null, signal: shutdownSignal }
   console.log(`\n[weekly-optimization] START ${step.id}: npm run ${step.npmScript}`)
   return new Promise((resolve, reject) => {
     const child = spawn('npm', ['run', step.npmScript], {
@@ -404,7 +405,7 @@ async function republishValidatedModels(step: Step): Promise<void> {
       npmScript,
       env: step.env,
     }
-    const result = await runStep(recoveryStep)
+    const result = await runStep(recoveryStep, true)
     if (result.exitCode !== 0) {
       throw new Error(
         `rollback publication failed: npm run ${npmScript}, exit=${result.exitCode}, signal=${result.signal ?? 'none'}`,
@@ -414,16 +415,24 @@ async function republishValidatedModels(step: Step): Promise<void> {
 }
 
 // Every live descendant of this runner (children, grandchildren, ...), excluding the ps this runs.
-// Only descendants are ever signalled: other processes, even in the same process group, are not.
-function stepProcesses(): number[] {
+// When launchd started the job (the group leader is an ancestor whose parent is launchd), the
+// process group belongs to this job alone, so non-ancestor members of it are included as well:
+// that catches a grandchild re-parented to launchd before it was seen. Started any other way,
+// only descendants are selected, so other processes sharing the group are never signalled.
+function stepProcesses(): number[] | null {
   let table = ''
   try {
-    table = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8' })
+    table = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid=,pgid=,comm='], { encoding: 'utf8' })
   } catch {
-    return []
+    return null
   }
   const rows = table.trim().split('\n').map((line) => line.trim().split(/\s+/))
-    .map(([pid, ppid, comm]) => ({ pid: Number(pid), ppid: Number(ppid), comm }))
+    .map(([pid, ppid, pgid, comm]) => ({ pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), comm }))
+  const parentOf = new Map(rows.map((row) => [row.pid, row.ppid]))
+  const ancestors = new Set<number>()
+  for (let pid = process.pid; pid > 1 && !ancestors.has(pid); pid = parentOf.get(pid) ?? 0) ancestors.add(pid)
+  const group = rows.find((row) => row.pid === process.pid)?.pgid ?? -1
+  const launchdOwnsGroup = ancestors.has(group) && parentOf.get(group) === 1
   const descendants = new Set<number>()
   for (let grew = true; grew;) {
     grew = false
@@ -434,7 +443,8 @@ function stepProcesses(): number[] {
     }
   }
   return rows
-    .filter((row) => descendants.has(row.pid) && !(row.ppid === process.pid && /(^|\/)ps$/.test(row.comm ?? '')))
+    .filter((row) => descendants.has(row.pid) || (launchdOwnsGroup && row.pgid === group && !ancestors.has(row.pid)))
+    .filter((row) => !(row.ppid === process.pid && /(^|\/)ps$/.test(row.comm ?? '')))
     .map((row) => row.pid)
 }
 
@@ -449,10 +459,26 @@ function pidAlive(pid: number): boolean {
 
 // Wait for the current descendants and for every PID signalled at shutdown (a grandchild whose
 // parent exits first is re-parented and stops being a descendant, but must still be waited for).
+function signalStepProcesses(): number[] | null {
+  const current = stepProcesses()
+  for (const pid of current ?? []) {
+    if (signalledPids.has(pid)) continue
+    signalledPids.add(pid)
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // Already gone.
+    }
+  }
+  return current
+}
+
 async function waitForStepProcessesExit(): Promise<void> {
   for (let waitedSeconds = 0; ; waitedSeconds += 5) {
-    const remaining = [...new Set([...stepProcesses(), ...[...signalledPids].filter(pidAlive)])]
-    if (remaining.length === 0) return
+    // Descendants that appear after the signal are signalled too; a failed ps keeps waiting.
+    const current = signalStepProcesses()
+    const remaining = [...new Set([...(current ?? []), ...[...signalledPids].filter(pidAlive)])]
+    if (current && remaining.length === 0) return
     if (waitedSeconds % 60 === 0) {
       console.error(`[weekly-optimization] waiting for step processes to exit: ${remaining.join(',')}`)
     }
@@ -465,14 +491,7 @@ function installSignalHandlers(): void {
     if (shutdownSignal) return
     shutdownSignal = signal
     console.error(`[weekly-optimization] received ${signal}; stopping every step process`)
-    for (const pid of stepProcesses()) {
-      signalledPids.add(pid)
-      try {
-        process.kill(pid, 'SIGTERM')
-      } catch {
-        // Already gone.
-      }
-    }
+    signalStepProcesses()
   }
   process.on('SIGINT', handler)
   process.on('SIGTERM', handler)

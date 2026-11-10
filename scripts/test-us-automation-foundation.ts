@@ -471,9 +471,11 @@ const weeklyOptimization = read('scripts/run-weekly-optimization.ts')
 // Safe stop: SIGTERM reaches every step descendant (never ancestors or other processes), the runner
 // waits for all of them to exit, and only then rolls back and releases its lock.
 assert.match(weeklyOptimization, /function stepProcesses\(\): number\[\]/)
-assert.match(weeklyOptimization, /descendants\.has\(row\.pid\) && !\(row\.ppid === process\.pid/, 'only descendants are signalled')
-assert.doesNotMatch(weeklyOptimization, /pgid/, 'process-group membership alone must never select a process')
+assert.match(weeklyOptimization, /const launchdOwnsGroup = ancestors\.has\(group\) && parentOf\.get\(group\) === 1/, 'group members count only when launchd owns the group')
+assert.match(weeklyOptimization, /descendants\.has\(row\.pid\) \|\| \(launchdOwnsGroup && row\.pgid === group && !ancestors\.has\(row\.pid\)\)/, 'ancestors are never selected')
 assert.match(weeklyOptimization, /\.\.\.\[\.\.\.signalledPids\]\.filter\(pidAlive\)/)
+assert.match(weeklyOptimization, /if \(current && remaining\.length === 0\) return/, 'a failed ps must not end the wait')
+assert.match(weeklyOptimization, /if \(shutdownSignal && !rollbackPublication\) return/, 'no regular step starts after the signal')
 assert.match(weeklyOptimization, /process\.on\('SIGTERM', handler\)/)
 assert.match(weeklyOptimization, /await waitForStepProcessesExit\(\)\n      result\.status = 'failed'\n      result\.error = `interrupted by \$\{shutdownSignal\}`/)
 assert.doesNotMatch(weeklyOptimization, /SIGKILL/, 'the safe stop must never escalate to SIGKILL')
