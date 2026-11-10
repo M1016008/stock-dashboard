@@ -108,6 +108,21 @@
     batch-earnings が成功している。日中 3 回の earnings-refresh 単独の実行は、10/23 13:48〜11/9 16:40 の記録ですべて失敗している。
     実データの鮮度や画面への影響の範囲は確認していない (batch_runs の記録だけでは判断できない)。
 
+## US モデルの更新の記録
+- **10/14 の US モデル更新** (記録日: 2026-11-10、読み取り専用の調査による)
+  - US の学習済みモデル (`stockboard-us.db` の `ml_models`) は、2026-10-14 06:13〜07:07 JST に学習された
+    (通常 14 本・物理系 21 本、調整後価格の世代)。それ以前は約 60 日 (1,446.8 時間) 更新されていなかった。
+  - この実行は学習まで行うモード (`run-us-ml-job.ts` の full・weekly・after-pms のいずれか。個別のコマンドを順に実行した可能性もある) で、
+    学習まで完了している。同日 00:12 からの forward_returns、PMS、特徴量、物理系の特徴量も記録に残っている
+    (US DB の batch_runs と checkpoint ファイル。00:12〜07:07 が同じ 1 回の起動だったかは未確認)。
+  - **起動元は未特定。** weekly-optimization、data-freshness-guard、us-update-latest、ml-freshness-guard、
+    legacy の 2 ジョブには、この時間帯に起動した記録がない。Codex と Claude Code の作業記録にも、該当する時間帯の記録がない。
+    W3J closeout の作業の一部だった可能性が高い (推測)。根拠と限界: closeout は 10/15 00:38 merge・10/15 14:02 文書化で、
+    モデルの更新 (10/14 07:07 まで) より後。文書に記載された「対象を絞った依存データの作り直し」は QMMM の行についてのもので、
+    起動元や全モデルの学習を特定する記述ではない。
+  - weekly-optimization の US の段階は、記録のある 2026-07-25 以降一度も完了しておらず、
+    **US モデルは自動では更新されていない** (既知の自動の経路では、更新を確認できない)。自動の週次処理で US の段階を完了させることを、P1 計画の米国株部分の目標とする。
+
 ## 所在の記録 (削除しない)
 - 名前の誤った env ファイル `.env.loca` (2026-05-23 作成、秘密情報を含む):
   `/Volumes/OWC Express 1M2 80G/StockBoard Development/git-worktrees/claude/gracious-grothendieck-804715/.env.loca`
