@@ -137,6 +137,8 @@ assert.ok(sqliteReadonlyHelper, 'run-us-ml-job.ts must keep one read-only sqlite
 assert.match(sqliteReadonlyHelper, /US ML sqlite read failed: \$\{dbPath\}/)
 assert.match(sqliteReadonlyHelper, /\[dbPath, `\$\{dbPath\}-wal`, `\$\{dbPath\}-shm`\]/)
 assert.match(sqliteReadonlyHelper, /stat failed:/, 'a stat error must be logged, not thrown')
+assert.match(sqliteReadonlyHelper, /\} catch \(statError\) \{/, 'stat must be wrapped in its own try/catch')
+assert.match(sqliteReadonlyHelper, /lsof\.status === 1 && !lsof\.stdout\?\.trim\(\)/, 'lsof status 1 with no output means no open handles')
 assert.match(sqliteReadonlyHelper, /spawnSync\('\/usr\/sbin\/lsof', \['-n', '--', \.\.\.present\], \{ encoding: 'utf8', timeout: 10_000 \}\)/)
 assert.match(sqliteReadonlyHelper, /throw error\n  \}\n\}\n$/, 'the original sqlite3 error must be rethrown last')
 assert.match(mlJob, /acquireUsMlProcessLock/)

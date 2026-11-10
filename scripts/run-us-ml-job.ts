@@ -141,10 +141,14 @@ function sqliteReadonly(dbPath: string, sql: string): string {
     }
     // Same lsof contract as lib/storage/storage-recovery.ts: status 1 with no output means no open handles.
     const present = files.filter(fs.existsSync)
-    const lsof = spawnSync('/usr/sbin/lsof', ['-n', '--', ...present], { encoding: 'utf8', timeout: 10_000 })
-    console.error(present.length === 0 ? '  lsof: skipped (no files present)' : lsof.status === 1 && !lsof.stdout?.trim() && !lsof.stderr?.trim()
-      ? '  lsof: no open handles'
-      : `  lsof: status=${lsof.status} signal=${lsof.signal ?? '-'} error=${lsof.error?.message ?? '-'}\n${lsof.stdout ?? ''}${lsof.stderr ?? ''}`.trimEnd())
+    if (present.length === 0) {
+      console.error('  lsof: skipped (no files present)')
+    } else {
+      const lsof = spawnSync('/usr/sbin/lsof', ['-n', '--', ...present], { encoding: 'utf8', timeout: 10_000 })
+      console.error(lsof.status === 1 && !lsof.stdout?.trim() && !lsof.stderr?.trim()
+        ? '  lsof: no open handles'
+        : `  lsof: status=${lsof.status} signal=${lsof.signal ?? '-'} error=${lsof.error?.message ?? '-'}\n${lsof.stdout ?? ''}${lsof.stderr ?? ''}`.trimEnd())
+    }
     throw error
   }
 }
