@@ -24,7 +24,8 @@
 
 - **P1 デプロイ前の確認項目: 類似 (Analog) の索引の版が本番と main で違う** (記録日: 2026-11-10)
   - main は `MA_SEQUENCE_VERSION = 3` (`lib/ml/ma-sequence.ts`、2026-10-25 の `575d1a2` から)、本番 (`034310b`) は 2。
-  - v3 は別ファイル (`analog-sequence-jp-v3.db`・`analog-sequence-us-v3.db`) を使うが、OWC には v2 のファイルしか無い (11/10 に確認)。
+  - v3 は既定で別ファイル (`analog-sequence-jp-v3.db`・`analog-sequence-us-v3.db`) を使う。本番の plist と config に場所の指定
+    (`ANALOG_JP_DB_PATH`・`ANALOG_US_DB_PATH`) は無く、既定の場所 (JP DB と US 分析 DB のフォルダ) には v2 のファイルだけがある (11/10 に確認)。
   - v3 の索引が無いまま main を Deploy すると、類似の API は JP・US とも止まる (fail closed)。
     `docs/historical-analog-v3-release.md` の手順 (v3 の索引を作って検証してから Web を切り替える) を、P1 の計画と承認依頼に含める。
 
@@ -56,7 +57,8 @@
 ### P1 の後に着手する (着手の前に行数を確定して承認を得る)
 - **10 日・20 日の全銘柄の上がる・下がるの確率を、毎日上書きせずに保存する** (記録日: 2026-11-10、オーナー判断)
   - 目的: 画面に出す精度を、その時点で記録した予測とその後の結果の比較で測るため。
-    今の `ml_predictions` は 40 日の上位 80 銘柄だけで、同じ日の再実行で上書きされる (`INSERT OR REPLACE`)。
+    今の `ml_predictions` は、既定 (本番も既定のまま) で 40 日、up・down の各上位 80 銘柄だけ。
+    同じ (日付, 期間, 向き, 銘柄) の行は、再実行で上書きされる (`INSERT OR REPLACE`)。
   - 新しいテーブルを作り、1 日・1 期間・1 銘柄につき最初の記録だけを残す。期間は 10 日と 20 日だけ (40 日は入れない)。
   - 対象は Classic と Physics の両方 (同じ条件で予測力を比べるため)。Classic を先に作り、同じ形を Physics に当てはめる。
   - 新しいコードが最初に DB を開いたときにテーブルが自動で作られる (`lib/db/client.ts` の `ensureSchema`)。
@@ -157,7 +159,8 @@
 - **J-Quants の契約プランの記載が、実際の取得範囲と合わない** (記録日: 2026-11-10)
   - AGENTS.md は「Premium プラン契約」と書くが、本番のキーで `/v2/equities/master` に 2008-05-07 と 2012-01-04 を指定すると
     HTTP 400 で「契約で取得できるのは 2016-11-10 以降」と返る (11/10 に確認)。公式の表では 10 年前までは Standard、20 年前までは Premium。
-  - コードも 10 年前まで (Standard) を前提にしている (`scripts/batch-ohlcv.ts` の取得開始日、`lib/jquants.ts` の注記)。
+  - `scripts/batch-ohlcv.ts` の取得開始日の既定は 10 年前まで (Standard の上限) を前提にしている。
+    一方、`lib/jquants.ts` の注記には「Standard 以上で 2008-」とあり、コードの中の記載も食い違っている。
   - 影響: 過去の時点の業種分類は 2016-11-10 以降しか取得できない。AGENTS.md の記載を直すか、契約を見直すかはオーナーの判断。
 - `~/.codex/config.toml` の既定値 (`sandbox_mode = "danger-full-access"`、`approval_policy = "never"`) の見直し。
   Claude Code のレビュー実行は毎回 read-only で上書きしている (CLAUDE.md の Codex 独立レビュー節を参照)。
