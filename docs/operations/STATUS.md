@@ -13,6 +13,8 @@
     `/usr/local/bin/node` を見つけられるようにする暫定対応を行う。
   - `4cc1e8f` は PR #77 で main に取り込む。P1 で release ツリーが新しい main に揃ったら、この PATH 設定は不要。
     P1 の Deploy 後に plist から外し、large-holder の更新が成功することを確認する。
+  - 付け替えと EDINET キーの適用は 2026-11-10 23:33 に済んだ (オーナー実行)。更新の成功の確認は、
+    下の「大量保有の EDINET の取り込みの空白を埋める」の後になる。
 - **update-latest も J-Quants 専用の env ファイルを読むように揃える** (記録日: 2026-11-09)
   - 現在、J-Quants キーは `config/runtime.env` と `config/jquants.env` の2か所にある
     (earnings-refresh が `jquants.env` を使うため)。PR #75 のインストーラは、インストールのたびに
@@ -46,6 +48,28 @@
        価格の最新日と一致する (読み取り専用で確認)。
   - 失敗した場合は、P1 で入れる記録 (失敗時の `-wal`・`-shm` の状態と、同じファイルを開いているプロセス) で原因を調べる。
     手動での再実行は、別途承認を得る。
+
+### 11/15 の Backup の後、承認を得てから行う
+- **大量保有の EDINET の取り込みの空白 (2026-09-18 より後) を埋める** (記録日: 2026-11-10)
+  - 経緯: 2026-11-10 23:33 に EDINET キーを適用した (オーナー実行)。キーの読み込みは成功した
+    (`source_discovery: ENABLED`)。同時に走った large-holder-update は 3.6 秒で失敗した
+    (終了コード 75、`daily_range_exceeds_14_days`)。
+  - 原因: EDINET からの取り込みは 9/18 分が最後 (`large-holder-operations/events.ndjson` の ingestion PASS)。
+    10/23 の snapshot は、キーなしの `snapshot-refresh` で作ったもの。日次の更新は、最後の取り込み日 (9/18) の前日
+    (確認のため 1 日戻す) から当日まで、9/17〜11/10 の 55 日分を取り込もうとし、上限の 14 日
+    (`scripts/run-large-holder-operations.ts` の update-daily) を超えたため、ロックと書込みの前に止まった。公開中の snapshot と証跡のファイルは変わっていない。
+    追記されたのは、操作の記録ファイル 2 つへの各 1 行だけ。
+  - 影響: `/api/large-holders/overview`・`rankings`・`activity` は 503 (`certified_snapshot_stale`) のまま。
+    large-holder-update は平日 1 日 7 回、同じ理由で失敗する。書込みの前に止まるため、オーナー判断で止めずに置く。
+    (手順書 `docs/phase-16d-large-holder-operations.md` の「平日 22:30・23:30 の 2 回」「まだインストールしない」は古い。
+    実際の予定は installer (`scripts/install-local-large-holder-update.ts`) の 7 回。)
+  - 対応: 手順書の backfill (1 回 31 日まで) を、2 回に分けて 3 日ずつ行う。先に、書き込みをしない試し実行 (dry-run) で
+    日ごとの件数を確認する (dry-run は取り込みも snapshot の作成も行わないため、所要時間と書込み先は、件数とコードから見積もる)。
+    本番の取り込みは、11/15 の Backup が「公開済み」になった後、承認を得てから行う。
+  - backfill だけでは日次の更新は直らない: 日次の更新の開始日は、日次の更新が記録した最後の取り込み
+    (`events.ndjson` の `ingestion` PASS/SKIPPED) から決まり、backfill はこの記録を残さない。このため backfill の後に、
+    範囲を指定した日次の更新 (`update-daily --from=<backfill の最終日> --to=<当日>`、14 日以内) を 1 回行い、記録を進める。
+    その後、自動の日次の更新が成功し、3 つの API が 200 を返すことを確認する。
 
 ### P1 の後に着手する (着手の前に行数を確定して承認を得る)
 - **10 日・20 日の全銘柄の上がる・下がるの確率を、毎日上書きせずに保存する** (記録日: 2026-11-10、オーナー判断)
