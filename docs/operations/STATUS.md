@@ -75,8 +75,10 @@
     画面にはそれを示す表示が無いため、「暫定」と分かる表示を加える (銘柄詳細の週足・月足 Stage、用語の説明、6 桁の表示など)。
   - 類似 (Analog、`lib/ml/ma-sequence.ts`) の「ステージ」は、同じ判定関数を別の MA の組 (日足 5/10/20/40/60/90/200 の
     連続する 3 本ずつなど) に使ったもので、日 A〜月 B の 6 ステージとは別物。6 ステージと混同しない名前・表示に見直す。
-  - 画面のステージ履歴 API (`app/api/stage-history/[ticker]`) は、`lib/hex-stage.ts` でその場で計算しており、
-    `daily_snapshots` (`lib/snapshots/continuous-ma.ts`) とは計算の経路が別。値が一致するかをクロスチェックで確かめる。
+  - 画面のステージ履歴 API (`app/api/stage-history/[ticker]`) は、保存済みのステージ (JP `daily_snapshots`、
+    US `market_daily_snapshots`) を読む。ただし読むときに、データの途切れの後で履歴が足りない期間を null にする
+    (`stageWithEnoughHistory`)。この規則は保存時には使われず、ほかの画面と ML は保存済みの値をそのまま使う。
+    同じ日のステージが画面によって違って見えうるため、値が一致するか (違いがこの規則だけか) をクロスチェックで確かめる。
 
 ### weekly-optimization を止めるときの既知の制約 (記録日: 2026-11-10、今回は直さない)
 - 止め方は runner の PID への `kill -TERM` (PR #88)。runner は子孫がすべて終わってから ROLLBACK とロック解放を行う。
