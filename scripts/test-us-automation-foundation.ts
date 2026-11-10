@@ -131,6 +131,16 @@ assert.match(analytics, /COALESCE\(m\.adj_close, m\.close\)/)
 assert.match(analytics, /isUsInvestableSymbol\(row\.ticker\) \? row\.active : 0/)
 
 const mlJob = read('scripts/run-us-ml-job.ts')
+// A failed read-only sqlite3 call logs the DB/-wal/-shm state and open handles, then rethrows unchanged.
+const sqliteReadonlyHelper = mlJob.match(/function sqliteReadonly\([\s\S]*?\n\}\n/)?.[0] ?? ''
+assert.ok(sqliteReadonlyHelper, 'run-us-ml-job.ts must keep one read-only sqlite3 helper')
+assert.match(sqliteReadonlyHelper, /US ML sqlite read failed: \$\{dbPath\}/)
+assert.match(sqliteReadonlyHelper, /\[dbPath, `\$\{dbPath\}-wal`, `\$\{dbPath\}-shm`\]/)
+assert.match(sqliteReadonlyHelper, /stat failed:/, 'a stat error must be logged, not thrown')
+assert.match(sqliteReadonlyHelper, /\} catch \(statError\) \{/, 'stat must be wrapped in its own try/catch')
+assert.match(sqliteReadonlyHelper, /lsof\.status === 1 && !lsof\.stdout\?\.trim\(\)/, 'lsof status 1 with no output means no open handles')
+assert.match(sqliteReadonlyHelper, /spawnSync\('\/usr\/sbin\/lsof', \['-n', '--', \.\.\.present\], \{ encoding: 'utf8', timeout: 10_000 \}\)/)
+assert.match(sqliteReadonlyHelper, /throw error\n  \}\n\}\n$/, 'the original sqlite3 error must be rethrown last')
 assert.match(mlJob, /acquireUsMlProcessLock/)
 assert.match(mlJob, /us-ml-job\.lock/)
 assert.match(mlJob, /another US ML job is active/)
