@@ -130,6 +130,14 @@
   - 現行の計画 (`research/6stage/event-path-research/CURRENT_SERVING_PROJECTION_V1.md`、中身は V2) は本番の基準を
     `034310b` に固定しているため、P1 で本番を main に揃えた後はそのままでは使えない。
   - 進める順番 (2026-11-10 オーナー判断): 日本株から。
+  - **作り直しで揃える項目: 「角度 (傾き)」の計算方法** (記録日: 2026-11-10、オーナー判断)
+    - 研究の側 (E039/E043 の F1 特徴量、研究用 worktree の `lib/research/six-stage-v5-ma-extension.ts`。main には無い):
+      一定期間の SMA の対数の比を期間で割った傾きを、`atan(100 × 傾き)` で角度 (度) にする。
+    - 現在の銘柄の側 (`lib/research/six-stage-current-serving-adapter.ts` の `angle`): `feature_snapshots` の傾き
+      (`lib/features.ts` `quadraticTrend`: 末尾の点での 2 次曲線の当てはめの傾きを、最後の MA で割った %) を `atan` で角度 (度) にする。
+    - 同じ「角度」でも推定の方法が違うため、数値の近さで比べると偏りうる。作り直しで、どちらかの定義に揃える。
+      曲がり (curvature) も、研究の側の式は未確認のため、あわせて確かめる。
+    - 価格の水準のずれ (全体に同じ倍率) は、どちらの角度にも影響しない (比率で定義されているため)。
 - **H001 と未知パターン探索の結論** (記録日: 2026-11-10。出典: main に未統合のブランチ
   `codex/six-stage-transition-research-v3` の `research/6stage/STATUS.md`、commit `dbe2963`、2026-10-16 時点)
   - 条件: Discovery 期間 (2022-12-30 まで)、翌営業日始値で入り 20 営業日、往復コスト 20bp。比較群 C2 は
