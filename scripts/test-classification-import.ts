@@ -66,10 +66,6 @@ async function main(): Promise<void> {
     await client.execute("UPDATE stock_classification SET major_category='変更前'")
     await assert.rejects(
       () => importClassificationSource(client, source(all.slice(0, 3939), true)),
-      /too many rows from stock_shikiho_rivals: 31 of 3970 \(limit 30\)/,
-    )
-    await assert.rejects(
-      () => importClassificationSource(client, source(all.slice(0, 3939), false)),
       /too many rows from stock_classification: 31 of 3970 \(limit 30\)/,
     )
     assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_classification'), 3970)
@@ -84,17 +80,36 @@ async function main(): Promise<void> {
     // 6. 比較会社の欄が空になる銘柄が多すぎるときも止まる (銘柄は CSV に残っている)。
     const emptied = source(all.slice(0, 3939), true)
     emptied.rivals = emptied.rivals.slice(0, 3900)
-    await assert.rejects(() => importClassificationSource(client, emptied), /too many rows from stock_shikiho_rivals: 39 of 3939/)
+    await assert.rejects(() => importClassificationSource(client, emptied), /stock_shikiho_rivals \(emptied\): 39 of 3939/)
     assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_shikiho_rivals'), 3939)
+
+    // 6b. 銘柄ごとの比較会社が一斉に減るとき (3 社 → 1 社) は、行の総数の 5% の確認で止まる。
+    const three = source(all.slice(0, 3939), true)
+    three.rivals = three.rivals.flatMap((rival) => [1, 2, 3].map((position) => ({ ...rival, position })))
+    await importClassificationSource(client, three)
+    assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_shikiho_rivals'), 3939 * 3)
+    await assert.rejects(() => importClassificationSource(client, source(all.slice(0, 3939), true)), /shrink stock_shikiho_rivals too much/)
+    assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_shikiho_rivals'), 3939 * 3)
+    await importClassificationSource(client, three)
+
+    // 6c. オーナーが確かめた件数 (CSV から消える銘柄の数) は、比較会社の無い銘柄があっても通る。
+    await client.execute("DELETE FROM stock_shikiho_rivals WHERE ticker IN ('4900', '4901')")
+    const approved = source(all.slice(0, 3900), true)
+    approved.rivals = approved.rivals.flatMap((rival) => [1, 2, 3].map((position) => ({ ...rival, position })))
+    const approvedResult = await importClassificationSource(client, approved, { expectedPruneRows: 39 })
+    assert.equal(approvedResult.prunedClassifications, 39)
+    assert.equal(approvedResult.prunedRivals, 37)
+    await importClassificationSource(client, three, { expectedPruneRows: 0 })
 
     // 7. 分類とプロフィールを書いた後で失敗したら (比較会社の挿入で NOT NULL 違反)、すべて元に戻る。
     await client.execute("UPDATE stock_classification SET major_category='失敗前'")
     const broken = source(all.slice(0, 3939), true)
+    broken.rivals = broken.rivals.flatMap((rival) => [1, 2, 3].map((position) => ({ ...rival, position })))
     broken.records = broken.records.map((record) => ({ ...record, majorCategory: '書き込み後' }))
     broken.rivals[broken.rivals.length - 1] = { ...broken.rivals[broken.rivals.length - 1], rivalName: null as unknown as string }
     await assert.rejects(() => importClassificationSource(client, broken), /NOT NULL/)
     assert.equal(await scalar("SELECT COUNT(*) AS n FROM stock_classification WHERE major_category='失敗前'"), 3939)
-    assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_shikiho_rivals'), 3939)
+    assert.equal(await scalar('SELECT COUNT(*) AS n FROM stock_shikiho_rivals'), 3939 * 3)
 
     // 8. 上限の計算: 小さい表では 1% が先に効く。
     assert.throws(() => assertPruneWithinLimit({ table: 't', currentRows: 500, pruneRows: 6 }), /limit 5/)

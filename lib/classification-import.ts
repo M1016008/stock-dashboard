@@ -5,6 +5,7 @@ import type { ClassificationSourceData } from '@/lib/classification-source'
 
 export const MAX_PRUNE_ROWS = 30
 export const MAX_PRUNE_RATIO = 0.01
+export const MAX_RIVAL_ROW_DROP_RATIO = 0.05
 const CHUNK = 200
 
 export type ClassificationImportResult = {
@@ -59,17 +60,26 @@ export async function importClassificationSource(
     const pruneTables = ['stock_classification', 'stock_shikiho_profiles']
     const pruneCounts: Record<string, number> = {}
     if (source.hasRivalsColumn) {
-      // 比較会社は表ごと入れ替えるので、今は比較会社がある銘柄のうち、取り込み後に比較会社が無くなる銘柄を数える
-      // (CSV から消えた銘柄と、比較会社の欄が空になった銘柄の両方)。
-      const existing = (await tx.execute('SELECT DISTINCT ticker FROM stock_shikiho_rivals')).rows.map((row) => String(row.ticker))
+      // 比較会社は表ごと入れ替える。CSV から消えた銘柄の比較会社は、下の分類の削除の確認で扱う。
+      // ここでは (1) CSV に残っているのに比較会社が空になる銘柄の数を、分類と同じ上限 (30 件または 1%) で、
+      // (2) 比較会社の行の総数の減り方を 5% までで確かめる (読み取りが壊れて件数が一斉に減った場合に止めるため)。
+      const existing = (await tx.execute(
+        'SELECT ticker, COUNT(*) AS n FROM stock_shikiho_rivals GROUP BY ticker',
+      )).rows.map((row) => ({ ticker: String(row.ticker), rows: count(row.n) }))
+      const importing = new Set(source.records.map((record) => record.ticker))
       const incoming = new Set(source.rivals.map((rival) => rival.ticker))
-      pruneCounts.stock_shikiho_rivals = existing.filter((ticker) => !incoming.has(ticker)).length
-      assertPruneWithinLimit({
-        table: 'stock_shikiho_rivals',
-        currentRows: existing.length,
-        pruneRows: pruneCounts.stock_shikiho_rivals,
-        expectedPruneRows: options.expectedPruneRows,
-      })
+      const emptied = existing.filter((row) => importing.has(row.ticker) && !incoming.has(row.ticker)).length
+      pruneCounts.stock_shikiho_rivals = existing.filter((row) => !importing.has(row.ticker)).length
+      assertPruneWithinLimit({ table: 'stock_shikiho_rivals (emptied)', currentRows: existing.length, pruneRows: emptied })
+      const existingRows = existing.reduce((sum, row) => sum + row.rows, 0)
+      const keptRows = existing.filter((row) => !importing.has(row.ticker)).reduce((sum, row) => sum + row.rows, 0)
+      const comparableRows = existingRows - keptRows
+      if (comparableRows > 0 && source.rivals.length < Math.floor(comparableRows * (1 - MAX_RIVAL_ROW_DROP_RATIO))) {
+        throw new Error(
+          `Classification import would shrink stock_shikiho_rivals too much: ${source.rivals.length} rows `
+          + `for tickers that had ${comparableRows} (allowed drop ${MAX_RIVAL_ROW_DROP_RATIO * 100}%). Nothing was written.`,
+        )
+      }
     }
     for (const table of pruneTables) {
       const current = await tx.execute(`SELECT COUNT(DISTINCT ticker) AS n FROM ${table}`)
