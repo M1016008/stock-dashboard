@@ -24,7 +24,8 @@ export function renderTransitionsReport(result: unknown): string {
 <div id="detail2"></div></section>
 <section><h2>研究 1: X→Y→X 型と X→Y→Z 型</h2><div id="s1judge"></div>
 <div class="grid"><figure><figcaption>③ リターンの分布 (割合 %)</figcaption><svg id="hist1"></svg></figure>
-<figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="path1"></svg></figure></div><div id="detail1"></div></section></main>
+<figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="path1"></svg></figure></div><div id="detail1"></div></section>
+<section><h2>件数の内訳 (除外・重複・結果の無い期間)</h2><div id="counts"></div></section></main>
 <script>const RESULT=${data};${SCRIPT}</script></body></html>
 `
 }
@@ -56,8 +57,8 @@ function frame(svg,xs,ys,xl,yl){svg.innerHTML='';const W=svg.clientWidth||560,H=
  return{x,y,W,H,m}}
 const P={t:'',f:v=>(v*100).toFixed(1)+'%'};const extent=(vals,pad)=>{const a=Math.min(...vals),b=Math.max(...vals);const p=(b-a)*pad||0.01;return[a-p,b+p]};
 function zero(svg,f,horizontal){if(horizontal){const y=f.y(0);if(y>f.m.t&&y<f.H-f.m.b)el('line',{x1:f.m.l,x2:f.W-f.m.r,y1:y,y2:y,stroke:'#bbb','stroke-dasharray':'3 3'},svg)}}
-function study2(){const d=RESULT.study2[S.h];const rows=d.rows;const cands=new Set(d.candidates[S.side].keys);const b=d.candidates[S.side].baseline;
- document.getElementById('s2summary').innerHTML='<table><tr><th>対象の遷移 (100 件以上)</th><th>候補 ('+S.side+')</th><th>偶然で期待される数</th><th>偶然でこれ以上になる確率</th><th>入れ替えの回数</th></tr><tr><td>'+num(rows.length)+'</td><td>'+num(b.observed)+'</td><td>'+b.expected.toFixed(2)+'</td><td>'+b.probabilityAtLeastObserved.toFixed(4)+'</td><td>'+num(b.permutations)+'</td></tr></table>';
+function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows=d.rows;const cands=new Set(d.candidates[S.side].keys);const b=d.candidates[S.side].baseline;
+ document.getElementById('s2summary').innerHTML='<p>探す期間のシグナル: '+(pr.explore?pr.explore.firstSignal+' 〜 '+pr.explore.lastSignal:'—')+'、確かめる期間: '+(pr.confirm?pr.confirm.firstSignal+' 〜 '+pr.confirm.lastSignal:'—')+'</p><table><tr><th>対象の遷移 (100 件以上)</th><th>候補 ('+S.side+')</th><th>偶然で期待される数</th><th>偶然でこれ以上になる確率</th><th>入れ替えの回数</th></tr><tr><td>'+num(rows.length)+'</td><td>'+num(b.observed)+'</td><td>'+b.expected.toFixed(2)+'</td><td>'+b.probabilityAtLeastObserved.toFixed(4)+'</td><td>'+num(b.permutations)+'</td></tr></table>';
  const map=document.getElementById('map');const f=frame(map,extent(rows.map(r=>win(r.all)),0.05),extent(rows.map(r=>med(r.all)),0.05),{t:'勝率',f:v=>(v*100).toFixed(0)+'%'},{t:'中央値',f:P.f});
  const maxN=Math.max(...rows.map(r=>r.all.n));zero(map,f,true);
  for(const r of rows){const c=el('circle',{cx:f.x(win(r.all)),cy:f.y(med(r.all)),r:2+8*Math.sqrt(r.all.n/maxN),fill:cands.has(r.key)?'var(--cand)':'var(--a)','fill-opacity':.55,class:'dot'+(S.sel===r.key?' sel':'')},map);
@@ -86,19 +87,20 @@ function row(name,s){if(!s||!s.n)return'<tr><td class="k">'+name+'</td><td>0</td
  return'<tr><td class="k">'+name+'</td><td>'+num(s.n)+'</td><td>'+pct(win(s))+'</td><td>'+pct(S.side==='LONG'?s.mean:-s.mean)+'</td><td>'+pct(med(s))+'</td>'+q.map(v=>'<td>'+pct(v)+'</td>').join('')+
   '<td>'+pct(s.mfeMedian)+'</td><td>'+pct(s.maeMedian)+'</td><td>'+s.hiDayMedian+' / '+s.loDayMedian+'</td><td>'+pct(s.mfeQ90)+' / '+pct(s.mfeMax)+'</td></tr>'}
 const HEAD='<tr><th>区分</th><th>件数</th><th>勝率</th><th>平均</th><th>中央値</th><th>10%</th><th>25%</th><th>75%</th><th>90%</th><th>最大の上昇幅 (中央値)</th><th>最大の下落幅 (中央値)</th><th>到達日数 上昇 / 下落 (中央値)</th><th>逆に上がった最大の幅 90% 点 / 最大 (SHORT のリスク)</th></tr>';
-function detail(key){let html='<h3>'+key+' ('+S.side+')</h3>';for(const h of [5,10,15,20]){const r=RESULT.study2[h].rows.find(x=>x.key===key);
- html+='<table><caption>'+h+' 営業日</caption>'+HEAD+(r?row('探す期間 2008〜2017',r.explore)+row('確かめる期間 2018〜2022',r.confirm)+row('Discovery 全体',r.all):'<tr><td class="k" colspan="13">この期間では対象 (100 件以上) にならない</td></tr>')+'</table>';
- if(r&&r.bySegment){html+='<table><caption>'+h+' 営業日、当時の市場区分ごと (探索)</caption>'+HEAD+Object.entries(r.bySegment).map(([k,s])=>row(k,s)).join('')+'</table>'}}return html}
+function detail(key){const d=RESULT.details2[key];let html='<h3>'+key+' ('+S.side+')</h3>';for(const h of [5,10,15,20]){const r=d[h];
+ html+='<table><caption>'+h+' 営業日'+(r.eligible?'':' (この期間では件数が 100 件未満のため、図・候補の対象外)')+'</caption>'+HEAD+row('探す期間 2008〜2017',r.explore)+row('確かめる期間 2018〜2022',r.confirm)+row('Discovery 全体',r.all)+'</table>';
+ html+='<table><caption>'+h+' 営業日、当時の市場区分ごと (探索)</caption>'+HEAD+Object.entries(r.bySegment).map(([k,s])=>row(k,s)).join('')+'</table>'}return html}
 function study1(){const d=RESULT.study1.horizons[S.h];const j=d.judgment;
  document.getElementById('s1judge').innerHTML='<table><tr><th>中央値の差 (X→Y→X − X→Y→Z、LONG)</th><th>保守的な 95% 区間</th><th>銘柄のまとまり</th><th>年月のまとまり</th>'+j.blocks.map(b=>'<th>'+b.name+'</th>').join('')+'<th>判断</th></tr><tr><td>'+pct(j.medianDifference)+'</td><td>'+pct(j.conservative95.lower)+' 〜 '+pct(j.conservative95.upper)+'</td><td>'+pct(j.tickerCluster.lower95)+' 〜 '+pct(j.tickerCluster.upper95)+'</td><td>'+pct(j.monthCluster.lower95)+' 〜 '+pct(j.monthCluster.upper95)+'</td>'+j.blocks.map(b=>'<td>'+pct(b.difference)+(b.sameDirection?' 同じ向き':' 同じ向きでない')+'</td>').join('')+'<td>'+(j.difference==='DIFFERENCE'?'差がある':'差がなかった')+'</td></tr></table><p>判断は LONG の差で行う (SHORT は向きが反対になるだけ)。</p>';
  hist(document.getElementById('hist1'),[['X→Y→Z',d.histogram.XYZ[S.side],'var(--b)'],['X→Y→X',d.histogram.XYX[S.side],'var(--a)']]);
  bands(document.getElementById('path1'),[['X→Y→X',d.path.XYX,'var(--a)'],['X→Y→Z',d.path.XYZ,'var(--b)']]);
  let html='';for(const h of [5,10,15,20]){const e=RESULT.study1.horizons[h];html+='<table><caption>'+h+' 営業日</caption>'+HEAD+row('X→Y→X',e.full.XYX)+row('X→Y→Z',e.full.XYZ)+row('全イベント (参考)',e.full.ALL)+
-  Object.entries(e.blocks).map(([k,b])=>row(k+' X→Y→X',b.XYX)+row(k+' X→Y→Z',b.XYZ)).join('')+'</table>'}
- html+='<table><caption>X の種類ごと (X→Y→X 型、'+S.h+' 営業日、探索)</caption>'+HEAD+Object.entries(d.byX).map(([k,s])=>row(k,s)).join('')+'</table>';
+  Object.entries(e.blocks).map(([k,b])=>row(k+' X→Y→X ('+(b.firstSignal||'—')+' 〜 '+(b.lastSignal||'—')+')',b.XYX)+row(k+' X→Y→Z',b.XYZ)).join('')+'</table>'}
+ html+='<table><caption>X の種類ごと ('+S.h+' 営業日、探索)</caption>'+HEAD+Object.entries(d.byX).map(([k,s])=>row(k+' X→Y→X',s.XYX)+row(k+' X→Y→Z',s.XYZ)).join('')+'</table>';
  html+='<table><caption>当時の市場区分ごと ('+S.h+' 営業日、探索)</caption>'+HEAD+Object.keys(d.bySegment.XYX).map(k=>row(k+' X→Y→X',d.bySegment.XYX[k])+row(k+' X→Y→Z',d.bySegment.XYZ[k])).join('')+'</table>';
  html+='<p>Y の滞在日数 (営業日): X→Y→X 中央値 '+RESULT.study1.dwellY.XYX.median+'、X→Y→Z 中央値 '+RESULT.study1.dwellY.XYZ.median+'。</p>';
  document.getElementById('detail1').innerHTML=html}
-function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.toggle('on',+b.dataset.h===S.h));document.querySelectorAll('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===S.side));study2();study1()}
+function counts(){const c=RESULT.counts||{};document.getElementById('counts').innerHTML='<table><tr><th>項目</th><th>件数</th></tr>'+Object.keys(c).sort().map(k=>'<tr><td class="k">'+k+'</td><td>'+num(c[k])+'</td></tr>').join('')+'</table><p>s1 = 研究 1、s2 = 研究 2。kept = 集計に使ったイベント、excluded* = 除外、dedupDropped = 20 営業日以内の重複、missingN.* = N 営業日の結果が無いもの (理由)。</p>'}
+function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.toggle('on',+b.dataset.h===S.h));document.querySelectorAll('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===S.side));study2();study1();counts()}
 document.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{S.h=+b.dataset.h;draw()});document.querySelectorAll('[data-side]').forEach(b=>b.onclick=()=>{S.side=b.dataset.side;draw()});
 window.onresize=draw;draw();`

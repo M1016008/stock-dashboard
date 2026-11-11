@@ -46,17 +46,31 @@ function openImmutable(file: string): Database {
   return db
 }
 
-function outputDirectory(): string {
-  const value = process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? ''
+// 出力は研究フォルダの下の専用フォルダか、OWC の外 (scratch) だけ。封印 C の入力のフォルダには書かない。
+export const RESULT_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'prereg-transitions-20261111')
+export function assertOutputDirectory(value: string): string {
   if (!path.isAbsolute(value)) throw new Error('--out=<absolute directory> is required')
-  return value
+  const resolved = path.resolve(value)
+  const insideResultRoot = resolved.startsWith(`${RESULT_ROOT}${path.sep}`)
+  if (!insideResultRoot && resolved.startsWith('/Volumes/')) throw new Error(`output must be under ${RESULT_ROOT}`)
+  return resolved
 }
+const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '')
 
+// link は宛先があれば失敗するため、同時に動いても上書きしない。
 function writeOnce(file: string, body: string): void {
-  if (fs.existsSync(file)) throw new Error(`write-once output exists: ${file}`)
   const temporary = `${file}.tmp-${process.pid}`
   fs.writeFileSync(temporary, body, { flag: 'wx' })
-  fs.renameSync(temporary, file)
+  try { fs.linkSync(temporary, file) } finally { fs.unlinkSync(temporary) }
+}
+
+function assertInputs(): { manifestSourceSha: string; eventsSha: string } {
+  assertResearchOnlyExecution()
+  const manifest = assertSixStageRealInput('JP')
+  if (sha256File(SOURCE_PATH) !== manifest.source.priceSourceFileSha256) throw new Error('JP source sha256 mismatch')
+  const foundation = JSON.parse(fs.readFileSync(path.join(FOUNDATION, 'manifest.json'), 'utf8'))
+  if (sha256File(EVENTS_PATH) !== foundation.files['events.sqlite'].sha256) throw new Error('E039 events.sqlite sha256 mismatch')
+  return { manifestSourceSha: manifest.source.priceSourceFileSha256, eventsSha: foundation.files['events.sqlite'].sha256 }
 }
 
 function loadCalendar(source: Database): string[] {
@@ -66,6 +80,7 @@ function loadCalendar(source: Database): string[] {
 
 // 月末の上場銘柄一覧。シグナルの月には前月末の値を使う (分析側)。
 async function fetchSegments(out: string): Promise<void> {
+  assertInputs()
   const source = openImmutable(SOURCE_PATH)
   const calendar = loadCalendar(source)
   source.close()
@@ -229,20 +244,17 @@ export function selectTickerEvents(bars: readonly EventPriceBar[], events: reado
 }
 
 function analyze(out: string): void {
-  assertResearchOnlyExecution()
-  const manifest = assertSixStageRealInput('JP')
-  if (sha256File(SOURCE_PATH) !== manifest.source.priceSourceFileSha256) throw new Error('JP source sha256 mismatch')
-  const foundation = JSON.parse(fs.readFileSync(path.join(FOUNDATION, 'manifest.json'), 'utf8'))
-  if (sha256File(EVENTS_PATH) !== foundation.files['events.sqlite'].sha256) throw new Error('E039 events.sqlite sha256 mismatch')
+  const inputs = assertInputs()
+  // 当時の区分は先に segments で取得しておく (無ければ止める)。2016 年 11 月末より前は「不明」。
   const segmentFile = path.join(out, 'segments.json')
-  const segmentMonths: Record<string, { segments: Record<string, string> }> =
-    fs.existsSync(segmentFile) ? JSON.parse(fs.readFileSync(segmentFile, 'utf8')).months : {}
+  if (!fs.existsSync(segmentFile)) throw new Error('run the segments step first')
+  const segmentMonths: Record<string, { segments: Record<string, string> }> = JSON.parse(fs.readFileSync(segmentFile, 'utf8')).months
   const source = openImmutable(SOURCE_PATH)
   const eventsDb = openImmutable(EVENTS_PATH)
   const calendar = loadCalendar(source)
   const calendarIndex = new Map(calendar.map((date, index) => [date, index]))
-  const capacity = Number(eventsDb.prepare(`SELECT COUNT(*) AS n FROM events WHERE event_type='ENTRY' AND length IN (2,3)`).all()[0].n)
-  const studies = { 1: new EventColumns(capacity), 2: new EventColumns(capacity) }
+  const capacity = (length: number) => Number(eventsDb.prepare(`SELECT COUNT(*) AS n FROM events WHERE event_type='ENTRY' AND length=?`).all(length)[0].n)
+  const studies = { 1: new EventColumns(capacity(3)), 2: new EventColumns(capacity(2)) }
   const groupIds = { 1: new Map<string, number>(), 2: new Map<string, number>() }
   const segmentNames = ['不明']
   const tickers: string[] = []
@@ -325,11 +337,11 @@ function analyze(out: string): void {
         histogram: { XYX: bothSides(s1, xyx, h), XYZ: bothSides(s1, xyz, h) },
         path: { XYX: pathBands(s1, xyx, h), XYZ: pathBands(s1, xyz, h) },
         judgment: judge(s1, xyx, xyz, h, calendar),
-        byX: Object.fromEntries([...ids1.keys()].filter((key) => key.startsWith('X:')).sort().map((key) => {
-          const id = ids1.get(key)!
-          return [key.slice(2), summarize(s1, xyx.filter((row) => s1.sub[row] === id), h)]
-        })),
       } : {}),
+      byX: Object.fromEntries([...ids1.keys()].filter((key) => key.startsWith('X:')).sort().map((key) => {
+        const id = ids1.get(key)!
+        return [key.slice(2), { XYX: summarize(s1, xyx.filter((row) => s1.sub[row] === id), h), XYZ: summarize(s1, xyz.filter((row) => s1.sub[row] === id), h) }]
+      })),
     }])),
   }
 
@@ -342,14 +354,28 @@ function analyze(out: string): void {
     groups2.set(s2.group[row], list)
   }
   const keys2 = [...groupIds[2].entries()].sort(([a], [b]) => a.localeCompare(b))
+  const split = (list: number[]) => ({ explore: list.filter((row) => year(s2, row) <= '2017'), confirm: list.filter((row) => year(s2, row) >= '2018') })
+  const eligibleAt = new Map(HORIZONS.map((h) => [h, new Set(keys2.filter(([, id]) => summarize(s2, groups2.get(id)!, h).n >= MIN_EVENTS).map(([key]) => key))]))
+  // 数字の表: いずれかの期間で対象になった遷移は、4 つの期間すべての数字を持つ (対象かどうかも記録)。
+  const details2 = Object.fromEntries(keys2.filter(([key]) => HORIZONS.some((h) => eligibleAt.get(h)!.has(key))).map(([key, id]) => {
+    const list = groups2.get(id)!
+    const { explore, confirm } = split(list)
+    return [key, Object.fromEntries(HORIZONS.map((h) => [h, { eligible: eligibleAt.get(h)!.has(key), all: summarize(s2, list, h),
+      explore: summarize(s2, explore, h), confirm: summarize(s2, confirm, h), bySegment: bySegment(s2, list, h) }]))]
+  }))
+  const periodRange = (filter: (row: number) => boolean) => {
+    let first = Infinity; let last = -Infinity
+    for (let row = 0; row < s2.size; row += 1) if (filter(row)) { first = Math.min(first, s2.date[row]); last = Math.max(last, s2.date[row]) }
+    return Number.isFinite(first) ? { firstSignal: calendar[first], lastSignal: calendar[last] } : null
+  }
+  const periods2 = { explore: periodRange((row) => year(s2, row) <= '2017'), confirm: periodRange((row) => year(s2, row) >= '2018') }
   const study2 = Object.fromEntries(HORIZONS.map((h) => {
-    const eligible = keys2.filter(([, id]) => summarize(s2, groups2.get(id) ?? [], h).n >= MIN_EVENTS)
+    const eligible = keys2.filter(([key]) => eligibleAt.get(h)!.has(key))
     const rows = eligible.map(([key, id]) => {
       const list = groups2.get(id)!
-      const explore = list.filter((row) => year(s2, row) <= '2017')
-      const confirm = list.filter((row) => year(s2, row) >= '2018')
-      return { key, all: summarize(s2, list, h), explore: summarize(s2, explore, h), confirm: summarize(s2, confirm, h),
-        ...(MAIN_HORIZONS.includes(h as 10 | 20) ? { histogram: bothSides(s2, list, h), path: pathBands(s2, list, h), bySegment: bySegment(s2, list, h) } : {}) }
+      const detail = details2[key][h]
+      return { key, all: detail.all, explore: detail.explore, confirm: detail.confirm,
+        ...(MAIN_HORIZONS.includes(h as 10 | 20) ? { histogram: bothSides(s2, list, h), path: pathBands(s2, list, h) } : {}) }
     })
     const pooled = eligible.flatMap(([, id]) => groups2.get(id)!)
     const candidates = MAIN_HORIZONS.includes(h as 10 | 20) ? Object.fromEntries((['LONG', 'SHORT'] as const).map((side) => {
@@ -363,9 +389,8 @@ function analyze(out: string): void {
   const result = {
     namespace: 'PREREG_TRANSITIONS_20261111_RESULT_V1', generatedAt: new Date().toISOString(),
     prereg: 'research/6stage/event-path-research/PREREG_TRANSITIONS_20261111.md',
-    inputs: { events: EVENTS_PATH, source: SOURCE_PATH, eventsSha256: foundation.files['events.sqlite'].sha256,
-      sourceSha256: manifest.source.priceSourceFileSha256, segments: fs.existsSync(segmentFile) ? segmentFile : null },
-    counts, segmentNames, study1, study2,
+    inputs: { events: EVENTS_PATH, source: SOURCE_PATH, eventsSha256: inputs.eventsSha, sourceSha256: inputs.manifestSourceSha, segments: segmentFile },
+    counts, segmentNames, study1, study2, details2, periods2,
   }
   fs.mkdirSync(out, { recursive: true })
   writeOnce(path.join(out, 'result.json'), `${JSON.stringify(result)}\n`)

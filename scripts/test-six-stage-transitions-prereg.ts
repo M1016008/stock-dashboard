@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { evaluateEventPricePath, type EventPriceBar } from '@/lib/research/six-stage-event-path-research'
 import {
+  RESULT_ROOT,
+  assertOutputDirectory,
   interpolated,
   permutationBaseline,
   previousMonth,
@@ -73,5 +75,12 @@ const first = permutationBaseline(explore, confirm, 'LONG', 10)
 assert.deepEqual(first, permutationBaseline(explore, confirm, 'LONG', 10))
 assert.ok(first.expected > 1 && first.expected < 4)
 assert.ok(first.probabilityAtLeastObserved < 0.01)
+
+// 出力先: 研究フォルダの専用フォルダか OWC の外だけ。封印 C の入力のフォルダは拒む。
+assert.equal(assertOutputDirectory(`${RESULT_ROOT}/run-1`), `${RESULT_ROOT}/run-1`)
+assert.equal(assertOutputDirectory('/private/tmp/x'), '/private/tmp/x')
+assert.throws(() => assertOutputDirectory('/Volumes/OWC Express 1M2 80G/stockboard-research/six-stage/v5/E039-JP-scale-consistent-phase1b0-foundation'))
+assert.throws(() => assertOutputDirectory(`${RESULT_ROOT}/../v5`))
+assert.throws(() => assertOutputDirectory('relative/dir'))
 
 console.log('six-stage transitions prereg tests: PASS')

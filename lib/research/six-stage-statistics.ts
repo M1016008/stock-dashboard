@@ -113,17 +113,28 @@ export function mulberry32(seed: number) {
   }
 }
 
-function weightedMedian(rows: readonly { value: number; cluster: number }[], weights: Int32Array): number | null {
+// Rows sorted by value, held as typed arrays. The total weight comes from per-cluster row counts, so each
+// replicate scans rows only up to the weighted midpoint (same result as summing every row).
+type PreparedRows = { values: Float64Array; clusters: Int32Array; counts: Int32Array }
+
+function prepareRows(rows: readonly { value: number; cluster: number }[], clusterCount: number): PreparedRows {
+  const sorted = [...rows].sort((a, b) => a.value - b.value)
+  const counts = new Int32Array(clusterCount)
+  for (const row of sorted) counts[row.cluster] += 1
+  return { values: Float64Array.from(sorted, (row) => row.value), clusters: Int32Array.from(sorted, (row) => row.cluster), counts }
+}
+
+function weightedMedian(rows: PreparedRows, weights: Int32Array): number | null {
   let total = 0
-  for (const row of rows) total += weights[row.cluster]
+  for (let cluster = 0; cluster < weights.length; cluster += 1) total += weights[cluster] * rows.counts[cluster]
   if (total === 0) return null
   const midpoint = total / 2
   let cumulative = 0
-  for (const row of rows) {
-    cumulative += weights[row.cluster]
-    if (cumulative >= midpoint) return row.value
+  for (let index = 0; index < rows.values.length; index += 1) {
+    cumulative += weights[rows.clusters[index]]
+    if (cumulative >= midpoint) return rows.values[index]
   }
-  return rows.at(-1)?.value ?? null
+  return rows.values.at(-1) ?? null
 }
 
 export function bootstrapMedianDistribution(args: {
@@ -139,8 +150,8 @@ export function bootstrapMedianDistribution(args: {
   if (records.length === 0) throw new Error('bootstrap records are required')
   const clusterNames = [...new Set(records.map((row) => clusterKey(row, args.axis)))].sort()
   const clusterIds = new Map(clusterNames.map((name, index) => [name, index]))
-  const prepared = records.map((row) => ({ value: row.netReturn, cluster: clusterIds.get(clusterKey(row, args.axis))! }))
-    .sort((a, b) => a.value - b.value)
+  const prepared = prepareRows(records.map((row) => ({ value: row.netReturn, cluster: clusterIds.get(clusterKey(row, args.axis))! })),
+    clusterNames.length)
   const random = mulberry32(seed)
   const weights = new Int32Array(clusterNames.length)
   const medians: number[] = []
@@ -164,10 +175,9 @@ function bootstrapByAxis(
 ): ClusterBootstrapResult {
   const clusterNames = [...new Set(records.map((row) => clusterKey(row, axis)))].sort()
   const clusterIds = new Map(clusterNames.map((name, index) => [name, index]))
-  const prepared = (cohort: TransitionComparisonRecord['cohort']) => records
+  const prepared = (cohort: TransitionComparisonRecord['cohort']) => prepareRows(records
     .filter((row) => row.cohort === cohort)
-    .map((row) => ({ value: row.netReturn, cluster: clusterIds.get(clusterKey(row, axis))! }))
-    .sort((a, b) => a.value - b.value)
+    .map((row) => ({ value: row.netReturn, cluster: clusterIds.get(clusterKey(row, axis))! })), clusterNames.length)
   const h001 = prepared('H001')
   const c2 = prepared('C2')
   const random = mulberry32(seed)
