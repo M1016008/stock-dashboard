@@ -117,3 +117,17 @@ export function assertReleaseRootBaselineStatus(
     ? assertRunnerOwnedRollbackRuntime(releaseRoot, releaseStateDirectory)
     : null
 }
+
+// Runtimes keep the release-root commit they were built for (runtime-manifest.json baselineSha), while after P1
+// the release root follows main. A runtime may carry the current baseline, or one prior baseline named for this
+// run (STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT) that is an ancestor of the current baseline.
+export function acceptedRuntimeBaselines(
+  current: string,
+  prior: string | undefined,
+  isAncestor: (older: string, newer: string) => boolean,
+): readonly string[] {
+  if (!prior) return [current]
+  if (!/^[0-9a-f]{40}$/.test(prior)) throw new Error('STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT=<40-hex commit> required')
+  if (prior === current || !isAncestor(prior, current)) throw new Error('release_prior_baseline_not_ancestor')
+  return [current, prior]
+}

@@ -24,7 +24,7 @@ import {
   assertNoUncertainReleaseTransaction,
   type ReleaseTransactionPaths,
 } from '@/lib/release/web-analog-transaction'
-import { assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
+import { acceptedRuntimeBaselines, assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
 
 // The release root's checked-out source (batch code), unchanged by a Web/Analog switch.
 // Required per run: production first ran this at 034310b; after P1 the release root follows main.
@@ -231,7 +231,7 @@ function verifyRuntime(runtimeDirectory: string, expectedIdentity: string, expec
   const actualIdentity = hashJson(identityPayload)
   const mismatches: string[] = []
   if (manifest.schemaVersion !== 1) mismatches.push('schemaVersion')
-  if (manifest.baselineSha !== BASELINE_COMMIT) mismatches.push('baselineSha')
+  if (!runtimeBaselines.includes(manifest.baselineSha)) mismatches.push('baselineSha')
   if (fs.realpathSync(runtimeDirectory) !== manifest.runtimeRealpath) mismatches.push('runtimeRealpath')
   if (actualIdentity !== expectedIdentity) mismatches.push('expectedIdentity')
   if (manifest.hashes.runtimeIdentitySha256 !== actualIdentity) mismatches.push('manifestIdentity')
@@ -279,6 +279,11 @@ if (!fs.statSync(releaseStateDirectory).isDirectory() || fs.lstatSync(releaseSta
 if (command('/usr/bin/git', ['rev-parse', 'HEAD'], releaseRoot) !== BASELINE_COMMIT) {
   throw new Error('release_baseline_identity_mismatch')
 }
+const runtimeBaselines = acceptedRuntimeBaselines(
+  BASELINE_COMMIT,
+  process.env.STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT?.trim() || undefined,
+  (older, newer) => spawnSync('/usr/bin/git', ['merge-base', '--is-ancestor', older, newer], { cwd: releaseRoot }).status === 0,
+)
 const runnerOwnedRollbackRuntime = assertReleaseRootBaselineStatus(
   releaseRoot,
   releaseStateDirectory,
