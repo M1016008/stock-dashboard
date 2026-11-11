@@ -203,18 +203,24 @@ async function run(config: Config): Promise<void> {
     const result = await runWebAnalogRelease(adapter)
     outcome = { status: 'SUCCESS', rolledBack: result.rolledBack }
   } catch (error) {
-    outcome = { status: 'ROLLED_BACK_OR_FAILED', error: error instanceof Error ? error.message : String(error), transaction: transaction.recoverySummary() }
+    const causes = error instanceof AggregateError ? error.errors.map((cause) => cause instanceof Error ? cause.message : String(cause)) : []
+    outcome = { status: 'ROLLED_BACK_OR_FAILED', error: error instanceof Error ? error.message : String(error), causes, transaction: transaction.recoverySummary() }
   }
+  // 終わった後に、練習用のサーバーが 2 つとも動いていて健康であること。
+  let serversHealthy = true
+  for (const label of WEB_ANALOG_TARGETS) { try { await healthy(label, 30) } catch { serversHealthy = false } }
   const after = { build: readBuild(live), runtime: fs.realpathSync(nodeModules) }
   const journals = fs.readdirSync(config.state).filter((name) => name.startsWith('sma-release-journal.json.'))
   const archived = `sma-release-journal.json.${direction === 'fail' ? 'rolled-back' : 'committed'}-${transaction.transactionId}`
-  // 合格の条件: forward・back は確定してその記録が残ること。fail は入れ替えの後に自動で戻り、その記録が残ること。
-  const passed = direction === 'fail'
-    ? outcome.status !== 'SUCCESS' && String(outcome.error).includes('web_analog_release_rolled_back') && journals.includes(archived)
+  // 合格の条件: forward・back は確定してその記録が残ること。fail は入れ替えの後に自動で戻り、その記録が残り、
+  // 戻しの中の再起動・健康の確認に失敗が無いこと (原因が、わざと起こした失敗の 1 つだけ)。どれも、終わった後にサーバーが健康であること。
+  const passed = serversHealthy && (direction === 'fail'
+    ? outcome.status !== 'SUCCESS' && outcome.error === 'web_analog_release_rolled_back_or_held'
+      && JSON.stringify(outcome.causes) === JSON.stringify(['rehearsal_injected_health_failure']) && journals.includes(archived)
       && after.build === before.build && after.runtime === before.runtime
     : outcome.status === 'SUCCESS' && journals.includes(archived) && after.build === readBuild(artifact)
-      && after.runtime === fs.realpathSync(path.join(candidateRuntime, 'node_modules'))
-  const entry = { step: `run:${direction}`, passed, ...outcome, before, after, candidateBuild: readBuild(artifact), expectedJournal: archived, journals }
+      && after.runtime === fs.realpathSync(path.join(candidateRuntime, 'node_modules')))
+  const entry = { step: `run:${direction}`, passed, serversHealthy, ...outcome, before, after, candidateBuild: readBuild(artifact), expectedJournal: archived, journals }
   record(config, entry)
   console.log(JSON.stringify(entry, null, 2))
   if (!passed) process.exitCode = 1

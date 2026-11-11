@@ -127,10 +127,12 @@ APFS の複製 (`cp -c`。同じ OWC の上に一瞬で複製を作り、書き�
 - 片付け: 練習用の場所 (候補の束とビルドを含め数 GB) は、P1 に同じ候補を使うため P1 の確認まで残す。消すのは承認の後。
 
 ### 6-2. (b) 本番に向けた、確かめるだけの動かし方 (11/27 (金) 12:00〜16:00)
-- `npm run release:preflight-proof -- --check --release-root=/Users/yoshio/dev/stock-dashboard-release-7df6c23 --artifact=<候補のビルド> --runtime=<候補の束> --baseline=034310b…`
+- `/usr/local/bin/node --import tsx scripts/create-sma-release-preflight-proof.ts --check --release-root=/Users/yoshio/dev/stock-dashboard-release-7df6c23 --artifact=<候補のビルド> --runtime=<候補の束> --baseline=034310b…`
 - 書くもの: なし。結果は画面に出すだけ。ファイルを書く処理は、すべて `--check` で戻った後 (`--write` のときだけ) にあり、その順番はテストで確かめている。
 - 本番に対して行うこと: ファイルと記録の読み取り (release ディレクトリの git の状態、`.next-live`、束の記録、鮮度の見張りのログ、ロックが無いこと) と `ps` だけ。
-  git は index を更新しない設定 (`GIT_OPTIONAL_LOCKS=0`)、`npm ls` (候補の束の中で動かす。本番の束ではない) は記録ファイルを書かない設定で動かす。
+  git は index を更新しない設定 (`GIT_OPTIONAL_LOCKS=0`) で動かす。`npm ls` (候補の束の中で動かす。本番の束ではない) は、cache と記録を
+  この確認のためだけの一時フォルダに書かせ、終わったら消す。`npm run` を通さず node で直接動かす (npm の記録・更新の確認を避けるため)。
+  本番の外で書かれうるのは、この一時フォルダと、macOS の `/usr/bin/git` が自分の一時領域に作る検索の cache だけ。
 - Web・類似の検索への GET は `--check` では行わない。`/api/health` は、Storage Guard の確認の記録 (本番の App Support の中) を書くため
   (毎分の web-health と同じ動き)。P1 当日の `--write` では行う。前日に GET も試すなら `--check --with-http` を使い、別に承認を得る。
 - 当日の P1 では、同じ道具を `--write --out=<新しいフォルダ>` で動かし、証明を作る。書く先は本番の場所 (release ディレクトリ・release-state・

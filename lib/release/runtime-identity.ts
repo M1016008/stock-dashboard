@@ -56,13 +56,20 @@ export function computeRuntimeIdentity(runtimeDirectory: string, stamp: { baseli
   const nodeModules = path.join(runtimeDirectory, 'node_modules')
   const npmBinary = path.join(path.dirname(process.execPath), 'npm')
   if (!fs.existsSync(npmBinary)) throw new Error(`release_runtime_npm_missing:${npmBinary}`)
-  const listed = spawnSync(npmBinary, ['ls', '--all', '--json'], {
-    cwd: runtimeDirectory, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
-    // npm の記録ファイル・更新の確認を書かない (確かめるだけの動かし方で何も書かないため)。
-    env: { ...process.env, NODE_ENV: 'production', npm_config_logs_max: '0', npm_config_update_notifier: 'false' },
-  })
-  if (listed.error || listed.status !== 0) throw new Error(`release_runtime_npm_ls_failed:${(listed.stderr || listed.error?.message || '').trim()}`)
-  const dependencyTreeSha256 = hashJson(sanitizeDependencyTree(JSON.parse(listed.stdout)))
+  // npm の cache と記録は、この確認のためだけの一時フォルダに書かせ、終わったら消す (~/.npm や本番の場所には書かない)。
+  // 更新の確認もしない。npm ls の結果 (同一性の計算に使う) は、これらの設定で変わらない。
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-npm-ls-'))
+  let listed: ReturnType<typeof spawnSync>
+  try {
+    listed = spawnSync(npmBinary, ['ls', '--all', '--json'], {
+      cwd: runtimeDirectory, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
+      env: { ...process.env, NODE_ENV: 'production', npm_config_cache: scratch, npm_config_logs_dir: scratch, npm_config_update_notifier: 'false' },
+    })
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+  if (listed.error || listed.status !== 0) throw new Error(`release_runtime_npm_ls_failed:${String(listed.stderr || listed.error?.message || '').trim()}`)
+  const dependencyTreeSha256 = hashJson(sanitizeDependencyTree(JSON.parse(String(listed.stdout))))
   const nativeFiles = Object.fromEntries(NATIVE_CANDIDATES
     .filter((relative) => fs.existsSync(path.join(runtimeDirectory, relative)))
     .map((relative) => [relative, sha256File(path.join(runtimeDirectory, relative))]))
