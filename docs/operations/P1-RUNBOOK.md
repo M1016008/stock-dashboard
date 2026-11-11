@@ -21,7 +21,9 @@
 
 ### 1-1. Backup の写しで main の表を作る処理を試す
 - 11/15 の Backup の写し (読み取り専用) から、本番以外の場所に作業用の複製を作る (`cp -c`)。写しそのものには書かない。
-- 複製に向けて main の `npm run db:ensure-schema` (`lib/db/migrate.ts`) を 1 回動かし、前後の `sqlite_master` を比べる。
+- `.env.local` の無い main の作業用ディレクトリで、行き先を複製に固定して表を作る処理 (`lib/db/migrate.ts`) を 1 回動かし、前後の `sqlite_master` を比べる:
+  `USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=<複製の絶対パス> node --import tsx scripts/ensure-local-schema.ts`
+  (`npm run db:ensure-schema` は `.env.local` を読み、本番の DB を指すおそれがあるため使わない)。本番の DB の更新時刻が変わらないことも確かめる。
 - 確かめること: 増えるのは表 `stock_shikiho_rivals` と、その索引 2 つ (明示の `idx_shikiho_rivals_rival` と、主キーの自動の索引 `sqlite_autoindex_stock_shikiho_rivals_1`) だけ。既存の表・列・索引に変更がない。
   2 回目を動かしても何も増えない。
 - 終わったら作業用の複製を消す (本番の DB とは別のファイル)。
@@ -56,23 +58,25 @@ data-freshness-guard (15 分)・trigger-historical-scan (5 分)・kabutan-materi
 
 | 時刻 | 操作 | 実行 |
 |---|---|---|
-| 07:50 | 06:30 の us-update-latest が終わり、定期処理が 1 本も動いていないことを `pgrep` で確かめる | Claude Code |
+| 07:50 | 06:30 の us-update-latest が終わり、常駐の trigger-historical-scan 以外の定期処理が動いていないことを `pgrep` で確かめる (trigger-historical-scan は待ち受けを続ける常駐の処理なので、07:55 の停止で止める) | Claude Code |
 | 07:55 | 15 本を `launchctl bootout`。`launchctl print` で止まったことを確かめる | オーナー |
 | 08:00 | Web・類似の検索・friend-readonly-gateway も止め (Web も表示用のキャッシュを DB に書くため)、DB の控えを取り (下の 4.)、3 本を戻して `/api/health` が ok になるのを待つ。止まるのは数分 | 停止・再開はオーナー、控えは Claude Code (承認後) |
 | 08:15 | 配置の証明を作り (有効 15 分)、Web と類似の検索を切り替える。`STOCKBOARD_RELEASE_BASELINE_COMMIT=034310b…` | オーナー (実行) |
 | 08:30 | **終了コードが 0 で、出力が `"status":"SUCCESS"` のときだけ次へ進む。** `PRECHECK_FAILED`・`ROLLED_BACK_UNHEALTHY` なら、release ディレクトリは `034310b` のまま、3-3 の順で戻して終える。`HOLD` なら定期処理も止めたまま手を止めて相談する (3-4) | オーナー・Claude Code |
 | 08:35 | Web・類似の検索の `/api/health` が ok、主な画面が開くことを確かめる | Claude Code |
 | 08:40 | release ディレクトリを main の commit に合わせる (`git checkout --detach <main の commit>`)。`git status` が `?? .node_modules-release-prev` だけであることを確かめる | オーナー |
-| 08:50 | release ディレクトリで型検査 (`tsc --noEmit`) だけを行う。定期処理の入口は実行しない (`--help` を受け付けずに本処理が動く入口があるため) | Claude Code |
-| 09:30 | 下の 3-3 の順で戻す。weekly-optimization は戻さない (11/29 の日曜を飛ばす。STATUS の日程どおり。12/6 の Backup の後に戻す) | オーナー |
+| 08:50 | release ディレクトリで型検査 (`./node_modules/.bin/tsc --noEmit -p .`。束に tsc があることは予行で確かめる) だけを行う。定期処理の入口は実行しない (`--help` を受け付けずに本処理が動く入口があるため) | Claude Code |
+| 09:30 | 下の 3-3 の順で戻す。weekly-optimization は戻さない (P1 の直後の日曜を飛ばす。STATUS の日程どおり、12/6 の Backup の後に戻す。1 週ずれた場合は 12/13 の Backup の後) | オーナー |
 | 後日 | large-holder-update の plist から PATH の回避策を外し、更新の成功を確かめる (STATUS の項目) | オーナー |
 
 ### 3-3. 定期処理を戻す順
 - 戻すとすぐ動く (RunAtLoad) ものが 9 本ある。書き込みが重ならないよう、次の順に 1 本ずつ戻し、動いたものは終わるのを待つ。
   1. すぐには動かないもの: update-latest、us-update-latest、db-maintenance、ml-freshness-guard、ml-learning
-  2. 読むだけのもの: web-health、data-freshness-guard
+  2. web-health (Web を確かめるだけ)
   3. すぐ動いて書くもの: classification-sync (main で初めて動き、比較会社の表を作り、記録ファイルの版 5 への切り替えで 1 回取り込み直す)、
-     earnings-refresh、large-holder-update、kabutan-themes、kabutan-material-news、trigger-historical-scan、trigger-ml-frozen-monitor
+     earnings-refresh、large-holder-update、kabutan-themes、kabutan-material-news、trigger-ml-frozen-monitor
+  4. trigger-historical-scan (常駐の処理。終わるのは待たず、動き続けていることと、ログに待ち受けの開始が出ることを確かめる)
+  5. data-freshness-guard を最後に戻す (データが古いと判断すると、更新の処理を自分で起動するため)。起動したものがあれば終わるまで待つ
 - trigger-ml-frozen-monitor は戻したときに 1 回動く (09:00 の分の代わり)。ログで動いたことを確かめ、動いていなければ手で `launchctl kickstart` する。
 - us-update-latest は戻しても動かないため、最後に手で 1 回実行する (10:30 の分の代わり。土曜の決まりどおり)。
 
@@ -91,9 +95,10 @@ APFS の複製 (`cp -c`。同じ OWC の上に一瞬で複製を作り、書き�
   一緒に複製し、`-shm` は複製しない (開いているものの間で使う一時的な情報のため)。本番の DB には書かない (WAL の書き戻しもしない)。
 - 時間: 複製は数秒、Web が止まるのは数分。容量: 作った時点ではほぼ 0。OWC の空きは 2.0 TB (11/11)。
 - 当日の午後に、複製に対して読み取りだけの `quick_check` を行う (本番の DB には触れない)。
-- 戻し: 定期処理と Web を止めて、複製を元の名前に戻す (オーナーの承認の後)。
+- 戻し (オーナーの承認の後): 定期処理 15 本・Web・類似の検索・friend-readonly-gateway を止め、DB・`-wal`・`-shm` を開いているものが無いことを
+  `lsof` で確かめる。今の DB・`-wal`・`-shm` は 3 つ一組で別の名前に移し (消さない)、複製の DB と (あれば) `-wal` を元の名前に戻す。`-shm` は戻さない。
 - 注意: 同じディスクの上の控えなので、ディスクの故障には備えられない。故障への備えは 11/15・12/6 の正式な Backup。
-- **片付けの期限: 遅くとも 12/3 (米国株の作り直しの前)。** 作り直しで米国株の DB がほぼ全部書き換わり、複製が OWC を約 514 GB
+- **片付けの期限: 遅くとも 12/3 (米国株の作り直しの前。1 週ずれた場合は 12/10)。** 作り直しで米国株の DB がほぼ全部書き換わり、複製が OWC を約 514 GB
   使うため。片付けはオーナーの承認の後に行う。
 
 ## 5. P1 の後に最初に Web を配置するとき
