@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
+import { acceptedRuntimeBaselines, assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-release-root-baseline-'))
 try {
@@ -110,6 +110,15 @@ try {
     () => assertReleaseRootBaselineStatus(releaseRoot, releaseState, '?? .node_modules-release-prev'),
     /release_runner_owned_rollback_runtime_journal_mismatch:0/,
   )
+
+  const main = 'b'.repeat(40)
+  const prior = 'c'.repeat(40)
+  const ancestor = (older: string, newer: string) => older === prior && newer === main
+  assert.deepEqual(acceptedRuntimeBaselines(main, undefined, ancestor), [main])
+  assert.deepEqual(acceptedRuntimeBaselines(main, prior, ancestor), [main, prior])
+  assert.throws(() => acceptedRuntimeBaselines(main, 'd'.repeat(40), ancestor), /release_prior_baseline_not_ancestor/)
+  assert.throws(() => acceptedRuntimeBaselines(main, main, () => true), /release_prior_baseline_not_ancestor/)
+  assert.throws(() => acceptedRuntimeBaselines(main, '034310b', ancestor), /PRIOR_BASELINE_COMMIT=<40-hex commit> required/)
 
   console.log('SMA release root repeat-deploy baseline: PASS')
 } finally {
