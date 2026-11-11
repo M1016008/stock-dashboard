@@ -22,7 +22,8 @@
 ### 1-1. Backup の写しで main の表を作る処理を試す
 - 11/15 の Backup の写し (読み取り専用) から、本番以外の場所に作業用の複製を作る (`cp -c`)。写しそのものには書かない。
 - `.env.local` の無い main の作業用ディレクトリで、行き先を複製に固定して表を作る処理 (`lib/db/migrate.ts`) を 1 回動かし、前後の `sqlite_master` を比べる:
-  `USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=<複製の絶対パス> node --import tsx scripts/ensure-local-schema.ts`
+  `USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=<複製の絶対パス> STOCK_DATA_MOUNT_PATH=<複製を置いたボリューム> STOCK_DATA_VOLUME_UUID=<そのボリュームの UUID> node --import tsx scripts/ensure-local-schema.ts`
+  (外部ボリュームの DB には、ボリュームの確認 (Storage Guard) がかかるため、置いた場所のボリュームを明示する。UUID は `diskutil info` で確かめる)
   (`npm run db:ensure-schema` は `.env.local` を読み、本番の DB を指すおそれがあるため使わない)。本番の DB の更新時刻が変わらないことも確かめる。
 - 確かめること: 増えるのは表 `stock_shikiho_rivals` と、その索引 2 つ (明示の `idx_shikiho_rivals_rival` と、主キーの自動の索引 `sqlite_autoindex_stock_shikiho_rivals_1`) だけ。既存の表・列・索引に変更がない。
   2 回目を動かしても何も増えない。
