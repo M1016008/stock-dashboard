@@ -167,35 +167,68 @@ export function bootstrapMedianDistribution(args: {
   return medians
 }
 
-function bootstrapByAxis(
+// One cluster bootstrap over `axis`: each replicate draws clusters with replacement and applies the same cluster
+// weights to both cohorts. Replicates where either cohort has zero weight are skipped, up to 5x the requested
+// count; fewer than 90% completed is a failure. Returns the H001 − C2 differences of the weighted median and of the
+// weighted win rate (share of weight with value > 0). The win rate draws no random numbers, so the median
+// replicates are the same as before it was added.
+export function bootstrapCohortDifferences(
   records: readonly TransitionComparisonRecord[],
   axis: ClusterAxis,
   iterations: number,
   seed: number,
-): ClusterBootstrapResult {
+): { median: number[]; winRate: number[] } {
   const clusterNames = [...new Set(records.map((row) => clusterKey(row, axis)))].sort()
   const clusterIds = new Map(clusterNames.map((name, index) => [name, index]))
   const prepared = (cohort: TransitionComparisonRecord['cohort']) => prepareRows(records
     .filter((row) => row.cohort === cohort)
     .map((row) => ({ value: row.netReturn, cluster: clusterIds.get(clusterKey(row, axis))! })), clusterNames.length)
+  const wins = (rows: PreparedRows) => {
+    const counts = new Int32Array(clusterNames.length)
+    for (let index = 0; index < rows.values.length; index += 1) if (rows.values[index] > 0) counts[rows.clusters[index]] += 1
+    return counts
+  }
+  const winRate = (rows: PreparedRows, positive: Int32Array, weights: Int32Array) => {
+    let total = 0; let won = 0
+    for (let cluster = 0; cluster < weights.length; cluster += 1) {
+      total += weights[cluster] * rows.counts[cluster]; won += weights[cluster] * positive[cluster]
+    }
+    return won / total
+  }
   const h001 = prepared('H001')
   const c2 = prepared('C2')
+  const h001Wins = wins(h001)
+  const c2Wins = wins(c2)
   const random = mulberry32(seed)
   const weights = new Int32Array(clusterNames.length)
-  const differences: number[] = []
+  const median: number[] = []
+  const winRateDifferences: number[] = []
   const maximumAttempts = iterations * 5
-  for (let attempt = 0; attempt < maximumAttempts && differences.length < iterations; attempt += 1) {
+  for (let attempt = 0; attempt < maximumAttempts && median.length < iterations; attempt += 1) {
     weights.fill(0)
     for (let draw = 0; draw < clusterNames.length; draw += 1) {
       weights[Math.floor(random() * clusterNames.length)] += 1
     }
     const h001Median = weightedMedian(h001, weights)
     const c2Median = weightedMedian(c2, weights)
-    if (h001Median != null && c2Median != null) differences.push(h001Median - c2Median)
+    if (h001Median != null && c2Median != null) {
+      median.push(h001Median - c2Median)
+      winRateDifferences.push(winRate(h001, h001Wins, weights) - winRate(c2, c2Wins, weights))
+    }
   }
-  if (differences.length < Math.max(100, Math.floor(iterations * 0.9))) {
-    throw new Error(`insufficient ${axis} bootstrap replicates: ${differences.length}/${iterations}`)
+  if (median.length < Math.max(100, Math.floor(iterations * 0.9))) {
+    throw new Error(`insufficient ${axis} bootstrap replicates: ${median.length}/${iterations}`)
   }
+  return { median, winRate: winRateDifferences }
+}
+
+function bootstrapByAxis(
+  records: readonly TransitionComparisonRecord[],
+  axis: ClusterAxis,
+  iterations: number,
+  seed: number,
+): ClusterBootstrapResult {
+  const differences = bootstrapCohortDifferences(records, axis, iterations, seed).median
   return {
     axis,
     iterationsRequested: iterations,

@@ -27,17 +27,17 @@ const SOURCE_PATH = path.join(SIX_STAGE_REAL_RESEARCH_ROOT,
 // STATUS「日本株の研究 Store (E039) を使うときの除外」: 補正漏れの 18 銘柄と 1773 は全イベントを除く。
 export const SPLIT_EXCLUDED = new Set(('1663 1899 2163 2303 2436 3091 3176 3193 3673 4099 4452 4641 6863 7425 7460 7781 7846 8818 1773').split(' '))
 export const HORIZONS = [5, 10, 15, 20] as const
-const MAIN_HORIZONS = [10, 20] as const
-const GAP_LIMIT = 10
+export const MAIN_HORIZONS = [10, 20] as const
+export const GAP_LIMIT = 10
 const DEDUP_ROWS = 20
 const MIN_EVENTS = 100
-const SEED = 20261111
-const BOOTSTRAP = 2_000
+export const SEED = 20261111
+export const BOOTSTRAP = 2_000
 const PERMUTATIONS = 10_000
-const BLOCKS = [['2008-2012', '2008', '2012'], ['2013-2017', '2013', '2017'], ['2018-2022', '2018', '2022']] as const
+export const BLOCKS = [['2008-2012', '2008', '2012'], ['2013-2017', '2013', '2017'], ['2018-2022', '2018', '2022']] as const
 const SEGMENT_FROM_MONTH = '2016-11'  // J-Quants の契約の範囲 (2016-11-11 以降) の最初の月末
 
-function openImmutable(file: string): Database {
+export function openImmutable(file: string): Database {
   const url = new URL(`file://${file}`)
   url.searchParams.set('mode', 'ro')
   url.searchParams.set('immutable', '1')
@@ -55,24 +55,24 @@ function realLocation(target: string): string {
   while (!fs.existsSync(existing)) { rest.unshift(path.basename(existing)); existing = path.dirname(existing) }
   return path.join(fs.realpathSync(existing), ...rest)
 }
-export function assertOutputDirectory(value: string): string {
+export function assertOutputDirectory(value: string, resultRoot = RESULT_ROOT): string {
   if (!path.isAbsolute(value)) throw new Error('--out=<absolute directory> is required')
   const resolved = realLocation(path.resolve(value))
   // 許すのは、研究フォルダの専用フォルダと、一時フォルダ (scratch) の下だけ。
-  const allowed = [RESULT_ROOT, '/private/tmp'].map(realLocation)  // 環境変数で変わる os.tmpdir() は使わない
-  if (!allowed.some((root) => resolved.startsWith(`${root}${path.sep}`))) throw new Error(`output must be under ${RESULT_ROOT} or a temporary directory`)
+  const allowed = [resultRoot, '/private/tmp'].map(realLocation)  // 環境変数で変わる os.tmpdir() は使わない
+  if (!allowed.some((root) => resolved.startsWith(`${root}${path.sep}`))) throw new Error(`output must be under ${resultRoot} or a temporary directory`)
   return resolved
 }
 const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '')
 
 // link は宛先があれば失敗するため、同時に動いても上書きしない。
-function writeOnce(file: string, body: string): void {
+export function writeOnce(file: string, body: string): void {
   const temporary = `${file}.tmp-${process.pid}`
   fs.writeFileSync(temporary, body, { flag: 'wx' })
   try { fs.linkSync(temporary, file) } finally { fs.unlinkSync(temporary) }
 }
 
-function assertInputs(): { manifestSourceSha: string; eventsSha: string } {
+export function assertInputs(): { manifestSourceSha: string; eventsSha: string } {
   assertResearchOnlyExecution()
   const manifest = assertSixStageRealInput('JP')
   if (sha256File(SOURCE_PATH) !== manifest.source.priceSourceFileSha256) throw new Error('JP source sha256 mismatch')
@@ -81,13 +81,13 @@ function assertInputs(): { manifestSourceSha: string; eventsSha: string } {
   return { manifestSourceSha: manifest.source.priceSourceFileSha256, eventsSha: foundation.files['events.sqlite'].sha256 }
 }
 
-function loadCalendar(source: Database): string[] {
+export function loadCalendar(source: Database): string[] {
   return source.prepare('SELECT DISTINCT date FROM ohlcv_daily WHERE date<=? ORDER BY date').all(EVENT_PATH_DISCOVERY_CUTOFF)
     .map((row) => String(row.date))
 }
 
-// 月末の上場銘柄一覧。シグナルの月には前月末の値を使う (分析側)。
-async function fetchSegments(out: string): Promise<void> {
+// 月末の上場銘柄一覧 (市場区分と 33 業種)。シグナルの月には前月末の値を使う (分析側)。
+export async function fetchSegments(out: string): Promise<void> {
   assertInputs()
   const source = openImmutable(SOURCE_PATH)
   const calendar = loadCalendar(source)
@@ -95,22 +95,27 @@ async function fetchSegments(out: string): Promise<void> {
   const monthEnds = new Map<string, string>()
   for (const date of calendar) if (date.slice(0, 7) >= SEGMENT_FROM_MONTH) monthEnds.set(date.slice(0, 7), date)
   monthEnds.delete(EVENT_PATH_DISCOVERY_CUTOFF.slice(0, 7))  // 2022-12 の値を使うシグナルは無い
-  const months: Record<string, { date: string; segments: Record<string, string> }> = {}
+  const months: Record<string, { date: string; segments: Record<string, string>; sectors33: Record<string, string> }> = {}
+  const sector33Names: Record<string, string> = {}
   for (const [month, date] of monthEnds) {
     const rows = await fetchJQuantsListedInfo(undefined, date)
     const segments: Record<string, string> = {}
-    for (const row of rows) if (row.MktNm) segments[fromJQuantsCode(row.Code)] = row.MktNm
-    months[month] = { date, segments }
+    const sectors33: Record<string, string> = {}
+    for (const row of rows) {
+      if (row.MktNm) segments[fromJQuantsCode(row.Code)] = row.MktNm
+      if (row.S33) { sectors33[fromJQuantsCode(row.Code)] = row.S33; if (row.S33Nm) sector33Names[row.S33] = row.S33Nm }
+    }
+    months[month] = { date, segments, sectors33 }
     console.log(`${month} ${date} ${Object.keys(segments).length}`)
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   fs.mkdirSync(out, { recursive: true })
-  writeOnce(path.join(out, 'segments.json'), `${JSON.stringify({ source: 'J-Quants /equities/master?date=<month end>', months })}\n`)
+  writeOnce(path.join(out, 'segments.json'), `${JSON.stringify({ source: 'J-Quants /equities/master?date=<month end>', sector33Names, months })}\n`)
 }
 
 // --- 1 イベント分の結果を列で持つ (数百万件のため) ---
-const PATH_POINTS = 22  // 0 = シグナルの日、1 = 買った日 (0)、2..21 = 買った後の 1..20 行目
-class EventColumns {
+export const PATH_POINTS = 22  // 0 = シグナルの日、1 = 買った日 (0)、2..21 = 買った後の 1..20 行目
+export class EventColumns {
   size = 0
   constructor(readonly capacity: number,
     readonly group = new Int32Array(capacity), readonly sub = new Int32Array(capacity), readonly ticker = new Int32Array(capacity),
@@ -127,7 +132,7 @@ type FullSummary = {
   mfeMedian: number; mfeQ90: number; mfeMax: number; maeMedian: number; hiDayMedian: number; loDayMedian: number
 }
 export type Summary = FullSummary | { n: 0 }
-const has = (s: Summary): s is FullSummary => s.n > 0
+export const has = (s: Summary): s is FullSummary => s.n > 0
 
 // 既存の研究コード (six-stage-statistics.ts の quantile) と同じ線形補間。1 回だけ並べ替える。
 export function interpolated(sorted: ArrayLike<number>, p: number): number {
@@ -170,7 +175,7 @@ export function histogram(c: EventColumns, rows: readonly number[], h: number, s
   return bins
 }
 
-const bothSides = (c: EventColumns, rows: readonly number[], h: number) =>
+export const bothSides = (c: EventColumns, rows: readonly number[], h: number) =>
   ({ LONG: histogram(c, rows, h, 'LONG'), SHORT: histogram(c, rows, h, 'SHORT') })
 
 // ④: シグナルの日から h 行目まで、日ごとの 10・25・50・75・90% 点。選んだ期間の結果があるイベントだけ。
@@ -207,6 +212,20 @@ export function permutationBaseline(explore: Summary[], confirm: Summary[], side
     if (count >= observed) atLeast += 1
   }
   return { observed, expected: total / PERMUTATIONS, probabilityAtLeastObserved: atLeast / PERMUTATIONS, permutations: PERMUTATIONS }
+}
+
+// 1 イベントの道筋と結果を列に書く (研究 A・B も使う)。
+export function storeOutcome(c: EventColumns, index: number, bars: readonly EventPriceBar[], signalRow: number,
+  evaluation: ReturnType<typeof evaluateEventPricePath>): void {
+  const entryPrice = evaluation.entryPrice!
+  c.path[index * PATH_POINTS] = bars[signalRow].close / entryPrice - 1
+  c.path[index * PATH_POINTS + 1] = 0
+  for (const point of evaluation.dailyExcursions) c.path[index * PATH_POINTS + 1 + point.day] = point.closeReturn ?? NaN
+  for (const horizon of evaluation.completedHorizons) {
+    const k = index * 4 + HORIZONS.indexOf(horizon.horizonSessions)
+    c.ret[k] = horizon.closeReturn; c.mfe[k] = horizon.mfe; c.mae[k] = horizon.mae
+    c.hiDay[k] = horizon.highestDay; c.loDay[k] = horizon.lowestDay
+  }
 }
 
 export type EventInput = { length: number; sequenceKey: string; signalDate: string; dwellB: number }
@@ -292,15 +311,7 @@ function analyze(out: string): void {
       const segment = segmentMonths[previousMonth(event.signalDate)]?.segments[ticker] ?? '不明'
       if (!segmentNames.includes(segment)) segmentNames.push(segment)
       c.segment[index] = segmentNames.indexOf(segment)
-      const entryPrice = evaluation.entryPrice!
-      c.path[index * PATH_POINTS] = bars[signalRow].close / entryPrice - 1
-      c.path[index * PATH_POINTS + 1] = 0
-      for (const point of evaluation.dailyExcursions) c.path[index * PATH_POINTS + 1 + point.day] = point.closeReturn ?? NaN
-      for (const horizon of evaluation.completedHorizons) {
-        const k = index * 4 + HORIZONS.indexOf(horizon.horizonSessions)
-        c.ret[k] = horizon.closeReturn; c.mfe[k] = horizon.mfe; c.mae[k] = horizon.mae
-        c.hiDay[k] = horizon.highestDay; c.loDay[k] = horizon.lowestDay
-      }
+      storeOutcome(c, index, bars, signalRow, evaluation)
       bump(`s${study}.kept`)
     }
   }
