@@ -1252,6 +1252,23 @@ export const stockShikihoProfiles = sqliteTable(
   }),
 )
 
+// 会社四季報の比較会社 (分類 CSV の「比較会社」列)。
+export const stockShikihoRivals = sqliteTable(
+  'stock_shikiho_rivals',
+  {
+    ticker:     text('ticker').notNull(),
+    position:   integer('position').notNull(),
+    rivalCode:  text('rival_code'),
+    rivalName:  text('rival_name').notNull(),
+    issueLabel: text('issue_label'),
+    updatedAt:  integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.position] }),
+    rivalIdx: index('idx_shikiho_rivals_rival').on(t.rivalCode),
+  }),
+)
+
 // ─────────────────────────────────────
 // 16. Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest)
 // ─────────────────────────────────────

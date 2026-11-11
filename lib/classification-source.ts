@@ -22,11 +22,24 @@ export type ShikihoProfileRecord = {
   consolidatedBusiness: string | null
 }
 
+// 四季報の「比較会社」。CSV の「比較会社」列は `コード:略称;コード:略称` の形 (コードが無い会社は `:略称`)。
+export type ShikihoRivalRecord = {
+  ticker: string
+  position: number
+  rivalCode: string | null
+  rivalName: string
+  issueLabel: string | null
+}
+
 export type ClassificationSourceData = {
   sheetName: string
   rawRowCount: number
   records: ClassificationRecord[]
   profiles: ShikihoProfileRecord[]
+  // 「比較会社」列が無い CSV では false。その場合、取り込みは比較会社の表に触れない。
+  hasRivalsColumn: boolean
+  rivals: ShikihoRivalRecord[]
+  invalidRivalEntries: string[]
   skippedRows: number
   recoveredMissingSubIndustries: string[]
   invalidSubIndustries: string[]
@@ -44,6 +57,7 @@ export type ClassificationValidationOptions = {
   maxSkippedRows: number
   maxRecoveredMissingSubIndustries: number
   maxDuplicateTickers: number
+  maxInvalidRivalEntries: number
 }
 
 const MISSING_SUB_INDUSTRY = '未分類'
@@ -93,6 +107,28 @@ function looksLikeExcelDateSerial(value: string): boolean {
   return Number.isInteger(serial) && serial >= 20_000 && serial <= 80_000
 }
 
+export function parseRivals(
+  ticker: string,
+  value: string | undefined,
+  issueLabel: string | null,
+  invalid: string[],
+): ShikihoRivalRecord[] {
+  const rivals: ShikihoRivalRecord[] = []
+  for (const entry of (value ?? '').split(';')) {
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    const separator = trimmed.indexOf(':')
+    const code = separator < 0 ? '' : normalizeTicker(trimmed.slice(0, separator))
+    const name = (separator < 0 ? trimmed : trimmed.slice(separator + 1)).trim()
+    if (!name || (code && !/^(?:\d{4}|\d{3}[A-Z])$/.test(code))) {
+      invalid.push(`${ticker}:${trimmed}`)
+      continue
+    }
+    rivals.push({ ticker, position: rivals.length + 1, rivalCode: code || null, rivalName: name, issueLabel })
+  }
+  return rivals
+}
+
 export async function readClassificationSource(sourcePath: string): Promise<ClassificationSourceData> {
   const spreadsheet = await readSafeSpreadsheetFile(sourcePath, {
     maxRows: 20_000,
@@ -112,6 +148,9 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
   const tickerCounts = new Map<string, number>()
   const invalidTickers = new Set<string>()
   const recoveredMissingSubIndustries = new Set<string>()
+  const hasRivalsColumn = headerIndexes.has('比較会社')
+  const rivalsByTicker = new Map<string, ShikihoRivalRecord[]>()
+  const invalidRivalEntries: string[] = []
   const invalidSubIndustries = new Set<string>()
   let skippedRows = 0
 
@@ -157,6 +196,10 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
       companyFeature: optionalText(pick(row, headerIndexes, ['特色', 'company_feature'])),
       consolidatedBusiness: optionalText(pick(row, headerIndexes, ['連結事業', 'consolidated_business'])),
     })
+    if (hasRivalsColumn) {
+      const issueLabel = optionalText(pick(row, headerIndexes, ['四季報号', 'issue_label']))
+      rivalsByTicker.set(ticker, parseRivals(ticker, pick(row, headerIndexes, ['比較会社']), issueLabel, invalidRivalEntries))
+    }
   }
 
   const records = Array.from(recordsByTicker.values())
@@ -173,6 +216,9 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
     rawRowCount: rows.length,
     records,
     profiles,
+    hasRivalsColumn,
+    rivals: Array.from(rivalsByTicker.values()).flat(),
+    invalidRivalEntries,
     skippedRows,
     recoveredMissingSubIndustries: Array.from(recoveredMissingSubIndustries).sort(),
     invalidSubIndustries: Array.from(invalidSubIndustries).sort(),
@@ -225,6 +271,10 @@ export function validateClassificationSource(
   if (source.multiParentSubIndustries.length > 0) {
     issues.push(`multiParentSubIndustries=${source.multiParentSubIndustries.length}`)
   }
+  // 比較会社の形の崩れが多いときは、ツールの読み取りが壊れたとみて止める (少数なら、その会社だけ除いて続ける)。
+  if (source.invalidRivalEntries.length > options.maxInvalidRivalEntries) {
+    issues.push(`invalidRivalEntries=${source.invalidRivalEntries.length}/${options.maxInvalidRivalEntries}`)
+  }
   if (issues.length > 0) {
     throw new Error(`Classification source validation failed: ${issues.join(', ')}`)
   }
@@ -255,5 +305,6 @@ export function classificationValidationOptionsFromEnv(): ClassificationValidati
       0,
       Number(process.env.CLASSIFICATION_MAX_DUPLICATE_TICKERS ?? '0') || 0,
     ),
+    maxInvalidRivalEntries: 20,
   }
 }
