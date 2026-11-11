@@ -15,7 +15,7 @@ import {
   STRONG_LEVEL, dwellClass, envelope, evidenceLevel, sectorStrength, transitionGroup, type TransitionGroup,
 } from '@/lib/research/six-stage-dwell-sector'
 import {
-  BLOCKS, BOOTSTRAP, EventColumns, GAP_LIMIT, HORIZONS, MAIN_HORIZONS, SEED, SPLIT_EXCLUDED,
+  BLOCKS, BOOTSTRAP, EventColumns, GAP_LIMIT, HORIZONS, MAIN_HORIZONS, MIN_EVENTS, SEED, SPLIT_EXCLUDED,
   assertInputs, assertOutputDirectory, bothSides, fetchSegments, has, interpolated, loadCalendar, openImmutable,
   pathBands, previousMonth, selectTickerEvents, storeOutcome, summarize, writeOnce, type EventInput, type Summary,
 } from './analyze-six-stage-transitions-prereg'
@@ -276,7 +276,8 @@ function analyze(out: string): void {
   }
   if (hypotheses.filter((row) => row.judged).length !== 12) throw new Error('expected 12 judged hypotheses')
 
-  // 遷移ごとの数字 (全期間と 3 つの期間) は大きいため、X の先頭 3 桁ごとのファイルに分ける (JSON と、報告ページが読む JS)。
+  // 遷移ごとの数字 (全期間と 3 つの期間、探索)。研究 2 と同じく、どれかの期間で結果のあるイベントが 100 件以上の遷移だけを載せる
+  // (研究 A・B ごとに判断し、満たさない研究は null。2026-11-11 オーナー決定)。X の先頭 2 桁ごとのファイル (数十個) にまとめる。
   const transitionsDir = path.join(out, 'transitions')
   fs.mkdirSync(transitionsDir, { recursive: true })
   const byTransition = new Map<number, Record<'A' | 'B33', number[][]>>()
@@ -289,21 +290,26 @@ function analyze(out: string): void {
     }
   }
   const shards = new Map<string, Record<string, unknown>>()
+  const included: string[] = []
   for (const [key, id] of [...transitionIds.entries()].sort(([a], [b]) => byCode(a, b))) {
     const entry = byTransition.get(id)
     if (!entry) continue
-    const shard = shards.get(key.slice(0, 3)) ?? {}
+    const eligible = (study: 'A' | 'B33') => HORIZONS.some((h) => summarize(studies[study], entry[study].flat(), h).n >= MIN_EVENTS)
+    if (!eligible('A') && !eligible('B33')) continue
+    included.push(key)
+    const shard = shards.get(key.slice(0, 2)) ?? {}
     shard[key] = Object.fromEntries((['A', 'B33'] as const).map((study) => {
       const c = studies[study]
-      return [study, HORIZONS.map((h) => entry[study].map((list) => [compact(summarize(c, list, h)),
-        ...STUDY_BLOCKS[study].map(([, from, to]) => compact(summarize(c, list.filter(blockFilter(c, from, to)), h)))]))]
+      return [study, eligible(study) ? HORIZONS.map((h) => entry[study].map((list) => [compact(summarize(c, list, h)),
+        ...STUDY_BLOCKS[study].map(([, from, to]) => compact(summarize(c, list.filter(blockFilter(c, from, to)), h)))])) : null]
     }))
-    shards.set(key.slice(0, 3), shard)
+    shards.set(key.slice(0, 2), shard)
   }
+  let transitionBytes = 0
   for (const [name, shard] of shards) {
     const body = JSON.stringify(shard)
-    writeOnce(path.join(transitionsDir, `${name}.json`), `${body}\n`)
-    writeOnce(path.join(transitionsDir, `${name}.js`), `window.__transitions(${JSON.stringify(name)},${body.replace(/</g, '\\u003c')});\n`)
+    const files = [[`${name}.json`, `${body}\n`], [`${name}.js`, `window.__transitions(${JSON.stringify(name)},${body.replace(/</g, '\\u003c')});\n`]]
+    for (const [file, text] of files) { writeOnce(path.join(transitionsDir, file), text); transitionBytes += Buffer.byteLength(text) }
   }
 
   const dwell = (key: StudyKey) => GROUPS.map((_, g) => rows[key][g].map((list) => {
@@ -318,11 +324,13 @@ function analyze(out: string): void {
     counts, groups: GROUPS, blocks: STUDY_BLOCKS, sector33Names: listing.sector33Names, hypotheses,
     studies: { A: { tables: tables('A'), figures: figures('A'), dwell: dwell('A') }, B33: { tables: tables('B33'), figures: figures('B33') },
       B60: { tables: tables('B60') } },
-    transitions: { count: byTransition.size, shards: [...shards.keys()].sort() },
+    transitions: { minEvents: MIN_EVENTS, observed: byTransition.size, included: included.length, keys: included,
+      shards: [...shards.keys()].sort(), bytes: transitionBytes },
   }
   writeOnce(path.join(out, 'result.json'), `${JSON.stringify(result)}\n`)
   writeOnce(path.join(out, 'report.html'), renderDwellSectorReport(result))
-  console.log(JSON.stringify({ out, counts, judged: hypotheses.filter((row) => row.judged).map((row) => [row.id, row.level]) }, null, 2))
+  const totalBytes = transitionBytes + ['result.json', 'report.html'].reduce((sum, file) => sum + fs.statSync(path.join(out, file)).size, 0)
+  console.log(JSON.stringify({ out, counts, transitions: { observed: byTransition.size, included: included.length, files: shards.size * 2, totalBytes }, judged: hypotheses.filter((row) => row.judged).map((row) => [row.id, row.level]) }, null, 2))
 }
 
 // 保存済みの result.json から報告ページだけを作り直す (集計はしない)。

@@ -24,7 +24,7 @@ export function renderDwellSectorReport(result: unknown): string {
 <section><h2>研究 B: 業種の強さ (33 業種)</h2><div class="grid"><figure><figcaption>③ リターンの分布 (割合 %)</figcaption><svg id="histB"></svg></figure>
 <figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="pathB"></svg></figure></div><div id="tableB"></div></section>
 <section><h2>研究 B: 業種の強さ (60 分類、探索)</h2><div id="tableB60"></div></section>
-<section><h2>遷移ごとの数字 (探索、件数による足切りなし)</h2><p>遷移 (先頭の 3 桁を入れると候補が出る。例: 111111&gt;111112) <input id="tkey" size="16" list="tlist"><datalist id="tlist"></datalist> <button id="tgo">表示</button></p><div id="tout"></div></section>
+<section><h2>遷移ごとの数字 (探索)</h2><p id="tnote"></p><p>遷移を選ぶ (入力すると候補が出る。例: 111111&gt;111112) <input id="tkey" size="16" list="tlist"><datalist id="tlist"></datalist> <button id="tgo">表示</button></p><div id="tout"></div></section>
 <section><h2>件数の内訳 (除外・重複・結果の無い期間)</h2><div id="counts"></div></section></main>
 <script>const RESULT=${data};${REPORT_HELPERS}${SCRIPT}</script></body></html>
 `
@@ -43,23 +43,23 @@ function figs(key,h,p){const f=RESULT.studies[key].figures[S.g][S.h];const n=NAM
  hist(document.getElementById(h),[0,1,2].map(i=>[n[i],f.histogram[i][S.side],c[i]]));bands(document.getElementById(p),[0,1,2].map(i=>[n[i],f.path[i],c[i]]))}
 function tables(key,id,extra){const t=RESULT.studies[key].tables[S.g];let html=extra||'';for(const h of [5,10,15,20])html+='<table><caption>'+GN[S.g]+'、'+h+' 営業日</caption>'+HEAD+
  [0,1,2].map(i=>row(NAMES[key][i]+' 全期間',t[h][i].full)+Object.entries(t[h][i].blocks).map(([b,s])=>row(NAMES[key][i]+' '+b,s)).join('')).join('')+'</table>';document.getElementById(id).innerHTML=html}
-const TR={};window.__transitions=(k,d)=>{TR[k]=d;fillList();showT()};
+const TR={};window.__transitions=(k,d)=>{TR[k]=d;showT()};const TK=(RESULT.transitions&&RESULT.transitions.keys)||[];
 function loadShard(sh){if(TR[sh]||document.getElementById('shard-'+sh))return;const s=document.createElement('script');s.id='shard-'+sh;s.src='transitions/'+sh+'.js';
  s.onerror=()=>{document.getElementById('tout').innerHTML='<p>transitions/'+sh+'.js を読み込めない (この HTML と同じ場所に transitions フォルダがあるか、その先頭の遷移が無いか)。</p>'};document.head.appendChild(s)}
-function fillList(){const v=document.getElementById('tkey').value.trim();const sh=TR[v.slice(0,3)];if(v.length<3||!sh)return;
- document.getElementById('tlist').innerHTML=Object.keys(sh).filter(k=>k.startsWith(v)).slice(0,300).map(k=>'<option value="'+k+'">').join('')}
+function fillList(){const v=document.getElementById('tkey').value.trim();document.getElementById('tlist').innerHTML=TK.filter(k=>k.startsWith(v)).slice(0,300).map(k=>'<option value="'+k+'">').join('')}
 function crow(name,a){if(!a)return'<tr><td class="k">'+name+'</td><td>0</td>'+'<td>—</td>'.repeat(9)+'</tr>';const [n,wl,ws,mean,m,q10,q25,q75,q90,mfe,mae]=a;const L=S.side==='LONG';
  return'<tr><td class="k">'+name+'</td><td>'+num(n)+'</td><td>'+pct(L?wl:ws)+'</td><td>'+pct(L?mean:-mean)+'</td><td>'+pct(L?m:-m)+'</td>'+(L?[q10,q25,q75,q90]:[-q90,-q75,-q25,-q10]).map(v=>'<td>'+pct(v)+'</td>').join('')+'<td>'+pct(mfe)+'</td><td>'+pct(mae)+'</td></tr>'}
-function showT(){const out=document.getElementById('tout');const key=S.t;if(!key){out.innerHTML='';return}const shard=TR[key.slice(0,3)];if(!shard)return;const d=shard[key];
- if(!d){out.innerHTML='<p>'+key+' は集計に使ったイベントに無い。</p>';return}let html='<h3>'+key+' ('+S.side+')</h3>';
+function showT(){const out=document.getElementById('tout');const key=S.t;if(!key){out.innerHTML='';return}const shard=TR[key.slice(0,2)];if(!shard)return;const d=shard[key];
+ if(!d){out.innerHTML='<p>'+key+' は載せていない (結果のあるイベントがどの期間でも 100 件未満、または集計に使ったイベントに無い)。</p>';return}let html='<h3>'+key+' ('+S.side+')</h3>';
  [5,10,15,20].forEach((h,k)=>{html+='<table><caption>'+h+' 営業日</caption><tr><th>群</th><th>件数</th><th>勝率</th><th>平均</th><th>中央値</th><th>10%</th><th>25%</th><th>75%</th><th>90%</th><th>最大の上昇幅 (中央値)</th><th>最大の下落幅 (中央値)</th></tr>'+
-  ['A','B33'].map(st=>[0,1,2].map(i=>d[st][k][i].map((a,b)=>crow('研究 '+st.slice(0,1)+' '+NAMES[st][i]+' '+(b?RESULT.blocks[st][b-1][0]:'全期間'),a)).join('')).join('')).join('')+'</table>'});out.innerHTML=html}
+  ['A','B33'].map(st=>!d[st]?'<tr><td class="k">研究 '+st.slice(0,1)+'</td><td colspan="10">この研究では 100 件未満のため載せない</td></tr>':[0,1,2].map(i=>d[st][k][i].map((a,b)=>crow('研究 '+st.slice(0,1)+' '+NAMES[st][i]+' '+(b?RESULT.blocks[st][b-1][0]:'全期間'),a)).join('')).join('')).join('')+'</table>'});out.innerHTML=html}
 function loadT(){const key=document.getElementById('tkey').value.trim();S.t=key;if(!/^[0-9]{6}>[0-9]{6}$/.test(key)){document.getElementById('tout').innerHTML='<p>6 桁&gt;6 桁で入れる。</p>';return}
- if(TR[key.slice(0,3)])showT();else loadShard(key.slice(0,3))}
+ if(TR[key.slice(0,2)])showT();else loadShard(key.slice(0,2))}
 function counts(){const c=RESULT.counts||{};document.getElementById('counts').innerHTML='<table><tr><th>項目</th><th>件数</th></tr>'+Object.keys(c).sort().map(k=>'<tr><td class="k">'+k+'</td><td>'+num(c[k])+'</td></tr>').join('')+'</table><p>A = 研究 A、B33 = 研究 B (33 業種)、B60 = 研究 B (60 分類)。kept = 集計に使ったイベント、excluded* = 除外、dedupDropped = 同じ遷移の 20 営業日以内の重複、missingN.* = N 営業日の結果が無いもの。</p>'}
 function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.toggle('on',+b.dataset.h===S.h));document.querySelectorAll('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===S.side));
  document.querySelectorAll('[data-g]').forEach(b=>b.classList.toggle('on',b.dataset.g===S.g));judge();figs('A','histA','pathA');figs('B33','histB','pathB');
  const dw=RESULT.studies.A.dwell[RESULT.groups.indexOf(S.g)];tables('A','tableA','<p>直前の状態にいた日数の中央値: '+[0,1,2].map(i=>NAMES.A[i]+' '+(dw[i].n?dw[i].median:'—')).join('、')+'</p>');
  tables('B33','tableB');tables('B60','tableB60');showT();counts()}
 document.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{S.h=+b.dataset.h;draw()});document.querySelectorAll('[data-side]').forEach(b=>b.onclick=()=>{S.side=b.dataset.side;draw()});
-document.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{S.g=b.dataset.g;draw()});document.getElementById('tgo').onclick=loadT;document.getElementById('tkey').oninput=()=>{const v=document.getElementById('tkey').value.trim();if(v.length>=3){loadShard(v.slice(0,3));fillList()}};window.onresize=draw;draw();`
+document.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{S.g=b.dataset.g;draw()});document.getElementById('tgo').onclick=loadT;document.getElementById('tkey').oninput=fillList;
+{const t=RESULT.transitions||{};document.getElementById('tnote').textContent='探索の表示。研究 2 と同じく、どれかの期間 (5・10・15・20 営業日) で結果のあるイベントが '+(t.minEvents||100)+' 件以上の遷移だけを載せる (研究 A・B ごとに判断)。載せた遷移 '+num(t.included)+' / 集計に使った遷移 '+num(t.observed)+'。'}window.onresize=draw;draw();`
