@@ -61,9 +61,13 @@ export function checkHealth(health: any, role: string): void {
 export const FRESHNESS_MAX_AGE_MINUTES = 60
 // 米国株の取り込みが partial のときに通す条件 (10/29 の配置で実際に使った条件。カバー率は 2026-11-12 オーナー決定で 98% 以上)。
 export const US_PARTIAL_MIN_COVERAGE_PCT = 98
+export const JP_FRESHNESS_KEYS = ['price', 'snapshot', 'indices', 'dashboardCache', 'physicalScores', 'feature', 'modelFeature', 'mlFeature',
+  'mlContext', 'mlPhysicsFeature', 'mlCandidate', 'mlPrediction', 'mlPhysicsCandidate', 'mlSimilar'] as const
+export const US_FRESHNESS_KEYS = ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'mlFeature', 'mlContext', 'mlPhysicsFeature',
+  'mlCandidate', 'mlPrediction', 'mlPhysicsCandidate', 'mlSimilar'] as const
 
 export type UsCompletion = { status: string | null; failed: number; pendingEmpty: number; pendingTargetMissing: number
-  temporaryNotFound: number; deferred: number; promotionGuardTriggered: boolean; latest: string | null }
+  temporaryNotFound: number; deferred: number; promotionGuardTriggered: string | null; latest: string | null }
 // us-update-latest.log の最後の「US OHLCV complete:」の行。
 export function parseUsCompletion(log: string): UsCompletion | null {
   const line = log.split('\n').filter((row) => row.startsWith('US OHLCV complete:')).at(-1)
@@ -71,7 +75,7 @@ export function parseUsCompletion(log: string): UsCompletion | null {
   const value = (key: string) => line.match(new RegExp(`\\b${key}=([^, ]+)`))?.[1] ?? null
   const number = (key: string) => { const raw = value(key); return raw != null && /^\d+$/.test(raw) ? Number(raw) : NaN }
   return { status: value('status'), failed: number('failed'), pendingEmpty: number('pendingEmpty'), pendingTargetMissing: number('pendingTargetMissing'),
-    temporaryNotFound: number('temporaryNotFound'), deferred: number('deferred'), promotionGuardTriggered: value('promotionGuardTriggered') === 'true', latest: value('latest') }
+    temporaryNotFound: number('temporaryNotFound'), deferred: number('deferred'), promotionGuardTriggered: value('promotionGuardTriggered'), latest: value('latest') }
 }
 
 export type UsIngestionEvidence = { status: 'PASS' | 'PASS_WITH_RECORDED_PARTIAL_COVERAGE'; ingestionStatus: string; coveragePct: number | null
@@ -83,12 +87,9 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
     || now.getTime() - checkedAt > FRESHNESS_MAX_AGE_MINUTES * 60_000) fail('freshness_report_stale')
   const jp = freshness?.expected?.jp; const us = freshness?.expected?.us
   if (!/^\d{4}-\d{2}-\d{2}$/.test(jp) || !/^\d{4}-\d{2}-\d{2}$/.test(us)) fail('freshness_reference')
-  for (const key of ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'feature', 'mlFeature', 'mlPrediction']) {
-    if (freshness.dates?.jp?.[key] !== jp) fail(`jp_freshness:${key}`)
-  }
-  for (const key of ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'mlFeature', 'mlPrediction']) {
-    if (freshness.dates?.us?.[key] !== us) fail(`us_freshness:${key}`)
-  }
+  // 確かめる項目は 10/29 の配置と同じ (米国の mlRlPolicy は 10/29 も対象外)。
+  for (const key of JP_FRESHNESS_KEYS) if (freshness.dates?.jp?.[key] !== jp) fail(`jp_freshness:${key}`)
+  for (const key of US_FRESHNESS_KEYS) if (freshness.dates?.us?.[key] !== us) fail(`us_freshness:${key}`)
   const automation = freshness.usAutomation ?? {}
   if (automation.priceBasis !== PRICE_BASIS.US || automation.derivedPriceBasis !== PRICE_BASIS.US || automation.analogPriceBasis !== PRICE_BASIS.US
     || automation.priceBasisCurrent !== true) fail('us_price_basis')
@@ -106,7 +107,7 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
     if (!['fresh', 'would_trigger'].includes(usAction?.state) || !String(usAction?.reason ?? '').includes('stale=-')) fail('freshness_action:us')
     const c = usCompletion
     if (!c || c.status !== 'partial' || c.latest !== us || c.failed !== 0 || c.pendingEmpty !== 0 || c.temporaryNotFound !== 0
-      || c.deferred !== 0 || c.promotionGuardTriggered || !(c.pendingTargetMissing > 0)) fail('us_ingestion_failure_not_only_target_missing')
+      || c.deferred !== 0 || c.promotionGuardTriggered !== 'false' || !(c.pendingTargetMissing > 0)) fail('us_ingestion_failure_not_only_target_missing')
     usIngestion = { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: automation.coveragePct,
       pendingTargetMissing: c.pendingTargetMissing, completionLatest: c.latest }
   } else fail(`us_ingestion:${automation.ingestionStatus}`)
@@ -138,7 +139,7 @@ export function assertOutputDirectory(out: string, releaseRoot: string): string 
   return out
 }
 
-function parseArguments(argv: readonly string[]) {
+export function parseArguments(argv: readonly string[]) {
   const value = (name: string) => argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
   const mode = argv.includes('--write') ? 'write' as const : argv.includes('--check') ? 'check' as const : fail('mode_--check_or_--write_required')
   const required = (name: string) => value(name) || fail(`--${name}_required`)
