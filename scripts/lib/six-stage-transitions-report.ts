@@ -41,7 +41,8 @@ table{border-collapse:collapse;font-size:12px;margin:8px 0;font-variant-numeric:
 td.k{text-align:left}.dot{cursor:pointer}.sel{stroke:#000;stroke-width:2}`
 
 // 以下はブラウザで動く素の JavaScript。
-const SCRIPT = `
+// 研究 A・B の報告ページ (six-stage-dwell-sector-report.ts) も使う部品: 状態、書式、軸、③ の分布、④ の道筋、表の行。
+const HELPERS_A = `
 const S={h:10,side:'LONG',sel:null};const NS='http://www.w3.org/2000/svg';
 const pct=v=>v==null||Number.isNaN(v)?'—':(v*100).toFixed(2)+'%';const num=v=>v==null?'—':Number(v).toLocaleString('ja-JP');
 const med=s=>!s||!s.n?null:S.side==='LONG'?s.median:-s.median;const win=s=>!s||!s.n?null:S.side==='LONG'?s.winLong:s.winShort;
@@ -58,7 +59,8 @@ function frame(svg,xs,ys,xl,yl){svg.innerHTML='';const W=svg.clientWidth||560,H=
  return{x,y,W,H,m}}
 const P={t:'',f:v=>(v*100).toFixed(1)+'%'};const extent=(vals,pad)=>{const a=Math.min(...vals),b=Math.max(...vals);const p=(b-a)*pad||0.01;return[a-p,b+p]};
 function zero(svg,f,horizontal){if(horizontal){const y=f.y(0);if(y>f.m.t&&y<f.H-f.m.b)el('line',{x1:f.m.l,x2:f.W-f.m.r,y1:y,y2:y,stroke:'#bbb','stroke-dasharray':'3 3'},svg)}}
-function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows=d.rows;const cands=new Set(d.candidates[S.side].keys);const b=d.candidates[S.side].baseline;
+`
+const STUDY2 = `function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows=d.rows;const cands=new Set(d.candidates[S.side].keys);const b=d.candidates[S.side].baseline;
  document.getElementById('s2summary').innerHTML='<p>探す期間のシグナル: '+(pr.explore?pr.explore.firstSignal+' 〜 '+pr.explore.lastSignal:'—')+'、確かめる期間: '+(pr.confirm?pr.confirm.firstSignal+' 〜 '+pr.confirm.lastSignal:'—')+'</p><table><tr><th>対象の遷移 (100 件以上)</th><th>候補 ('+S.side+')</th><th>偶然で期待される数</th><th>偶然でこれ以上になる確率</th><th>入れ替えの回数</th></tr><tr><td>'+num(rows.length)+'</td><td>'+num(b.observed)+'</td><td>'+b.expected.toFixed(2)+'</td><td>'+b.probabilityAtLeastObserved.toFixed(4)+'</td><td>'+num(b.permutations)+'</td></tr></table>';
  const map=document.getElementById('map');const f=frame(map,extent(rows.map(r=>win(r.all)),0.05),extent(rows.map(r=>med(r.all)),0.05),{t:'勝率',f:v=>(v*100).toFixed(0)+'%'},{t:'中央値',f:P.f});
  const maxN=Math.max(...rows.map(r=>r.all.n));zero(map,f,true);
@@ -72,7 +74,8 @@ function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows
  hist(document.getElementById('hist2'),[[ '全遷移',d.pooledHistogram[S.side],'var(--b)'],...(sel?[[sel.key,sel.histogram[S.side],'var(--a)']]:[])]);
  bands(document.getElementById('path2'),[[sel?sel.key:'全遷移',sel?sel.path:d.pooledPath,'var(--a)']]);
  document.getElementById('detail2').innerHTML=(note?'<p>'+note+'</p>':'')+(S.sel&&RESULT.details2[S.sel]?detail(S.sel):'<p>①②の点か一覧で遷移を選ぶと、その遷移の数字が出る。</p>')}
-function hist(svg,series){const tot=series.map(s=>s[1].reduce((a,b)=>a+b,0)||1);const share=series.map((s,i)=>s[1].map(v=>v/tot[i]));
+`
+const HELPERS_B = `function hist(svg,series){const tot=series.map(s=>s[1].reduce((a,b)=>a+b,0)||1);const share=series.map((s,i)=>s[1].map(v=>v/tot[i]));
  const f=frame(svg,[0,62],[0,Math.max(...share.flat())*1.1],{t:'リターン (左端の棒 = −30% 未満、右端の棒 = +30% 以上)',ticks:[1,16,31,46,61],f:v=>{const p=v-31;return(p>0?'+':p<0?'−':'')+Math.abs(p)+'%'}},{t:'割合',f:v=>(v*100).toFixed(1)+'%'});
  series.forEach((s,i)=>{share[i].forEach((v,j)=>el('rect',{x:f.x(j),y:f.y(v),width:Math.max(1,f.x(j+1)-f.x(j)-1),height:f.y(0)-f.y(v),fill:s[2],'fill-opacity':.45},svg));
   el('text',{x:f.W-f.m.r-4,y:f.m.t+12+i*14,'font-size':11,'text-anchor':'end',fill:s[2]},svg).textContent=s[0]+' (−30% 未満 '+s[1][0]+' 件、+30% 以上 '+s[1][61]+' 件)'})}
@@ -88,7 +91,8 @@ function row(name,s){if(!s||!s.n)return'<tr><td class="k">'+name+'</td><td>0</td
  return'<tr><td class="k">'+name+'</td><td>'+num(s.n)+'</td><td>'+pct(win(s))+'</td><td>'+pct(S.side==='LONG'?s.mean:-s.mean)+'</td><td>'+pct(med(s))+'</td>'+q.map(v=>'<td>'+pct(v)+'</td>').join('')+
   '<td>'+pct(s.mfeMedian)+'</td><td>'+pct(s.maeMedian)+'</td><td>'+s.hiDayMedian+' / '+s.loDayMedian+'</td><td>'+pct(s.mfeQ90)+' / '+pct(s.mfeMax)+'</td></tr>'}
 const HEAD='<tr><th>区分</th><th>件数</th><th>勝率</th><th>平均</th><th>中央値</th><th>10%</th><th>25%</th><th>75%</th><th>90%</th><th>最大の上昇幅 (中央値)</th><th>最大の下落幅 (中央値)</th><th>到達日数 上昇 / 下落 (中央値)</th><th>逆に上がった最大の幅 90% 点 / 最大 (SHORT のリスク)</th></tr>';
-function detail(key){const d=RESULT.details2[key];let html='<h3>'+key+' ('+S.side+')</h3>';for(const h of [5,10,15,20]){const r=d[h];
+`
+const REST = `function detail(key){const d=RESULT.details2[key];let html='<h3>'+key+' ('+S.side+')</h3>';for(const h of [5,10,15,20]){const r=d[h];
  html+='<table><caption>'+h+' 営業日'+(r.eligible?'':' (この期間では件数が 100 件未満のため、図・候補の対象外)')+'</caption>'+HEAD+row('探す期間 2008〜2017',r.explore)+row('確かめる期間 2018〜2022',r.confirm)+row('Discovery 全体',r.all)+'</table>';
  html+='<table><caption>'+h+' 営業日、当時の市場区分ごと (探索)</caption>'+HEAD+Object.entries(r.bySegment).map(([k,s])=>row(k,s)).join('')+'</table>'}return html}
 function study1(){const d=RESULT.study1.horizons[S.h];const j=d.judgment;
@@ -106,3 +110,6 @@ function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.tog
 const pick=document.getElementById('pick');pick.innerHTML='<option value="">—</option>'+Object.keys(RESULT.details2||{}).sort().map(k=>'<option>'+k+'</option>').join('');pick.onchange=()=>{S.sel=pick.value||null;draw()};
 document.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{S.h=+b.dataset.h;draw()});document.querySelectorAll('[data-side]').forEach(b=>b.onclick=()=>{S.side=b.dataset.side;draw()});
 window.onresize=draw;draw();`
+const SCRIPT = HELPERS_A + STUDY2 + HELPERS_B + REST
+export const REPORT_STYLE = STYLE
+export const REPORT_HELPERS = HELPERS_A + HELPERS_B
