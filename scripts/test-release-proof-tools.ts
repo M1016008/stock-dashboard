@@ -29,11 +29,14 @@ assert.throws(() => checkHealth({ status: 'degraded', overall: 'degraded', stora
 const dates = (day: string) => Object.fromEntries(['price', 'snapshot', 'dashboardCache', 'physicalScores', 'feature', 'mlFeature', 'mlPrediction'].map((key) => [key, day]))
 const basis = 'tiingo_adj_ohlc_ratio_v1'
 const freshness = {
+  checkedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
   expected: { jp: '2026-11-27', us: '2026-11-27' }, dates: { jp: dates('2026-11-27'), us: dates('2026-11-27') },
   usAutomation: { priceBasis: basis, derivedPriceBasis: basis, analogPriceBasis: basis, priceBasisCurrent: true, ingestionStatus: 'complete', ingestionNeedsRetry: false },
   actions: [{ key: 'jp-core', state: 'fresh' }, { key: 'us', state: 'fresh' }], activeLocks: ['trigger_historical_worker'],
 }
 assert.deepEqual(checkFreshness(freshness), { jp: '2026-11-27', us: '2026-11-27' })
+assert.throws(() => checkFreshness({ ...freshness, checkedAt: new Date(Date.now() - 61 * 60_000).toISOString() }), /freshness_report_stale/)
+assert.throws(() => checkFreshness({ ...freshness, checkedAt: 'x' }), /freshness_report_stale/)
 assert.throws(() => checkFreshness({ ...freshness, usAutomation: { ...freshness.usAutomation, ingestionStatus: 'partial', ingestionNeedsRetry: true } }), /us_price_basis_or_ingestion/)
 assert.throws(() => checkFreshness({ ...freshness, activeLocks: ['weekly'] }), /blocking_active_locks/)
 assert.throws(() => checkFreshness({ ...freshness, dates: { ...freshness.dates, jp: dates('2026-11-26') } }), /jp_freshness/)

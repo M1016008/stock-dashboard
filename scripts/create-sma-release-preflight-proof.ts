@@ -55,7 +55,13 @@ export function checkHealth(health: any, role: string): void {
   if (health?.status !== 'ok' || health.overall !== 'healthy' || health.storageStatus !== 'available') fail(`health:${role}`)
 }
 
-export function checkFreshness(freshness: any): { jp: string; us: string } {
+// 鮮度の見張りの記録は 60 分以内のものだけ使う。P1 当日は見張りも 07:55 に止めるため、15 分では足りない
+// (書き込む処理も止めているので、その間にデータは変わらない)。
+export const FRESHNESS_MAX_AGE_MINUTES = 60
+export function checkFreshness(freshness: any, now = new Date()): { jp: string; us: string } {
+  const checkedAt = Date.parse(freshness?.checkedAt ?? '')
+  if (!Number.isFinite(checkedAt) || checkedAt > now.getTime() + 5 * 60_000
+    || now.getTime() - checkedAt > FRESHNESS_MAX_AGE_MINUTES * 60_000) fail('freshness_report_stale')
   const jp = freshness?.expected?.jp; const us = freshness?.expected?.us
   if (!/^\d{4}-\d{2}-\d{2}$/.test(jp) || !/^\d{4}-\d{2}-\d{2}$/.test(us)) fail('freshness_reference')
   for (const key of ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'feature', 'mlFeature', 'mlPrediction']) {
