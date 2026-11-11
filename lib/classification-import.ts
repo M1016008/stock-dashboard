@@ -56,9 +56,21 @@ export async function importClassificationSource(
     }
 
     // 書き込む前に、削除の件数を確かめる。
-    const pruneTables = ['stock_classification', 'stock_shikiho_profiles',
-      ...(source.hasRivalsColumn ? ['stock_shikiho_rivals'] : [])]
+    const pruneTables = ['stock_classification', 'stock_shikiho_profiles']
     const pruneCounts: Record<string, number> = {}
+    if (source.hasRivalsColumn) {
+      // 比較会社は表ごと入れ替えるので、今は比較会社がある銘柄のうち、取り込み後に比較会社が無くなる銘柄を数える
+      // (CSV から消えた銘柄と、比較会社の欄が空になった銘柄の両方)。
+      const existing = (await tx.execute('SELECT DISTINCT ticker FROM stock_shikiho_rivals')).rows.map((row) => String(row.ticker))
+      const incoming = new Set(source.rivals.map((rival) => rival.ticker))
+      pruneCounts.stock_shikiho_rivals = existing.filter((ticker) => !incoming.has(ticker)).length
+      assertPruneWithinLimit({
+        table: 'stock_shikiho_rivals',
+        currentRows: existing.length,
+        pruneRows: pruneCounts.stock_shikiho_rivals,
+        expectedPruneRows: options.expectedPruneRows,
+      })
+    }
     for (const table of pruneTables) {
       const current = await tx.execute(`SELECT COUNT(DISTINCT ticker) AS n FROM ${table}`)
       const prune = await tx.execute(
