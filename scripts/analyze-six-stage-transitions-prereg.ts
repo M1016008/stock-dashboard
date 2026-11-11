@@ -4,7 +4,6 @@
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx --env-file=<jquants.env> scripts/analyze-six-stage-transitions-prereg.ts segments --out=<dir>
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-transitions-prereg.ts analyze --out=<dir>
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import {
   SIX_STAGE_REAL_RESEARCH_ROOT,
@@ -60,7 +59,7 @@ export function assertOutputDirectory(value: string): string {
   if (!path.isAbsolute(value)) throw new Error('--out=<absolute directory> is required')
   const resolved = realLocation(path.resolve(value))
   // 許すのは、研究フォルダの専用フォルダと、一時フォルダ (scratch) の下だけ。
-  const allowed = [RESULT_ROOT, os.tmpdir(), '/private/tmp'].map(realLocation)
+  const allowed = [RESULT_ROOT, '/private/tmp'].map(realLocation)  // 環境変数で変わる os.tmpdir() は使わない
   if (!allowed.some((root) => resolved.startsWith(`${root}${path.sep}`))) throw new Error(`output must be under ${RESULT_ROOT} or a temporary directory`)
   return resolved
 }
