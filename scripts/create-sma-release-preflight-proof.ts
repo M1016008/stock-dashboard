@@ -5,8 +5,9 @@
 //   証明を作る (--out の新しいフォルダにだけ書く):  ... --write --out=<まだ無い絶対パス>  <共通の引数>
 //   共通の引数: --release-root=<release ディレクトリ> --artifact=<候補のビルド> --runtime=<候補の束> --baseline=<40 桁> [--prior-baseline=<40 桁>]
 //
-// 本番に対して行うのは、ファイル・記録の読み取り、ps、Web・類似の検索への GET (/api/health と、
-// force-dynamic の /api/history・/api/us/history) だけ。release-state・本番の DB・launchd には書かない。
+// --check は、本番のファイル・記録の読み取りと ps だけを行い、どこにも書かない (git は index を更新しない設定、npm は記録を書かない設定)。
+// Web・類似の検索への GET は --check では行わない: /api/health は Storage Guard の確認の記録を書くため。--write (P1 当日) と、
+// オーナーが認めたときの --check --with-http でだけ行う。release-state・本番の DB・launchd には書かない。
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,6 +15,7 @@ import path from 'node:path'
 import { activeArtifactTreeIdentity, verifySmaReleaseManifest } from '@/lib/release/artifact-manifest'
 import { currentPreflightStateSha256, sha256File, type PreflightAttestation, type SmaReleasePreflightProof } from '@/lib/release/preflight-proof'
 import { acceptedRuntimeBaselines, assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
+import { resolveThroughExistingAncestor } from '@/lib/runtime/isolation'
 import { verifyRuntimeManifest, type RuntimeManifest } from '@/lib/release/runtime-identity'
 
 const home = os.homedir()
@@ -86,12 +88,13 @@ const inside = (parent: string, child: string) => {
 }
 
 // 書く先は、まだ無い新しいフォルダだけ。本番の場所 (release ディレクトリ・release-state・StockBoard の App Support・
-// 本番の DB のフォルダ・LaunchAgents) の中は認めない。
+// 本番の DB のフォルダ・LaunchAgents) の中は認めない。シンボリックリンクをたどった実際の場所で判断する。
 export function assertOutputDirectory(out: string, releaseRoot: string): string {
   if (!path.isAbsolute(out) || path.resolve(out) !== out) fail('out_must_be_normalized_absolute')
   if (fs.existsSync(out)) fail('out_must_not_exist')
+  const real = resolveThroughExistingAncestor(out)
   const forbidden = [releaseRoot, SUPPORT, path.join(home, 'Library', 'LaunchAgents'), path.dirname(DEFAULTS.jpDb), path.dirname(DEFAULTS.usDb)]
-  if (forbidden.some((root) => inside(root, out))) fail('out_inside_production_location')
+  if (forbidden.some((root) => inside(root, out) || inside(resolveThroughExistingAncestor(root), real))) fail('out_inside_production_location')
   return out
 }
 
@@ -101,7 +104,8 @@ function parseArguments(argv: readonly string[]) {
   const required = (name: string) => value(name) || fail(`--${name}_required`)
   const baseline = required('baseline')
   if (!/^[0-9a-f]{40}$/.test(baseline)) fail('baseline_must_be_40_hex')
-  return { mode, releaseRoot: required('release-root'), artifact: required('artifact'), runtime: required('runtime'), baseline,
+  if (argv.includes('--with-http') && mode !== 'check') fail('--with-http_is_only_for_--check')
+  return { mode, withHttp: mode === 'write' || argv.includes('--with-http'), releaseRoot: required('release-root'), artifact: required('artifact'), runtime: required('runtime'), baseline,
     priorBaseline: value('prior-baseline'), out: mode === 'write' ? required('out') : null }
 }
 
@@ -111,7 +115,9 @@ async function getJson(url: string): Promise<any> {
   return response.json()
 }
 
-const command = (file: string, args: string[], cwd?: string) => execFileSync(file, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim()
+// GIT_OPTIONAL_LOCKS=0: git status が本番の作業用フォルダの index を更新しない。
+const command = (file: string, args: string[], cwd?: string) => execFileSync(file, args,
+  { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).trim()
 const statEvidence = (file: string) => { const stat = fs.statSync(file); return { path: file, inode: stat.ino, bytes: stat.size, mtime: stat.mtime.toISOString() } }
 
 function latestFreshness(): any {
@@ -167,17 +173,18 @@ async function main(): Promise<void> {
   const freeBytes = statfs.bavail * statfs.bsize
   if (certification.volume?.writable !== true || freeBytes < DEFAULTS.minimumFreeBytes || certification.volume.freeBytes < DEFAULTS.minimumFreeBytes) fail('storage')
 
-  // Web・類似の検索の状態と、代表の銘柄の株価の履歴 (GET だけ)
-  const evidence: Record<string, unknown> = {
-    'predeploy-web-health.json': await getJson(`${DEFAULTS.web}/api/health`),
-    'predeploy-analog-health.json': await getJson(`${DEFAULTS.analog}/api/health`),
-    'predeploy-1306-period-all.json': await getJson(`${DEFAULTS.web}/api/history/1306?period=all`),
-    'predeploy-SPY-period-all.json': await getJson(`${DEFAULTS.web}/api/us/history/SPY?period=all`),
+  // Web・類似の検索の状態と、代表の銘柄の株価の履歴 (GET。--check では、--with-http のときだけ)
+  const evidence: Record<string, unknown> = {}
+  if (args.withHttp) {
+    evidence['predeploy-web-health.json'] = await getJson(`${DEFAULTS.web}/api/health`)
+    evidence['predeploy-analog-health.json'] = await getJson(`${DEFAULTS.analog}/api/health`)
+    evidence['predeploy-1306-period-all.json'] = await getJson(`${DEFAULTS.web}/api/history/1306?period=all&meta=1`)
+    evidence['predeploy-SPY-period-all.json'] = await getJson(`${DEFAULTS.web}/api/us/history/SPY?period=all&meta=1`)
+    checkHealth(evidence['predeploy-web-health.json'], 'web')
+    checkHealth(evidence['predeploy-analog-health.json'], 'analog')
+    checkHistory(evidence['predeploy-1306-period-all.json'], '1306', expected.jp)
+    checkHistory(evidence['predeploy-SPY-period-all.json'], 'SPY', expected.us)
   }
-  checkHealth(evidence['predeploy-web-health.json'], 'web')
-  checkHealth(evidence['predeploy-analog-health.json'], 'analog')
-  checkHistory(evidence['predeploy-1306-period-all.json'], '1306', expected.jp)
-  checkHistory(evidence['predeploy-SPY-period-all.json'], 'SPY', expected.us)
   evidence['preflight-jp-source.json'] = { status: 'PASS', expectedLatestSession: expected.jp, observedLatestSession: freshness.dates.jp.price,
     source: 'J-Quants daily updater', database: statEvidence(DEFAULTS.jpDb), dailyRunLogSha256: sha256File(DEFAULTS.updateLog) }
   evidence['preflight-us-source.json'] = { status: 'PASS', expectedLatestSession: expected.us, observedLatestSession: freshness.dates.us.price,
@@ -203,7 +210,7 @@ async function main(): Promise<void> {
     expected, storage: { certificationFile, freeBytes }, freshnessCheckedAt: freshness.checkedAt,
   }
   if (!out) {
-    console.log(JSON.stringify({ status: 'CHECK_PASS', wroteFiles: false, ...summary }, null, 2))
+    console.log(JSON.stringify({ status: 'CHECK_PASS', wroteFiles: false, httpChecked: args.withHttp, ...summary }, null, 2))
     return
   }
 

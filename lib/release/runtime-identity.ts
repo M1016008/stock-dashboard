@@ -57,7 +57,9 @@ export function computeRuntimeIdentity(runtimeDirectory: string, stamp: { baseli
   const npmBinary = path.join(path.dirname(process.execPath), 'npm')
   if (!fs.existsSync(npmBinary)) throw new Error(`release_runtime_npm_missing:${npmBinary}`)
   const listed = spawnSync(npmBinary, ['ls', '--all', '--json'], {
-    cwd: runtimeDirectory, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, env: { ...process.env, NODE_ENV: 'production' },
+    cwd: runtimeDirectory, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
+    // npm の記録ファイル・更新の確認を書かない (確かめるだけの動かし方で何も書かないため)。
+    env: { ...process.env, NODE_ENV: 'production', npm_config_logs_max: '0', npm_config_update_notifier: 'false' },
   })
   if (listed.error || listed.status !== 0) throw new Error(`release_runtime_npm_ls_failed:${(listed.stderr || listed.error?.message || '').trim()}`)
   const dependencyTreeSha256 = hashJson(sanitizeDependencyTree(JSON.parse(listed.stdout)))

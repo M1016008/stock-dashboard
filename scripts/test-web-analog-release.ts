@@ -244,7 +244,7 @@ async function main(): Promise<void> {
   assert.match(identity, /!options\.acceptedBaselines\.includes\(manifest\.baselineSha\)/)
   assert.match(source, /SIGSTOP/)
   assert.match(source, /WebAnalogReleaseTransaction/)
-  assert.match(identity, /\{ \.\.\.process\.env, NODE_ENV: 'production' \}/,
+  assert.match(identity, /\{ \.\.\.process\.env, NODE_ENV: 'production', npm_config_logs_max: '0', npm_config_update_notifier: 'false' \}/,
     'runtime dependency identity must use the same production npm environment as runtime construction')
   assert.ok(source.indexOf('const proof = verifySmaReleasePreflightProof') < source.indexOf('const transaction = new WebAnalogReleaseTransaction'))
   assert.equal(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)?.length, 1,

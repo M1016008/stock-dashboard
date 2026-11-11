@@ -20,7 +20,7 @@ import {
   type AgentSnapshot, type WebAnalogReleaseAdapter,
 } from '@/lib/release/web-analog-only'
 import { WebAnalogReleaseTransaction, assertNoUncertainReleaseTransaction } from '@/lib/release/web-analog-transaction'
-import { OWC_WORKTREE_ROOT, createIsolatedRuntimeEnvironment } from '@/lib/runtime/isolation'
+import { OWC_WORKTREE_ROOT, assertOwcDevelopmentVolume, createIsolatedRuntimeEnvironment } from '@/lib/runtime/isolation'
 
 export const REHEARSAL_PARENT = path.join(OWC_WORKTREE_ROOT, 'release-rehearsal')
 export const REHEARSAL_PORTS: Record<(typeof WEB_ANALOG_TARGETS)[number], number> = { 'com.stockboard.web': 3200, 'com.stockboard.analog-search': 3205 }
@@ -47,12 +47,13 @@ function record(config: Config, entry: Record<string, unknown>): void {
   fs.appendFileSync(path.join(config.root, 'rehearsal-log.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`)
 }
 function git(args: string[], cwd: string): string {
-  const result = spawnSync('/usr/bin/git', args, { cwd, encoding: 'utf8' })
+  const result = spawnSync('/usr/bin/git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } })
   if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr.trim()}`)
   return result.stdout.trim()
 }
 
 function prepare(root: string): void {
+  assertOwcDevelopmentVolume()  // OWC が外れていて、内蔵ディスクに同じ名前のフォルダがあるときは止める
   if (fs.existsSync(root)) throw new Error(`root already exists: ${root}`)
   const baseline = required('baseline')
   const liveSource = required('live-source')
@@ -60,7 +61,9 @@ function prepare(root: string): void {
   fs.mkdirSync(root, { recursive: true })
   const config: Config = { root, release: path.join(root, 'release'), state: path.join(root, 'release-state'),
     isolation: path.join(root, 'isolation'), previousArtifact: path.join(root, 'previous-artifact'), rollbackRuntime, baseline }
-  git(['worktree', 'add', '--detach', config.release, baseline], process.cwd())
+  // 元の repo には書かない (worktree の登録をしない)。OWC の上に独立した複製を作る。
+  git(['clone', '--quiet', '--no-hardlinks', '--no-checkout', process.cwd(), config.release], root)
+  git(['checkout', '--quiet', '--detach', baseline], config.release)
   // 写す元は読むだけ。写しは「前の世代」として戻しの候補にも使う。
   fs.cpSync(liveSource, config.previousArtifact, { recursive: true, errorOnExist: true, force: false })
   fs.cpSync(config.previousArtifact, path.join(config.release, '.next-live'), { recursive: true, errorOnExist: true, force: false })
@@ -73,7 +76,18 @@ function prepare(root: string): void {
 function readPids(root: string): Partial<Record<Target, number>> {
   return fs.existsSync(pidFile(root)) ? JSON.parse(fs.readFileSync(pidFile(root), 'utf8')) : {}
 }
-const alive = (pid?: number) => { if (!pid) return false; try { process.kill(pid, 0); return true } catch { return false } }
+// 記録した PID が、まだ練習用のサーバー (この練習用の場所の next start、練習用の port) であるときだけ扱う。
+// PID が別のプロセスに使い回されていたら、信号を送らない。
+let practiceRelease = ''
+// 確かめ方: その PID が練習用の port で待ち受けていて、作業フォルダが練習用の release ディレクトリであること (lsof)。
+function ownedPid(label: Target, pid?: number): number | null {
+  if (!pid || !practiceRelease) return null
+  const listening = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), `-iTCP:${REHEARSAL_PORTS[label]}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+  const cwd = spawnSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8' })
+  const directory = cwd.stdout.split('\n').find((line) => line.startsWith('n'))?.slice(1)
+  return listening.status === 0 && directory === fs.realpathSync(practiceRelease) ? pid : null
+}
+const alive = (pid?: number, label?: Target) => label ? ownedPid(label, pid) !== null : false
 
 function startTarget(config: Config, label: Target): number {
   const env = { ...createIsolatedRuntimeEnvironment('preview', config.isolation), NEXT_DIST_DIR: '.next-live',
@@ -88,13 +102,16 @@ function startTarget(config: Config, label: Target): number {
 }
 
 function stopTarget(config: Config, label: Target): void {
-  const pid = readPids(config.root)[label]
-  if (!alive(pid)) return
-  try { process.kill(pid!, 'SIGCONT') } catch { /* already running */ }
-  process.kill(pid!, 'SIGTERM')
-  const deadline = Date.now() + 20_000
-  while (alive(pid) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
-  if (alive(pid)) process.kill(pid!, 'SIGKILL')
+  const pid = ownedPid(label, readPids(config.root)[label])
+  if (pid !== null) {
+    try { process.kill(pid, 'SIGCONT') } catch { /* already running */ }
+    process.kill(pid, 'SIGTERM')
+    const deadline = Date.now() + 20_000
+    while (ownedPid(label, pid) !== null && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200)
+    if (ownedPid(label, pid) !== null) process.kill(pid, 'SIGKILL')
+  }
+  const pids = readPids(config.root); delete pids[label]
+  fs.writeFileSync(pidFile(config.root), `${JSON.stringify(pids)}\n`)
 }
 
 async function healthy(label: Target, timeoutSeconds = 90): Promise<void> {
@@ -126,10 +143,15 @@ async function run(config: Config): Promise<void> {
     const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'runtime-manifest.json'), 'utf8'))
     return verifyRuntimeManifest(directory, { expectedIdentity: manifest.hashes.runtimeIdentitySha256, acceptedBaselines: baselines })
   }
-  if (runnerOwned) verify(path.dirname(runnerOwned.target))
+  if (runnerOwned) {  // 本番の配置と同じく、確定の記録にある同一性で確かめる
+    const manifest = verifyRuntimeManifest(path.dirname(runnerOwned.target), { expectedIdentity: runnerOwned.runtimeIdentitySha256, acceptedBaselines: baselines })
+    if (manifest.hashes.runtimeIdentitySha256 !== runnerOwned.runtimeIdentitySha256) throw new Error('rehearsal_runner_owned_identity_mismatch')
+  }
   const rollbackTarget = fs.realpathSync(nodeModules)
   const rollbackRuntime = verify(path.dirname(rollbackTarget))
   const candidate = verify(candidateRuntime)
+  // 候補の束が今の束と同じだと、確定の後に「戻し先」と「今」が同じになり、次の配置が最初の確認で止まる。練習では別の束を求める。
+  if (path.join(candidateRuntime, 'node_modules') === rollbackTarget) throw new Error('rehearsal_candidate_runtime_equals_active_runtime')
   const readBuild = (root: string) => fs.readFileSync(path.join(root, 'BUILD_ID'), 'utf8').trim()
   const paths = {
     releaseRoot: release, artifact, candidateRuntimeNodeModules: path.join(candidateRuntime, 'node_modules'), live,
@@ -148,7 +170,9 @@ async function run(config: Config): Promise<void> {
   const signal = (name: 'SIGSTOP' | 'SIGCONT') => {
     const errors: string[] = []; let signaled = 0
     for (const label of WEB_ANALOG_TARGETS) {
-      try { process.kill(readPids(config.root)[label]!, name); signaled += 1 } catch (error) { errors.push(`${name}:${label}:${String(error)}`) }
+      const pid = ownedPid(label, readPids(config.root)[label])
+      if (pid === null) { errors.push(`${name}:${label}:not_a_practice_server`); continue }
+      try { process.kill(pid, name); signaled += 1 } catch (error) { errors.push(`${name}:${label}:${String(error)}`) }
     }
     return { signaled, errors }
   }
@@ -156,7 +180,7 @@ async function run(config: Config): Promise<void> {
   const adapter: WebAnalogReleaseAdapter = {
     // launchd の代わりの状態: 練習用のサーバーが動いているか。ほかの定期処理は練習では扱わない (変わらない値)。
     snapshotAgents: () => Object.fromEntries(PRODUCTION_AGENT_INVENTORY.map((label) => [label, {
-      loaded: true, disabled: false, state: (WEB_ANALOG_TARGETS as readonly string[]).includes(label) ? (alive(readPids(config.root)[label as Target]) ? 'running' : 'stopped') : 'not running',
+      loaded: true, disabled: false, state: (WEB_ANALOG_TARGETS as readonly string[]).includes(label) ? (alive(readPids(config.root)[label as Target], label as Target) ? 'running' : 'stopped') : 'not running',
     }])) as AgentSnapshot,
     assertHealthy: async () => {
       if (transaction.ownsMutableState() && direction === 'fail' && postPromotionChecks++ === 0) throw new Error('rehearsal_injected_health_failure')
@@ -183,11 +207,17 @@ async function run(config: Config): Promise<void> {
   }
   const after = { build: readBuild(live), runtime: fs.realpathSync(nodeModules) }
   const journals = fs.readdirSync(config.state).filter((name) => name.startsWith('sma-release-journal.json.'))
-  const entry = { step: `run:${direction}`, ...outcome, before, after, candidateBuild: readBuild(artifact), journals }
+  const archived = `sma-release-journal.json.${direction === 'fail' ? 'rolled-back' : 'committed'}-${transaction.transactionId}`
+  // 合格の条件: forward・back は確定してその記録が残ること。fail は入れ替えの後に自動で戻り、その記録が残ること。
+  const passed = direction === 'fail'
+    ? outcome.status !== 'SUCCESS' && String(outcome.error).includes('web_analog_release_rolled_back') && journals.includes(archived)
+      && after.build === before.build && after.runtime === before.runtime
+    : outcome.status === 'SUCCESS' && journals.includes(archived) && after.build === readBuild(artifact)
+      && after.runtime === fs.realpathSync(path.join(candidateRuntime, 'node_modules'))
+  const entry = { step: `run:${direction}`, passed, ...outcome, before, after, candidateBuild: readBuild(artifact), expectedJournal: archived, journals }
   record(config, entry)
   console.log(JSON.stringify(entry, null, 2))
-  const expectedBuild = direction === 'fail' ? before.build : readBuild(artifact)
-  if (after.build !== expectedBuild) process.exitCode = 1
+  if (!passed) process.exitCode = 1
 }
 
 async function main(): Promise<void> {
@@ -195,8 +225,9 @@ async function main(): Promise<void> {
   const root = assertRehearsalRoot(required('root'))
   if (mode === 'prepare') return prepare(root)
   const config = loadConfig(root)
+  practiceRelease = config.release
   if (mode === 'start') {
-    for (const label of WEB_ANALOG_TARGETS) if (!alive(readPids(root)[label])) startTarget(config, label)
+    for (const label of WEB_ANALOG_TARGETS) if (!alive(readPids(root)[label], label)) startTarget(config, label)
     for (const label of WEB_ANALOG_TARGETS) await healthy(label)
     record(config, { step: 'start', pids: readPids(root) })
   } else if (mode === 'stop') {
@@ -207,7 +238,7 @@ async function main(): Promise<void> {
   } else if (mode === 'status') {
     const live = path.join(config.release, '.next-live')
     console.log(JSON.stringify({ build: fs.readFileSync(path.join(live, 'BUILD_ID'), 'utf8').trim(), runtime: fs.realpathSync(path.join(config.release, 'node_modules')),
-      pids: readPids(root), running: Object.fromEntries(WEB_ANALOG_TARGETS.map((label) => [label, alive(readPids(root)[label])])),
+      pids: readPids(root), running: Object.fromEntries(WEB_ANALOG_TARGETS.map((label) => [label, alive(readPids(root)[label], label)])),
       journals: fs.readdirSync(config.state) }, null, 2))
   } else throw new Error('mode must be prepare, start, run, stop or status')
 }

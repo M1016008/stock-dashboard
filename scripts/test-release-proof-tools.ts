@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import fs, { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseBundleArguments } from './create-release-runtime-bundle'
@@ -48,6 +48,13 @@ assert.throws(() => assertOutputDirectory(path.join(support, 'release-state', 'p
 assert.throws(() => assertOutputDirectory('/x/release/proof', '/x/release'), /out_inside_production_location/)
 assert.throws(() => assertOutputDirectory('/Volumes/OWC Express 1M2 80G/stock-dashboard/proof', '/x/release'), /out_inside_production_location/)
 assert.throws(() => assertOutputDirectory('relative/proof', '/x/release'), /normalized_absolute/)
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-out-'))
+  fs.symlinkSync(support, path.join(scratch, 'link'))  // 本番の場所を指すシンボリックリンクの下は認めない
+  assert.throws(() => assertOutputDirectory(path.join(scratch, 'link', 'new'), '/x/release'), /out_inside_production_location/)
+  assert.equal(assertOutputDirectory(path.join(scratch, 'new'), '/x/release'), path.join(scratch, 'new'))
+  fs.rmSync(scratch, { recursive: true })
+}
 
 // --check は何も書かない: ファイルを書く呼び出しは、すべて「--check なら返る」行より後にある。
 const proofSource = readFileSync('scripts/create-sma-release-preflight-proof.ts', 'utf8')
@@ -58,6 +65,10 @@ const writes = [...mainBody.matchAll(/fs\.(writeFileSync|mkdirSync|appendFileSyn
 assert.ok(writes.length > 0)
 for (const write of writes) assert.ok(write.index! > checkReturn, `write before the --check return: ${write[0]}`)
 assert.doesNotMatch(proofSource, /launchctl|kickstart|bootout|bootstrap/)
+// --check では Web への GET をしない (/api/health は Storage Guard の記録を書くため)。GET は withHttp のときだけ。
+const httpBlock = mainBody.indexOf('if (args.withHttp) {')
+for (const call of mainBody.matchAll(/getJson\(/g)) assert.ok(call.index! > httpBlock && httpBlock > 0)
+assert.match(proofSource, /GIT_OPTIONAL_LOCKS: '0'/)
 assert.doesNotMatch(proofSource, /method:\s*'(POST|PUT|PATCH|DELETE)'/)
 
 // 練習: 場所と port
@@ -68,5 +79,7 @@ assert.deepEqual(Object.values(REHEARSAL_PORTS), [3200, 3205])
 const rehearsalSource = readFileSync('scripts/rehearse-web-analog-release.ts', 'utf8')
 assert.doesNotMatch(rehearsalSource, /\/bin\/launchctl|'launchctl'/)
 assert.doesNotMatch(rehearsalSource, /stock-dashboard-release-7df6c23|Application Support/)
+assert.doesNotMatch(rehearsalSource, /'worktree', 'add'/, 'the rehearsal must not register worktrees in the shared repository')
+assert.match(rehearsalSource, /assertOwcDevelopmentVolume\(\)/)
 
 console.log('test-release-proof-tools: ok')
