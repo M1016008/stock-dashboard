@@ -223,6 +223,7 @@ function analyze(out: string): void {
         c.date[index] = calendarIndex.get(kept.event.signalDate)!
         c.dwell[index] = kept.event.dwellB
         storeOutcome(c, index, bars, kept.signalRow, kept.evaluation)
+        for (const missing of kept.evaluation.missingHorizons) bump(`${key}.missing${missing}.${kept.evaluation.termination}`)
         bump(`${key}.kept`)
       }
     }
@@ -275,7 +276,7 @@ function analyze(out: string): void {
   }
   if (hypotheses.filter((row) => row.judged).length !== 12) throw new Error('expected 12 judged hypotheses')
 
-  // 遷移ごとの数字は大きいため、X の先頭 2 桁ごとのファイルに分ける (JSON と、報告ページが読む JS)。
+  // 遷移ごとの数字 (全期間と 3 つの期間) は大きいため、X の先頭 3 桁ごとのファイルに分ける (JSON と、報告ページが読む JS)。
   const transitionsDir = path.join(out, 'transitions')
   fs.mkdirSync(transitionsDir, { recursive: true })
   const byTransition = new Map<number, Record<'A' | 'B33', number[][]>>()
@@ -291,10 +292,13 @@ function analyze(out: string): void {
   for (const [key, id] of [...transitionIds.entries()].sort(([a], [b]) => byCode(a, b))) {
     const entry = byTransition.get(id)
     if (!entry) continue
-    const shard = shards.get(key.slice(0, 2)) ?? {}
-    shard[key] = Object.fromEntries((['A', 'B33'] as const).map((study) => [study,
-      HORIZONS.map((h) => entry[study].map((list) => compact(summarize(studies[study], list, h))))]))
-    shards.set(key.slice(0, 2), shard)
+    const shard = shards.get(key.slice(0, 3)) ?? {}
+    shard[key] = Object.fromEntries((['A', 'B33'] as const).map((study) => {
+      const c = studies[study]
+      return [study, HORIZONS.map((h) => entry[study].map((list) => [compact(summarize(c, list, h)),
+        ...STUDY_BLOCKS[study].map(([, from, to]) => compact(summarize(c, list.filter(blockFilter(c, from, to)), h)))]))]
+    }))
+    shards.set(key.slice(0, 3), shard)
   }
   for (const [name, shard] of shards) {
     const body = JSON.stringify(shard)

@@ -85,7 +85,7 @@ assert.equal(assertOutputDirectory('/private/tmp/dwell-sector-test', RESULT_ROOT
 
 // 報告ページは結果を埋め込み、遷移ごとの数字は transitions/ から読む。
 const html = renderDwellSectorReport({ counts: {}, hypotheses: [], note: '</script>' })
-assert.match(html, /transitions\/'\+sh\+'\.js/)
+assert.match(html, /'transitions\/'\+sh\+'\.js'/)
 assert.doesNotMatch(html, /<\/script>"/)
 
 console.log('test-six-stage-dwell-sector: ok')
