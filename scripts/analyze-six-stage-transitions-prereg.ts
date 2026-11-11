@@ -406,6 +406,16 @@ function analyze(out: string): void {
   console.log(JSON.stringify({ out, counts }, null, 2))
 }
 
+// 保存済みの result.json から報告ページだけを作り直す (集計はしない。数値は result.json のまま)。
+//   npx tsx scripts/analyze-six-stage-transitions-prereg.ts render --out=<dir> --name=report-<suffix>.html
+function renderOnly(out: string): void {
+  const name = process.argv.find((arg) => arg.startsWith('--name='))?.slice(7) ?? ''
+  if (!/^report-[A-Za-z0-9-]+\.html$/.test(name)) throw new Error('--name=report-<suffix>.html is required')
+  const result = JSON.parse(fs.readFileSync(path.join(out, 'result.json'), 'utf8'))
+  writeOnce(path.join(out, name), renderTransitionsReport(result))
+  console.log(`rendered ${path.join(out, name)}`)
+}
+
 function dwellSummary(c: EventColumns, rows: number[]) {
   const values = Float64Array.from(rows, (row) => c.dwell[row]).sort()
   return values.length ? { n: values.length, median: interpolated(values, 0.5), q10: interpolated(values, 0.1), q90: interpolated(values, 0.9) } : { n: 0 }
@@ -445,5 +455,6 @@ if (require.main === module) {
   const out = outputDirectory()
   if (mode === 'segments') fetchSegments(out).catch((error) => { console.error(error); process.exit(1) })
   else if (mode === 'analyze') analyze(out)
-  else throw new Error('mode must be segments or analyze')
+  else if (mode === 'render') renderOnly(out)
+  else throw new Error('mode must be segments, analyze or render')
 }
