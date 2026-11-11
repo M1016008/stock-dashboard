@@ -21,7 +21,7 @@ export function renderTransitionsReport(result: unknown): string {
 <figure><figcaption>② 探す期間 (2008〜2017) と確かめる期間 (2018〜2022) の中央値</figcaption><svg id="periods"></svg></figure>
 <figure><figcaption>③ リターンの分布 (割合 %)</figcaption><svg id="hist2"></svg></figure>
 <figure><figcaption>④ シグナルの日からの値動きの道筋 (買値からの変化)</figcaption><svg id="path2"></svg></figure></div>
-<div id="detail2"></div></section>
+<p>遷移を選ぶ (①②の点、または一覧から。どの期間でも 100 件以上になった遷移すべて): <select id="pick"></select></p><div id="detail2"></div></section>
 <section><h2>研究 1: X→Y→X 型と X→Y→Z 型</h2><div id="s1judge"></div>
 <div class="grid"><figure><figcaption>③ リターンの分布 (割合 %)</figcaption><svg id="hist1"></svg></figure>
 <figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="path1"></svg></figure></div><div id="detail1"></div></section>
@@ -70,7 +70,7 @@ function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows
  const sel=rows.find(r=>r.key===S.sel);const note=S.sel&&!sel?'選んだ遷移 '+S.sel+' は、この期間では対象 (100 件以上) にならないため、全遷移を示す。':'';
  hist(document.getElementById('hist2'),[[ '全遷移',d.pooledHistogram[S.side],'var(--b)'],...(sel?[[sel.key,sel.histogram[S.side],'var(--a)']]:[])]);
  bands(document.getElementById('path2'),[[sel?sel.key:'全遷移',sel?sel.path:d.pooledPath,'var(--a)']]);
- document.getElementById('detail2').innerHTML=(note?'<p>'+note+'</p>':'')+(sel?detail(sel.key):'<p>①②の点を選ぶと、その遷移の数字が出る。</p>')}
+ document.getElementById('detail2').innerHTML=(note?'<p>'+note+'</p>':'')+(S.sel&&RESULT.details2[S.sel]?detail(S.sel):'<p>①②の点か一覧で遷移を選ぶと、その遷移の数字が出る。</p>')}
 function hist(svg,series){const tot=series.map(s=>s[1].reduce((a,b)=>a+b,0)||1);const share=series.map((s,i)=>s[1].map(v=>v/tot[i]));
  const f=frame(svg,[0,62],[0,Math.max(...share.flat())*1.1],{t:'リターン (左端 = −30% 未満、右端 = +30% 以上)',f:v=>(v-31).toFixed(0)+'%'},{t:'割合',f:v=>(v*100).toFixed(1)+'%'});
  series.forEach((s,i)=>{share[i].forEach((v,j)=>el('rect',{x:f.x(j),y:f.y(v),width:Math.max(1,f.x(j+1)-f.x(j)-1),height:f.y(0)-f.y(v),fill:s[2],'fill-opacity':.45},svg));
@@ -96,11 +96,12 @@ function study1(){const d=RESULT.study1.horizons[S.h];const j=d.judgment;
  bands(document.getElementById('path1'),[['X→Y→X',d.path.XYX,'var(--a)'],['X→Y→Z',d.path.XYZ,'var(--b)']]);
  let html='';for(const h of [5,10,15,20]){const e=RESULT.study1.horizons[h];html+='<table><caption>'+h+' 営業日</caption>'+HEAD+row('X→Y→X',e.full.XYX)+row('X→Y→Z',e.full.XYZ)+row('全イベント (参考)',e.full.ALL)+
   Object.entries(e.blocks).map(([k,b])=>row(k+' X→Y→X ('+(b.firstSignal||'—')+' 〜 '+(b.lastSignal||'—')+')',b.XYX)+row(k+' X→Y→Z',b.XYZ)).join('')+'</table>'}
- html+='<table><caption>X の種類ごと ('+S.h+' 営業日、探索)</caption>'+HEAD+Object.entries(d.byX).map(([k,s])=>row(k+' X→Y→X',s.XYX)+row(k+' X→Y→Z',s.XYZ)).join('')+'</table>';
+ for(const h of [5,10,15,20]){html+='<details'+(h===S.h?' open':'')+'><summary>X の種類ごと ('+h+' 営業日、探索)</summary><table>'+HEAD+Object.entries(RESULT.study1.horizons[h].byX).map(([k,s])=>row(k+' X→Y→X',s.XYX)+row(k+' X→Y→Z',s.XYZ)).join('')+'</table></details>'}
  html+='<table><caption>当時の市場区分ごと ('+S.h+' 営業日、探索)</caption>'+HEAD+Object.keys(d.bySegment.XYX).map(k=>row(k+' X→Y→X',d.bySegment.XYX[k])+row(k+' X→Y→Z',d.bySegment.XYZ[k])).join('')+'</table>';
  html+='<p>Y の滞在日数 (営業日): X→Y→X 中央値 '+RESULT.study1.dwellY.XYX.median+'、X→Y→Z 中央値 '+RESULT.study1.dwellY.XYZ.median+'。</p>';
  document.getElementById('detail1').innerHTML=html}
 function counts(){const c=RESULT.counts||{};document.getElementById('counts').innerHTML='<table><tr><th>項目</th><th>件数</th></tr>'+Object.keys(c).sort().map(k=>'<tr><td class="k">'+k+'</td><td>'+num(c[k])+'</td></tr>').join('')+'</table><p>s1 = 研究 1、s2 = 研究 2。kept = 集計に使ったイベント、excluded* = 除外、dedupDropped = 20 営業日以内の重複、missingN.* = N 営業日の結果が無いもの (理由)。</p>'}
-function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.toggle('on',+b.dataset.h===S.h));document.querySelectorAll('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===S.side));study2();study1();counts()}
+function draw(){document.querySelectorAll('[data-h]').forEach(b=>b.classList.toggle('on',+b.dataset.h===S.h));document.querySelectorAll('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===S.side));document.getElementById('pick').value=S.sel||'';study2();study1();counts()}
+const pick=document.getElementById('pick');pick.innerHTML='<option value="">—</option>'+Object.keys(RESULT.details2||{}).sort().map(k=>'<option>'+k+'</option>').join('');pick.onchange=()=>{S.sel=pick.value||null;draw()};
 document.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{S.h=+b.dataset.h;draw()});document.querySelectorAll('[data-side]').forEach(b=>b.onclick=()=>{S.side=b.dataset.side;draw()});
 window.onresize=draw;draw();`

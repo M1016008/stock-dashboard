@@ -48,11 +48,20 @@ function openImmutable(file: string): Database {
 
 // 出力は研究フォルダの下の専用フォルダか、OWC の外 (scratch) だけ。封印 C の入力のフォルダには書かない。
 export const RESULT_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'prereg-transitions-20261111')
+// シンボリックリンクをたどった実際の場所で判断する (まだ無い部分は、存在する一番近い親から)。
+function realLocation(target: string): string {
+  let existing = target
+  const rest: string[] = []
+  while (!fs.existsSync(existing)) { rest.unshift(path.basename(existing)); existing = path.dirname(existing) }
+  return path.join(fs.realpathSync(existing), ...rest)
+}
 export function assertOutputDirectory(value: string): string {
   if (!path.isAbsolute(value)) throw new Error('--out=<absolute directory> is required')
-  const resolved = path.resolve(value)
-  const insideResultRoot = resolved.startsWith(`${RESULT_ROOT}${path.sep}`)
-  if (!insideResultRoot && resolved.startsWith('/Volumes/')) throw new Error(`output must be under ${RESULT_ROOT}`)
+  const resolved = realLocation(path.resolve(value))
+  const root = realLocation(RESULT_ROOT)
+  const insideResultRoot = resolved.startsWith(`${root}${path.sep}`)
+  const onVolumes = resolved === '/Volumes' || resolved.startsWith('/Volumes/')
+  if (!insideResultRoot && onVolumes) throw new Error(`output must be under ${RESULT_ROOT}`)
   return resolved
 }
 const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '')
