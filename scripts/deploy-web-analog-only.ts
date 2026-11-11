@@ -24,6 +24,7 @@ import {
   assertNoUncertainReleaseTransaction,
   type ReleaseTransactionPaths,
 } from '@/lib/release/web-analog-transaction'
+import { assertReleaseRootBaselineStatus } from '@/lib/release/release-root-baseline'
 
 // The release root's checked-out source (batch code), unchanged by a Web/Analog switch.
 // Required per run: production first ran this at 034310b; after P1 the release root follows main.
@@ -275,8 +276,20 @@ if (fs.realpathSync(releaseRoot) !== expectedReleaseRoot) throw new Error('relea
 if (!fs.statSync(releaseStateDirectory).isDirectory() || fs.lstatSync(releaseStateDirectory).isSymbolicLink()) {
   throw new Error('release_state_directory_must_be_physical')
 }
-if (command('/usr/bin/git', ['rev-parse', 'HEAD'], releaseRoot) !== BASELINE_COMMIT
-  || command('/usr/bin/git', ['status', '--porcelain'], releaseRoot) !== '') throw new Error('release_baseline_identity_mismatch')
+if (command('/usr/bin/git', ['rev-parse', 'HEAD'], releaseRoot) !== BASELINE_COMMIT) {
+  throw new Error('release_baseline_identity_mismatch')
+}
+const runnerOwnedRollbackRuntime = assertReleaseRootBaselineStatus(
+  releaseRoot,
+  releaseStateDirectory,
+  command('/usr/bin/git', ['status', '--porcelain'], releaseRoot),
+)
+if (runnerOwnedRollbackRuntime) {
+  verifyRuntime(
+    path.dirname(runnerOwnedRollbackRuntime.target),
+    runnerOwnedRollbackRuntime.runtimeIdentitySha256,
+  )
+}
 
 const expectedCandidateCommit = requiredValue('STOCKBOARD_EXPECTED_CANDIDATE_COMMIT')
 const expectedCandidateBuild = requiredValue('STOCKBOARD_EXPECTED_CANDIDATE_BUILD_ID')
