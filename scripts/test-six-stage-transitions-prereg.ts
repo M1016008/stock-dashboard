@@ -82,5 +82,7 @@ assert.equal(assertOutputDirectory('/private/tmp/x'), '/private/tmp/x')
 assert.throws(() => assertOutputDirectory('/Volumes/OWC Express 1M2 80G/stockboard-research/six-stage/v5/E039-JP-scale-consistent-phase1b0-foundation'))
 assert.throws(() => assertOutputDirectory(`${RESULT_ROOT}/../v5`))
 assert.throws(() => assertOutputDirectory('relative/dir'))
+assert.throws(() => assertOutputDirectory('/System/Volumes/Data/Volumes/OWC Express 1M2 80G/stockboard-research/six-stage/v5/x'))
+assert.throws(() => assertOutputDirectory('/Users/somebody/out'))
 
 console.log('six-stage transitions prereg tests: PASS')

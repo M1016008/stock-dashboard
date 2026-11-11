@@ -4,6 +4,7 @@
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx --env-file=<jquants.env> scripts/analyze-six-stage-transitions-prereg.ts segments --out=<dir>
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-transitions-prereg.ts analyze --out=<dir>
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
   SIX_STAGE_REAL_RESEARCH_ROOT,
@@ -46,7 +47,7 @@ function openImmutable(file: string): Database {
   return db
 }
 
-// 出力は研究フォルダの下の専用フォルダか、OWC の外 (scratch) だけ。封印 C の入力のフォルダには書かない。
+// 出力は研究フォルダの下の専用フォルダか、一時フォルダ (scratch) だけ。封印 C の入力のフォルダには書かない。
 export const RESULT_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'prereg-transitions-20261111')
 // シンボリックリンクをたどった実際の場所で判断する (まだ無い部分は、存在する一番近い親から)。
 function realLocation(target: string): string {
@@ -58,10 +59,9 @@ function realLocation(target: string): string {
 export function assertOutputDirectory(value: string): string {
   if (!path.isAbsolute(value)) throw new Error('--out=<absolute directory> is required')
   const resolved = realLocation(path.resolve(value))
-  const root = realLocation(RESULT_ROOT)
-  const insideResultRoot = resolved.startsWith(`${root}${path.sep}`)
-  const onVolumes = resolved === '/Volumes' || resolved.startsWith('/Volumes/')
-  if (!insideResultRoot && onVolumes) throw new Error(`output must be under ${RESULT_ROOT}`)
+  // 許すのは、研究フォルダの専用フォルダと、一時フォルダ (scratch) の下だけ。
+  const allowed = [RESULT_ROOT, os.tmpdir(), '/private/tmp'].map(realLocation)
+  if (!allowed.some((root) => resolved.startsWith(`${root}${path.sep}`))) throw new Error(`output must be under ${RESULT_ROOT} or a temporary directory`)
   return resolved
 }
 const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '')
