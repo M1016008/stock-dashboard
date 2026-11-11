@@ -19,7 +19,7 @@
 | Gateway | LaunchAgent `com.stockboard.friend-readonly-gateway`。`npm run friend-access:install-gateway` で登録する (コードは `lib/friend-readonly-gateway.ts`・`lib/friend-readonly-policy.ts`) | 登録・再起動はオーナー |
 
 ## Gateway が通すもの
-- `GET`・`HEAD` はすべて通す。
+- 管理の画面と API (下) を除き、`GET`・`HEAD` は通す。
 - `POST` は、読み取りだけの API (`FRIEND_READ_ONLY_JSON_POST_PATHS`、検索・Screener など) だけを通す。それ以外の書き込みは止める。
 - 管理の画面と API (`/admin`、`/api/admin`、大量保有の管理) は止める。
 - `cf-access-*` などの認証の情報は Web に渡さない。Web には `x-stockboard-access-mode: friend-read-only` を付けて渡す。
@@ -29,7 +29,7 @@ Cloudflare Access の方針で、許可するメールアドレスを足す・�
 
 ## 変更したとき・確かめるとき
 - Gateway のコードを変えたら、`npm run test:friend-access-gateway` と `npm run test:friend-access-ui` を通してから、オーナーが登録し直す。
-- 確かめること: 認証の後に主な画面 (日本株・米国株) が開くこと、書き込みと管理の API が止まること (Gateway のログ `~/Library/Logs/StockBoard/friend-readonly-gateway.log`)。
+- 確かめること: 認証の後に主な画面 (日本株・米国株) が開くこと。Mac mini の上で Gateway (`http://127.0.0.1:3136`) に、管理の API (`/api/admin/...`) と書き込みの `POST` を送り、止まる (403 など) こと。Gateway のログ (`~/Library/Logs/StockBoard/friend-readonly-gateway.log`) は起動の記録だけで、要求ごとの記録は無い。
 
 ## 守ること
 - 認証の無い直接の Tunnel は使わない (`npm run share:tunnel:quick` は止めてある)。
