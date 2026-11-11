@@ -22,7 +22,13 @@ export type DailyExcursionPoint = {
   day: number
   upReturn: number
   downReturn: number
+  // Only in NEXT_CLOSE mode: that session's close relative to the entry price.
+  closeReturn?: number
 }
+
+// NEXT_OPEN (default, V4.1): enter at the next session's open; that session is day 1.
+// NEXT_CLOSE (PREREG_TRANSITIONS_20261111): enter at the next session's close; day 1 is the session after entry.
+export type EventEntryMode = 'NEXT_OPEN' | 'NEXT_CLOSE'
 
 export type ThresholdDays = Record<EventPathThreshold, number | null>
 
@@ -41,6 +47,7 @@ export type RawEventHorizon = {
 export type EventPathEvaluation = {
   entryDate: string | null
   entryOpen: number | null
+  entryPrice?: number | null
   maximumObservedExitDate: string | null
   dailyExcursions: DailyExcursionPoint[]
   completedHorizons: RawEventHorizon[]
@@ -90,7 +97,9 @@ function hitOrder(favorable: number | null, adverse: number | null): HitOrder {
 export function evaluateEventPricePath(
   prices: readonly EventPriceBar[],
   signalIndex: number,
+  entryMode: EventEntryMode = 'NEXT_OPEN',
 ): EventPathEvaluation {
+  const closeEntry = entryMode === 'NEXT_CLOSE'
   const entry = prices[signalIndex + 1]
   if (!entry) {
     return {
@@ -115,7 +124,9 @@ export function evaluateEventPricePath(
       termination: 'RIGHT_CENSORED',
     }
   }
-  if (!finitePositive(entry.open)) {
+  const entryPrice = closeEntry ? entry.close : entry.open
+  const dayOffset = closeEntry ? 1 : 0
+  if (!finitePositive(entryPrice)) {
     return {
       entryDate: entry.date,
       entryOpen: null,
@@ -137,11 +148,11 @@ export function evaluateEventPricePath(
   let lowestDay = 0
   let invalidPrice = false
   let maximumObservedExitDate: string | null = null
-  let previousDate = prices[signalIndex]?.date ?? null
+  let previousDate = prices[signalIndex + dayOffset]?.date ?? null
   if (previousDate != null) assertIsoDate(previousDate, 'signal date')
 
   for (let day = 1; day <= 20; day += 1) {
-    const bar = prices[signalIndex + day]
+    const bar = prices[signalIndex + dayOffset + day]
     if (!bar) break
     assertIsoDate(bar.date, 'outcome date')
     if (previousDate != null && bar.date <= previousDate) throw new Error('price dates must be strictly increasing')
@@ -154,8 +165,9 @@ export function evaluateEventPricePath(
     }
     dailyExcursions.push({
       day,
-      upReturn: bar.high / entry.open - 1,
-      downReturn: bar.low / entry.open - 1,
+      upReturn: bar.high / entryPrice - 1,
+      downReturn: bar.low / entryPrice - 1,
+      ...(closeEntry ? { closeReturn: bar.close / entryPrice - 1 } : {}),
     })
     if (bar.high > highest) {
       highest = bar.high
@@ -167,16 +179,16 @@ export function evaluateEventPricePath(
     }
     for (const threshold of EVENT_PATH_THRESHOLDS) {
       const ratio = threshold / 100
-      if (firstUpDay[threshold] == null && bar.high / entry.open >= 1 + ratio) firstUpDay[threshold] = day
-      if (firstDownDay[threshold] == null && bar.low / entry.open <= 1 - ratio) firstDownDay[threshold] = day
+      if (firstUpDay[threshold] == null && bar.high / entryPrice >= 1 + ratio) firstUpDay[threshold] = day
+      if (firstDownDay[threshold] == null && bar.low / entryPrice <= 1 - ratio) firstDownDay[threshold] = day
     }
     if (!EVENT_PATH_HORIZONS.includes(day as EventPathHorizon)) continue
     completedHorizons.push({
       horizonSessions: day as EventPathHorizon,
       exitDate: bar.date,
-      closeReturn: bar.close / entry.open - 1,
-      mfe: highest / entry.open - 1,
-      mae: lowest / entry.open - 1,
+      closeReturn: bar.close / entryPrice - 1,
+      mfe: highest / entryPrice - 1,
+      mae: lowest / entryPrice - 1,
       highestDay,
       lowestDay,
       firstUpDay: { ...firstUpDay },
@@ -189,6 +201,7 @@ export function evaluateEventPricePath(
   return {
     entryDate: entry.date,
     entryOpen: entry.open,
+    ...(closeEntry ? { entryPrice } : {}),
     maximumObservedExitDate,
     dailyExcursions,
     completedHorizons,
