@@ -323,6 +323,9 @@
   - **事前登録** (2026-11-11、オーナー決定): 研究 1 (X→Y→X 型) と研究 2 (6 桁の遷移ごとの勝率とリターン) の条件は
     `research/6stage/event-path-research/PREREG_TRANSITIONS_20261111.md`。この文書が main に Merge されるまで、
     どちらの集計も始めない。
+  - **事前登録 (研究 A・B)** (2026-11-11、オーナー決定): 研究 A (直前の滞在日数) と研究 B (業種の強さ) の条件は
+    `research/6stage/event-path-research/PREREG_DWELL_SECTOR_20261111.md`。仮説は 12 個。この文書が main に Merge されるまで、
+    集計は始めない。
 - **現在の銘柄への接続 (Current Serving Projection) の位置づけ** (記録日: 2026-11-10、オーナー判断)
   - 必要な機能。P1 の後に作り直す。X→Y→X 型の遷移の研究を、日々の銘柄判断に使えるようにする出口とする。
   - 現行の計画 (`research/6stage/event-path-research/CURRENT_SERVING_PROJECTION_V1.md`、中身は V2) は本番の基準を
