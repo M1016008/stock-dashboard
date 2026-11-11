@@ -15,8 +15,8 @@
 | SMA の照合 | 実データ (Backup の写し) で、SMA の計算結果が本番の今の表示と一致することを確かめる (STATUS の確認項目) | Claude Code |
 | 表を作る処理の試行 | 下の 1-1 | Claude Code |
 | 実行環境の束 | main の `package-lock.json` から実行環境の束を作り、`runtime-manifest.json` の `baselineSha` を `034310b` にする (切り替えの時点では release ディレクトリが `034310b` のため) | Claude Code |
-| 予行 | 本番と同じ形の練習用ディレクトリで、切り替えと戻しを 1 回ずつ通す | Claude Code |
-| 配置の証明を作る道具 | **未決。** 配置の仕組みは証明 (有効 15 分、14 項目の照合) を求めるが、それを作る道具と束を作る道具は main にも本番のソースにも無い (10/29 は手作業で作った)。案と行数を別に示して承認を得る | Claude Code |
+| 予行 (a) | 練習用の場所で、入れ替え → 確認 → 戻しを通す (下の 6-1)。日時は前もって承認を得る | Claude Code |
+| 配置の証明を作る道具 | `scripts/create-sma-release-preflight-proof.ts` (10/29 に repo の外で使ったものを元にした)。束は `scripts/create-release-runtime-bundle.ts`。11/27 に確かめるだけの動かし方 (b) で本番に向けて試す (下の 6-2) | Claude Code |
 | 前の成果物の写し | 今の `.next-live` (と `SMA_RELEASE_MANIFEST.json`) の写しを release ディレクトリの外に作る。確定後に戻すときの候補にする | Claude Code |
 
 ### 1-1. Backup の写しで main の表を作る処理を試す
@@ -105,3 +105,46 @@ APFS の複製 (`cp -c`。同じ OWC の上に一瞬で複製を作り、書き�
 ## 5. P1 の後に最初に Web を配置するとき
 - release ディレクトリは main、今の実行環境の束には `034310b` の印が残る。
   `STOCKBOARD_RELEASE_BASELINE_COMMIT=<main の commit>` に加えて `STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT=034310b…` を渡す (PR #115)。
+
+## 6. P1 の前の試し (本番を変えない)
+
+### 6-1. (a) 練習用の場所での入れ替えと戻し (案: 11/24 (火) 12:00〜16:00、だめなら 11/25 (水) 同じ時間)
+- 場所: OWC の `StockBoard Development/release-rehearsal/20261124/` (内蔵ディスクは使わない)。練習用のサーバーは 127.0.0.1:3200 (Web) と :3205 (類似の検索)。
+- 本番の :3000・:3105、launchd、本番の DB、release-state には触れない。練習用のサーバーは隔離の実行モード (preview) で動き、DB は練習用の場所の中の小さな試験用の DB (`isolation/data/`)。キーは渡さない。
+- 本番から読むもの: 今の `.next-live` (写すだけ) と、今の束 `c9fb796…` (練習用の release ディレクトリから link するだけ。束は読み取り専用)。
+  練習用の release ディレクトリは repo を OWC の上に複製して作る (元の repo に worktree を登録しない)。
+- 練習用のサーバーへの停止・再開の信号は、記録した PID が練習用の port で待ち受け、作業フォルダが練習用の場所であるときだけ送る (別のプロセスには送らない)。
+- 手順 (すべて Claude Code。日次更新の時間 (平日 16:40〜21:10) と米国の 06:30・10:30 を避ける):
+  1. 候補の束: `npm run release:runtime-bundle -- --commit=<main> --baseline=034310b… --out=<練習用の場所>/runtime-<main の短い commit>` (`/usr/local/bin/node` で動かす)。
+  2. 候補のビルド: 練習用の場所に main の作業用フォルダを作り、`node_modules` を 1. の束に link して、`NEXT_DIST_DIR=.next-live npm run build`。
+     `.next-live` を `candidate-artifact` に写し、`STOCKBOARD_RELEASE_BASELINE_COMMIT=034310b… npm run release:sma-manifest -- <candidate-artifact>`。
+  3. `npm run release:rehearse -- prepare --root=<練習用の場所>/rehearsal --baseline=034310b… --live-source=<本番の .next-live> --runtime=<今の束>`
+  4. `release:rehearse -- start` (3200・3205 で起動し、`/api/health` が ok になるのを待つ)
+  5. `release:rehearse -- run --direction=forward --artifact=<candidate-artifact> --candidate-runtime=<1. の束>` (入れ替え → 確認 → 確定)
+  6. `release:rehearse -- run --direction=back` (前の世代の写しと今の束に戻す)
+  7. `release:rehearse -- run --direction=fail --artifact=... --candidate-runtime=...` (確認の失敗を起こし、自動で戻ることを確かめる)
+  8. `release:rehearse -- stop`。結果: `rehearsal-log.jsonl` と、練習用の `release-state` の記録 (`committed-*` 2 つ、`rolled-back-*` 1 つ)。
+- 片付け: 練習用の場所 (候補の束とビルドを含め数 GB) は、P1 に同じ候補を使うため P1 の確認まで残す。消すのは承認の後。
+
+### 6-2. (b) 本番に向けた、確かめるだけの動かし方 (11/27 (金) 12:00〜16:00)
+- `/usr/local/bin/node --import tsx scripts/create-sma-release-preflight-proof.ts --check --release-root=/Users/yoshio/dev/stock-dashboard-release-7df6c23 --artifact=<候補のビルド> --runtime=<候補の束> --baseline=034310b…`
+- 書くもの: なし。結果は画面に出すだけ。ファイルを書く処理は、すべて `--check` で戻った後 (`--write` のときだけ) にあり、その順番はテストで確かめている。
+- 本番に対して行うこと: ファイルと記録の読み取り (release ディレクトリの git の状態、`.next-live`、束の記録、鮮度の見張りのログ、ロックが無いこと) と `ps` だけ。
+  git は index を更新しない設定 (`GIT_OPTIONAL_LOCKS=0`) で動かす。`npm ls` (候補の束の中で動かす。本番の束ではない) は、cache と記録を
+  この確認のためだけの一時フォルダに書かせ、終わったら消す。`npm run` を通さず node で直接動かす (npm の記録・更新の確認を避けるため)。
+  本番の外で書かれうるのは、この一時フォルダと、macOS の `/usr/bin/git` が自分の一時領域に作る検索の cache だけ。
+- Web・類似の検索への GET は `--check` では行わない。`/api/health` は、Storage Guard の確認の記録 (本番の App Support の中) を書くため
+  (毎分の web-health と同じ動き)。P1 当日の `--write` では行う。前日に GET も試すなら `--check --with-http` を使い、別に承認を得る。
+- 鮮度の見張りの記録は 60 分以内のものだけ使う。当日は見張りを 07:55 に止めるので、証明は 08:55 までに作る。
+- 当日の P1 では、同じ道具を `--write --out=<新しいフォルダ>` で動かし、証明を作る。書く先は本番の場所 (release ディレクトリ・release-state・
+  StockBoard の App Support・本番の DB のフォルダ・LaunchAgents) の外の新しいフォルダだけ (コードで止める)。
+- 注意: 今 (11/11) の鮮度の見張りの記録では、米国の取り込みが `partial` (再取得が必要) で、この道具の確認は止まる。P1 の前日に同じなら、その理由を確かめて報告する。
+
+### 6-3. 道具を作る中で見つかった、P1 を止める点 (2026-11-12、読み取りだけで確認)
+- 本番の release ディレクトリでは、`node_modules` と `.node_modules-release-prev` が同じ束 (`c9fb796…`) を指している (10/29 の配置で束を変えなかったため)。
+- この状態では、配置の仕組みの最初の確認が `release_runner_owned_rollback_runtime_matches_active_runtime` で止まる (読み取り専用で確かめた)。P1 の配置も、証明を作る道具も、ここで止まる。
+- 直し方の案: P1 の前 (または当日の切り替えの前) に、オーナーが本番の release ディレクトリの `.node_modules-release-prev` (シンボリックリンク) を消す。
+  - 指している先は今の束そのもので、別の戻し先ではない。消しても束は消えず、今の Web にも影響しない (link を 1 つ消すだけ)。
+  - 消すと git の状態がきれいになり、確認は「前回の確定の記録の照合」を行わずに進む。戻し先は今の束 (`node_modules` の先) と `.next-live` になる。
+- 本番のファイルの変更なので、オーナーの承認と実行が要る。練習 (a) では、同じ状態を作らないよう、候補の束が今の束と同じなら止める。
+
