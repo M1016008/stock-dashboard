@@ -15,7 +15,7 @@ import {
 } from '@/lib/classification-source'
 
 type SyncState = {
-  schemaVersion: 4
+  schemaVersion: 5
   sourcePath: string
   databasePath: string
   sha256: string
@@ -23,6 +23,8 @@ type SyncState = {
   sourceMtimeMs: number
   sourceRecordCount: number
   shikihoProfileCount: number
+  // 「比較会社」列のある CSV で取り込んだ比較会社の行数。列の無い CSV では null。
+  shikihoRivalCount: number | null
   majorCategoryCount: number
   subIndustryCount: number
   recoveredMissingSubIndustryCount: number
@@ -84,8 +86,8 @@ function acquireLock(): number | null {
   }
 }
 
-async function databaseImportCounts(): Promise<{ classifications: number; profiles: number }> {
-  if (!fs.existsSync(databasePath)) return { classifications: 0, profiles: 0 }
+async function databaseImportCounts(): Promise<{ classifications: number; profiles: number; rivals: number }> {
+  if (!fs.existsSync(databasePath)) return { classifications: 0, profiles: 0, rivals: 0 }
   const database = openExistingGuardedClient(databasePath, 'classification-sync')
   try {
     const classificationResult = await database.execute('SELECT COUNT(*) AS count FROM stock_classification')
@@ -96,12 +98,20 @@ async function databaseImportCounts(): Promise<{ classifications: number; profil
     } catch {
       // The next import creates the profile table through ensureSchema().
     }
+    let rivals = 0
+    try {
+      const rivalResult = await database.execute('SELECT COUNT(*) AS count FROM stock_shikiho_rivals')
+      rivals = Number(rivalResult.rows[0]?.count ?? 0)
+    } catch {
+      // The next import creates the rivals table through ensureSchema().
+    }
     return {
       classifications: Number(classificationResult.rows[0]?.count ?? 0),
       profiles,
+      rivals,
     }
   } catch {
-    return { classifications: 0, profiles: 0 }
+    return { classifications: 0, profiles: 0, rivals: 0 }
   } finally {
     database.close()
   }
@@ -138,12 +148,13 @@ async function main(): Promise<void> {
     const databaseCounts = await databaseImportCounts()
     if (
       !forceSync
-      && previous?.schemaVersion === 4
+      && previous?.schemaVersion === 5
       && previous.sourcePath === sourcePath
       && previous.databasePath === databasePath
       && previous.sha256 === sourceSha256
       && databaseCounts.classifications === previous.sourceRecordCount
       && databaseCounts.profiles === previous.shikihoProfileCount
+      && (previous.shikihoRivalCount == null || databaseCounts.rivals === previous.shikihoRivalCount)
     ) {
       console.log(`Classification source unchanged since ${previous.syncedAt}; no import needed.`)
       return
@@ -163,7 +174,9 @@ async function main(): Promise<void> {
 
     const source = await readClassificationSource(snapshotPath)
     validateClassificationSource(source, classificationValidationOptionsFromEnv())
-    if (previous && previous.sourceRecordCount > 0) {
+    // オーナーが削除の件数を確かめた場合 (CLASSIFICATION_EXPECTED_PRUNE_ROWS) は、取り込み側の
+    // 件数ちょうどの確認に任せ、ここの 5% の確認は行わない。
+    if (previous && previous.sourceRecordCount > 0 && !process.env.CLASSIFICATION_EXPECTED_PRUNE_ROWS) {
       const minimumRelativeCount = Math.floor(
         previous.sourceRecordCount * (1 - maxRecordDropPercent / 100),
       )
@@ -204,6 +217,12 @@ async function main(): Promise<void> {
         + `source=${source.records.length}`,
       )
     }
+    if (source.hasRivalsColumn && importedDatabaseCounts.rivals !== source.rivals.length) {
+      throw new Error(
+        `Shikiho rival DB verification failed: rows=${importedDatabaseCounts.rivals}, `
+        + `source=${source.rivals.length}`,
+      )
+    }
     if (importedDatabaseCounts.profiles !== source.profiles.length) {
       throw new Error(
         `Shikiho profile DB verification failed: rows=${importedDatabaseCounts.profiles}, `
@@ -211,7 +230,7 @@ async function main(): Promise<void> {
       )
     }
     const state: SyncState = {
-      schemaVersion: 4,
+      schemaVersion: 5,
       sourcePath,
       databasePath,
       sha256: sourceSha256,
@@ -219,6 +238,7 @@ async function main(): Promise<void> {
       sourceMtimeMs: before.mtimeMs,
       sourceRecordCount: source.records.length,
       shikihoProfileCount: source.profiles.length,
+      shikihoRivalCount: source.hasRivalsColumn ? source.rivals.length : null,
       majorCategoryCount: source.majorCategoryCount,
       subIndustryCount: source.subIndustryCount,
       recoveredMissingSubIndustryCount: source.recoveredMissingSubIndustries.length,

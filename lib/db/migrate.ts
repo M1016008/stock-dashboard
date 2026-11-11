@@ -911,6 +911,17 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_shikiho_profiles_issue
     ON stock_shikiho_profiles(issue_label)`,
+  // 会社四季報の比較会社 (分類 CSV の「比較会社」列。コードが無い会社は rival_code が NULL)
+  `CREATE TABLE IF NOT EXISTS stock_shikiho_rivals (
+    ticker TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    rival_code TEXT,
+    rival_name TEXT NOT NULL,
+    issue_label TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, position)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_shikiho_rivals_rival ON stock_shikiho_rivals(rival_code)`,
   // ─── Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest) ───
   `CREATE TABLE IF NOT EXISTS weekly_margin_interest (
     ticker TEXT NOT NULL,
