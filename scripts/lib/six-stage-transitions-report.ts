@@ -49,8 +49,9 @@ function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const
 function frame(svg,xs,ys,xl,yl){svg.innerHTML='';const W=svg.clientWidth||560,H=svg.clientHeight||320,m={l:56,r:12,t:10,b:36};
  const x=v=>m.l+(v-xs[0])/(xs[1]-xs[0]||1)*(W-m.l-m.r),y=v=>H-m.b-(v-ys[0])/(ys[1]-ys[0]||1)*(H-m.t-m.b);
  el('line',{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,stroke:'#999'},svg);el('line',{x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,stroke:'#999'},svg);
- for(let i=0;i<=4;i++){const vx=xs[0]+(xs[1]-xs[0])*i/4,vy=ys[0]+(ys[1]-ys[0])*i/4;
-  el('text',{x:x(vx),y:H-m.b+14,'font-size':10,'text-anchor':'middle'},svg).textContent=xl.f(vx);
+ const xt=xl.ticks||[0,1,2,3,4].map(i=>xs[0]+(xs[1]-xs[0])*i/4);
+ for(const vx of xt)el('text',{x:x(vx),y:H-m.b+14,'font-size':10,'text-anchor':'middle'},svg).textContent=xl.f(vx);
+ for(let i=0;i<=4;i++){const vy=ys[0]+(ys[1]-ys[0])*i/4;
   el('text',{x:m.l-4,y:y(vy)+3,'font-size':10,'text-anchor':'end'},svg).textContent=yl.f(vy)}
  el('text',{x:(W+m.l)/2,y:H-4,'font-size':11,'text-anchor':'middle'},svg).textContent=xl.t;
  const t=el('text',{x:12,y:(H-m.b)/2,'font-size':11,'text-anchor':'middle',transform:'rotate(-90 12 '+(H-m.b)/2+')'},svg);t.textContent=yl.t;
@@ -72,7 +73,7 @@ function study2(){const d=RESULT.study2[S.h];const pr=RESULT.periods2;const rows
  bands(document.getElementById('path2'),[[sel?sel.key:'全遷移',sel?sel.path:d.pooledPath,'var(--a)']]);
  document.getElementById('detail2').innerHTML=(note?'<p>'+note+'</p>':'')+(S.sel&&RESULT.details2[S.sel]?detail(S.sel):'<p>①②の点か一覧で遷移を選ぶと、その遷移の数字が出る。</p>')}
 function hist(svg,series){const tot=series.map(s=>s[1].reduce((a,b)=>a+b,0)||1);const share=series.map((s,i)=>s[1].map(v=>v/tot[i]));
- const f=frame(svg,[0,62],[0,Math.max(...share.flat())*1.1],{t:'リターン (左端 = −30% 未満、右端 = +30% 以上)',f:v=>(v-31).toFixed(0)+'%'},{t:'割合',f:v=>(v*100).toFixed(1)+'%'});
+ const f=frame(svg,[0,62],[0,Math.max(...share.flat())*1.1],{t:'リターン (左端の棒 = −30% 未満、右端の棒 = +30% 以上)',ticks:[1,16,31,46,61],f:v=>{const p=v-31;return(p>0?'+':p<0?'−':'')+Math.abs(p)+'%'}},{t:'割合',f:v=>(v*100).toFixed(1)+'%'});
  series.forEach((s,i)=>{share[i].forEach((v,j)=>el('rect',{x:f.x(j),y:f.y(v),width:Math.max(1,f.x(j+1)-f.x(j)-1),height:f.y(0)-f.y(v),fill:s[2],'fill-opacity':.45},svg));
   el('text',{x:f.W-f.m.r-4,y:f.m.t+12+i*14,'font-size':11,'text-anchor':'end',fill:s[2]},svg).textContent=s[0]+' (−30% 未満 '+s[1][0]+' 件、+30% 以上 '+s[1][61]+' 件)'})}
 function bands(svg,series){const all=series.flatMap(s=>s[1].flat());if(!all.length){svg.innerHTML='';return}
