@@ -238,11 +238,13 @@ async function main(): Promise<void> {
   assert.match(source, /STOCKBOARD_RELEASE_STATE_DIR/)
   assert.match(source, /STOCKBOARD_RELEASE_BASELINE_COMMIT/)
   assert.doesNotMatch(source, /const BASELINE_COMMIT = '[0-9a-f]{40}'/, 'the baseline commit must be supplied per run')
-  assert.match(source, /!runtimeBaselines\.includes\(manifest\.baselineSha\)/,
+  assert.match(source, /verifyRuntimeManifest\(runtimeDirectory, \{ expectedIdentity, acceptedBaselines: runtimeBaselines,/,
     'every runtime (candidate and rollback) must carry the current baseline or the named prior one')
+  const identity = readFileSync('lib/release/runtime-identity.ts', 'utf8')
+  assert.match(identity, /!options\.acceptedBaselines\.includes\(manifest\.baselineSha\)/)
   assert.match(source, /SIGSTOP/)
   assert.match(source, /WebAnalogReleaseTransaction/)
-  assert.match(source, /\{ \.\.\.process\.env, NODE_ENV: 'production' \}/,
+  assert.match(identity, /\{ \.\.\.process\.env, NODE_ENV: 'production' \}/,
     'runtime dependency identity must use the same production npm environment as runtime construction')
   assert.ok(source.indexOf('const proof = verifySmaReleasePreflightProof') < source.indexOf('const transaction = new WebAnalogReleaseTransaction'))
   assert.equal(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)?.length, 1,
