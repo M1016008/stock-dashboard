@@ -70,11 +70,12 @@ export async function importClassificationSource(
       const incoming = new Set(source.rivals.map((rival) => rival.ticker))
       const emptied = existing.filter((row) => importing.has(row.ticker) && !incoming.has(row.ticker)).length
       pruneCounts.stock_shikiho_rivals = existing.filter((row) => !importing.has(row.ticker)).length
-      assertPruneWithinLimit({ table: 'stock_shikiho_rivals (emptied)', currentRows: existing.length, pruneRows: emptied })
+      const retained = existing.filter((row) => importing.has(row.ticker)).length
+      assertPruneWithinLimit({ table: 'stock_shikiho_rivals (emptied)', currentRows: retained, pruneRows: emptied })
       const existingRows = existing.reduce((sum, row) => sum + row.rows, 0)
       const keptRows = existing.filter((row) => !importing.has(row.ticker)).reduce((sum, row) => sum + row.rows, 0)
       const comparableRows = existingRows - keptRows
-      if (comparableRows > 0 && source.rivals.length < Math.floor(comparableRows * (1 - MAX_RIVAL_ROW_DROP_RATIO))) {
+      if (comparableRows > 0 && comparableRows - source.rivals.length > Math.floor(comparableRows * MAX_RIVAL_ROW_DROP_RATIO)) {
         throw new Error(
           `Classification import would shrink stock_shikiho_rivals too much: ${source.rivals.length} rows `
           + `for tickers that had ${comparableRows} (allowed drop ${MAX_RIVAL_ROW_DROP_RATIO * 100}%). Nothing was written.`,
