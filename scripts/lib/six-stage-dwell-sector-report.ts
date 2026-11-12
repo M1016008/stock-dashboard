@@ -14,7 +14,7 @@ export function renderDwellSectorReport(result: unknown): string {
   // 60 分類の読み元 (sector60.json の記録)。事前登録から変えた場合は、その旨と理由を表示する。
   const source60 = (result as { inputs?: { sector60Source?: Record<string, string> } }).inputs?.sector60Source
   const escape = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
-  const source60Html = source60 ? `<p>60 分類の読み元: ${escape(source60.csv ?? source60.db ?? '')} (SHA-256 ${escape(source60.csvSha256 ?? source60.dbSha256 ?? '')})。${escape(source60.note ?? '')}</p>` : ''
+  const source60Html = source60 ? `<p>60 分類の読み元: ${escape(source60.csv ?? '')} (SHA-256 ${escape(source60.csvSha256 ?? '')})。${escape(source60.note ?? '')}</p>` : ''
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>滞在日数と業種の強さの研究 (事前登録 2026-11-11)</title><style>${REPORT_STYLE}</style></head><body>
 <header><h1>滞在日数と業種の強さで分けた遷移のその後の値動き</h1><p class="sub">事前登録: research/6stage/event-path-research/PREREG_DWELL_SECTOR_20261111.md (日本株、Discovery 期間 2022-12-30 まで)</p>
