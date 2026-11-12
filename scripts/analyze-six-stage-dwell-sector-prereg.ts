@@ -4,6 +4,7 @@
 //
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx --env-file=<jquants.env> scripts/analyze-six-stage-dwell-sector-prereg.ts sectors --out=<dir>
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts sector60 --db=<Backup の写しの stockboard.db> --out=<dir>
+//   (または --csv=<四季報 CSV の写し>。2026-11-12 のオーナー決定で、今回は CSV から読む。事前登録の「変更の記録」)
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts analyze --out=<dir>
 //   npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts render --out=<dir> --name=report-<suffix>.html
 import fs from 'node:fs'
@@ -20,6 +21,7 @@ import {
   pathBands, previousMonth, selectTickerEvents, storeOutcome, summarize, writeOnce, type EventInput, type Summary,
 } from './analyze-six-stage-transitions-prereg'
 import { renderDwellSectorReport } from './lib/six-stage-dwell-sector-report'
+import { classificationValidationOptionsFromEnv, readClassificationSource, validateClassificationSource } from '@/lib/classification-source'
 
 const FOUNDATION = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'v5', 'E039-JP-scale-consistent-phase1b0-foundation')
 const EVENTS_PATH = path.join(FOUNDATION, 'events.sqlite')
@@ -40,8 +42,23 @@ const STUDY_BLOCKS: Record<StudyKey, readonly Block[]> = { A: YEAR_BLOCKS, B33: 
 const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '', RESULT_ROOT_AB)
 const realPath = (file: string) => fs.realpathSync(file)
 
-// 今の 60 分類を、11/15 の Backup の写し (読み取り専用) から書き出す。本番の DB は読まない。
-function exportSector60(out: string): void {
+export const SECTOR60_CSV_NOTE = '60 分類は、事前登録の Backup の写しの stock_classification ではなく、その取り込み元の四季報 CSV (同じ分類の元データ) から読んだ。'
+  + '理由: 使える Backup の写しが「公開済み」ではなかったため (2026-11-12 オーナー決定)。CSV は今上場している銘柄だけを含む。'
+// 今の 60 分類を、Backup の写し (読み取り専用) または四季報 CSV の写しから書き出す。本番の DB は読まない。
+async function exportSector60(out: string): Promise<void> {
+  const csv = process.argv.find((arg) => arg.startsWith('--csv='))?.slice(6) ?? ''
+  if (csv) {
+    // classification-sync と同じ読み取りと確認 (60 分類・件数など) を通した、四季報 CSV の「大分類」。元の CSV ではなく写しを渡す。
+    if (!path.isAbsolute(csv) || !fs.existsSync(csv)) throw new Error('--csv=<absolute path of the CSV copy> is required')
+    const source = await readClassificationSource(realPath(csv))
+    validateClassificationSource(source, classificationValidationOptionsFromEnv())
+    const sectors = Object.fromEntries(source.records.map((row) => [row.ticker, row.majorCategory]))
+    fs.mkdirSync(out, { recursive: true })
+    writeOnce(path.join(out, 'sector60.json'), `${JSON.stringify({ source: 'shikiho-csv.大分類', csv: realPath(csv), csvSha256: sha256File(realPath(csv)),
+      note: SECTOR60_CSV_NOTE, sectors })}\n`)
+    console.log(`sector60 (csv): ${source.records.length} tickers, ${source.majorCategoryCount} categories`)
+    return
+  }
   const db = process.argv.find((arg) => arg.startsWith('--db='))?.slice(5) ?? ''
   if (!path.isAbsolute(db) || !fs.existsSync(db)) throw new Error('--db=<absolute path of the backup copy> is required')
   if (realPath(db).startsWith(`${realPath(PRODUCTION_DB_DIRECTORY)}${path.sep}`)) throw new Error('refusing to read the production DB directory')
@@ -320,7 +337,8 @@ function analyze(out: string): void {
     namespace: 'PREREG_DWELL_SECTOR_20261111_RESULT_V1', generatedAt: new Date().toISOString(),
     prereg: 'research/6stage/event-path-research/PREREG_DWELL_SECTOR_20261111.md',
     inputs: { events: EVENTS_PATH, source: SOURCE_PATH, eventsSha256: inputs.eventsSha, sourceSha256: inputs.manifestSourceSha,
-      segments: segmentFile, segmentsSha256: sha256File(segmentFile), sector60: sector60File, sector60Sha256: sha256File(sector60File) },
+      segments: segmentFile, segmentsSha256: sha256File(segmentFile), sector60: sector60File, sector60Sha256: sha256File(sector60File),
+      sector60Source: (({ sectors: _sectors, ...rest }) => rest)(JSON.parse(fs.readFileSync(sector60File, 'utf8'))) },
     counts, groups: GROUPS, blocks: STUDY_BLOCKS, sector33Names: listing.sector33Names, hypotheses,
     studies: { A: { tables: tables('A'), figures: figures('A'), dwell: dwell('A') }, B33: { tables: tables('B33'), figures: figures('B33') },
       B60: { tables: tables('B60') } },
@@ -345,7 +363,7 @@ if (require.main === module) {
   const mode = process.argv[2]
   const out = outputDirectory()
   if (mode === 'sectors') fetchSegments(out).catch((error) => { console.error(error); process.exit(1) })
-  else if (mode === 'sector60') exportSector60(out)
+  else if (mode === 'sector60') exportSector60(out).catch((error) => { console.error(error); process.exit(1) })
   else if (mode === 'analyze') analyze(out)
   else if (mode === 'render') renderOnly(out)
   else throw new Error('mode must be sectors, sector60, analyze or render')
