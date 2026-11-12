@@ -31,6 +31,7 @@ export const DEFAULTS = {
   analog: 'http://127.0.0.1:3105',
   freshnessLog: path.join(home, 'Library', 'Logs', 'StockBoard', 'data-freshness-guard.log'),
   updateLog: path.join(home, 'Library', 'Logs', 'StockBoard', 'update-latest.log'),
+  usUpdateLog: path.join(home, 'Library', 'Logs', 'StockBoard', 'us-update-latest.log'),
   minimumFreeBytes: 50 * 1024 ** 3,
   ttlMinutes: 12,
 }
@@ -58,27 +59,61 @@ export function checkHealth(health: any, role: string): void {
 // 鮮度の見張りの記録は 60 分以内のものだけ使う。P1 当日は見張りも 07:55 に止めるため、15 分では足りない
 // (書き込む処理も止めているので、その間にデータは変わらない)。
 export const FRESHNESS_MAX_AGE_MINUTES = 60
-export function checkFreshness(freshness: any, now = new Date()): { jp: string; us: string } {
+// 米国株の取り込みが partial のときに通す条件 (10/29 の配置で実際に使った条件。カバー率は 2026-11-12 オーナー決定で 98% 以上)。
+export const US_PARTIAL_MIN_COVERAGE_PCT = 98
+export const JP_FRESHNESS_KEYS = ['price', 'snapshot', 'indices', 'dashboardCache', 'physicalScores', 'feature', 'modelFeature', 'mlFeature',
+  'mlContext', 'mlPhysicsFeature', 'mlCandidate', 'mlPrediction', 'mlPhysicsCandidate', 'mlSimilar'] as const
+export const US_FRESHNESS_KEYS = ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'mlFeature', 'mlContext', 'mlPhysicsFeature',
+  'mlCandidate', 'mlPrediction', 'mlPhysicsCandidate', 'mlSimilar'] as const
+
+export type UsCompletion = { status: string | null; failed: number; pendingEmpty: number; pendingTargetMissing: number
+  temporaryNotFound: number; deferred: number; promotionGuardTriggered: string | null; latest: string | null }
+// us-update-latest.log の最後の「US OHLCV complete:」の行。
+export function parseUsCompletion(log: string): UsCompletion | null {
+  const line = log.split('\n').filter((row) => row.startsWith('US OHLCV complete:')).at(-1)
+  if (!line) return null
+  const value = (key: string) => line.match(new RegExp(`\\b${key}=([^, ]+)`))?.[1] ?? null
+  const number = (key: string) => { const raw = value(key); return raw != null && /^\d+$/.test(raw) ? Number(raw) : NaN }
+  return { status: value('status'), failed: number('failed'), pendingEmpty: number('pendingEmpty'), pendingTargetMissing: number('pendingTargetMissing'),
+    temporaryNotFound: number('temporaryNotFound'), deferred: number('deferred'), promotionGuardTriggered: value('promotionGuardTriggered'), latest: value('latest') }
+}
+
+export type UsIngestionEvidence = { status: 'PASS' | 'PASS_WITH_RECORDED_PARTIAL_COVERAGE'; ingestionStatus: string; coveragePct: number | null
+  pendingTargetMissing: number; completionLatest: string | null }
+
+export function checkFreshness(freshness: any, now = new Date(), usCompletion: UsCompletion | null = null): { jp: string; us: string; usIngestion: UsIngestionEvidence } {
   const checkedAt = Date.parse(freshness?.checkedAt ?? '')
   if (!Number.isFinite(checkedAt) || checkedAt > now.getTime() + 5 * 60_000
     || now.getTime() - checkedAt > FRESHNESS_MAX_AGE_MINUTES * 60_000) fail('freshness_report_stale')
   const jp = freshness?.expected?.jp; const us = freshness?.expected?.us
   if (!/^\d{4}-\d{2}-\d{2}$/.test(jp) || !/^\d{4}-\d{2}-\d{2}$/.test(us)) fail('freshness_reference')
-  for (const key of ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'feature', 'mlFeature', 'mlPrediction']) {
-    if (freshness.dates?.jp?.[key] !== jp) fail(`jp_freshness:${key}`)
-  }
-  for (const key of ['price', 'snapshot', 'dashboardCache', 'physicalScores', 'mlFeature', 'mlPrediction']) {
-    if (freshness.dates?.us?.[key] !== us) fail(`us_freshness:${key}`)
-  }
+  // 確かめる項目は 10/29 の配置と同じ (米国の mlRlPolicy は 10/29 も対象外)。
+  for (const key of JP_FRESHNESS_KEYS) if (freshness.dates?.jp?.[key] !== jp) fail(`jp_freshness:${key}`)
+  for (const key of US_FRESHNESS_KEYS) if (freshness.dates?.us?.[key] !== us) fail(`us_freshness:${key}`)
   const automation = freshness.usAutomation ?? {}
   if (automation.priceBasis !== PRICE_BASIS.US || automation.derivedPriceBasis !== PRICE_BASIS.US || automation.analogPriceBasis !== PRICE_BASIS.US
-    || automation.priceBasisCurrent !== true || automation.ingestionStatus !== 'complete' || automation.ingestionNeedsRetry !== false) {
-    fail('us_price_basis_or_ingestion')
-  }
-  for (const key of ['jp-core', 'us']) if (freshness.actions?.find((action: any) => action.key === key)?.state !== 'fresh') fail(`freshness_action:${key}`)
+    || automation.priceBasisCurrent !== true) fail('us_price_basis')
+  const usAction = freshness.actions?.find((action: any) => action.key === 'us')
+  if (freshness.actions?.find((action: any) => action.key === 'jp-core')?.state !== 'fresh') fail('freshness_action:jp-core')
+  let usIngestion: UsIngestionEvidence
+  if (automation.ingestionStatus === 'complete' && automation.ingestionNeedsRetry === false) {
+    if (usAction?.state !== 'fresh') fail('freshness_action:us')
+    usIngestion = { status: 'PASS', ingestionStatus: 'complete', coveragePct: automation.coveragePct ?? null, pendingTargetMissing: 0, completionLatest: usCompletion?.latest ?? null }
+  } else if (automation.ingestionStatus === 'partial') {
+    // 足りないのが「その日の行が無い」銘柄だけで、最新日が予定どおり、カバー率 98% 以上、派生のデータが最新のときだけ通す。
+    const health = freshness.usCoverageHealth ?? {}
+    if (health.pmsStatus !== 'ok' || health.featureStatus !== 'ok' || health.pmsDate !== us || health.featureDate !== us) fail('us_derived_health_not_current')
+    if (!(Number(automation.coveragePct) >= US_PARTIAL_MIN_COVERAGE_PCT)) fail(`us_partial_coverage_below_${US_PARTIAL_MIN_COVERAGE_PCT}`)
+    if (!['fresh', 'would_trigger'].includes(usAction?.state) || !String(usAction?.reason ?? '').includes('stale=-')) fail('freshness_action:us')
+    const c = usCompletion
+    if (!c || c.status !== 'partial' || c.latest !== us || c.failed !== 0 || c.pendingEmpty !== 0 || c.temporaryNotFound !== 0
+      || c.deferred !== 0 || c.promotionGuardTriggered !== 'false' || !(c.pendingTargetMissing > 0)) fail('us_ingestion_failure_not_only_target_missing')
+    usIngestion = { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: automation.coveragePct,
+      pendingTargetMissing: c.pendingTargetMissing, completionLatest: c.latest }
+  } else fail(`us_ingestion:${automation.ingestionStatus}`)
   const blocking = (freshness.activeLocks ?? []).filter((lock: string) => lock !== 'trigger_historical_worker')
   if (blocking.length > 0) fail(`blocking_active_locks:${blocking.join(',')}`)
-  return { jp, us }
+  return { jp, us, usIngestion }
 }
 
 export function writerProcesses(psOutput: string): string[] {
@@ -104,14 +139,16 @@ export function assertOutputDirectory(out: string, releaseRoot: string): string 
   return out
 }
 
-function parseArguments(argv: readonly string[]) {
+export function parseArguments(argv: readonly string[]) {
   const value = (name: string) => argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
   const mode = argv.includes('--write') ? 'write' as const : argv.includes('--check') ? 'check' as const : fail('mode_--check_or_--write_required')
   const required = (name: string) => value(name) || fail(`--${name}_required`)
   const baseline = required('baseline')
   if (!/^[0-9a-f]{40}$/.test(baseline)) fail('baseline_must_be_40_hex')
   if (argv.includes('--with-http') && mode !== 'check') fail('--with-http_is_only_for_--check')
-  return { mode, withHttp: mode === 'write' || argv.includes('--with-http'), releaseRoot: required('release-root'), artifact: required('artifact'), runtime: required('runtime'), baseline,
+  // 本当の候補がまだ無いとき、今の本番のビルドと束を「代わりの候補」として確認だけ行う。証明は作らない。
+  if (argv.includes('--substitute-candidate') && mode !== 'check') fail('--substitute-candidate_is_only_for_--check')
+  return { mode, substituteCandidate: argv.includes('--substitute-candidate'), withHttp: mode === 'write' || argv.includes('--with-http'), releaseRoot: required('release-root'), artifact: required('artifact'), runtime: required('runtime'), baseline,
     priorBaseline: value('prior-baseline'), out: mode === 'write' ? required('out') : null }
 }
 
@@ -162,7 +199,7 @@ async function main(): Promise<void> {
 
   // データの鮮度・書き込み中の処理・ロック
   const freshness = latestFreshness()
-  const expected = checkFreshness(freshness)
+  const expected = checkFreshness(freshness, new Date(), parseUsCompletion(fs.readFileSync(DEFAULTS.usUpdateLog, 'utf8')))
   const processes = command('/bin/ps', ['-axo', 'pid=,ppid=,etime=,state=,command='])
   const writers = writerProcesses(processes)
   if (writers.length > 0) fail(`writer_process:${writers.join('|')}`)
@@ -193,9 +230,9 @@ async function main(): Promise<void> {
   }
   evidence['preflight-jp-source.json'] = { status: 'PASS', expectedLatestSession: expected.jp, observedLatestSession: freshness.dates.jp.price,
     source: 'J-Quants daily updater', database: statEvidence(DEFAULTS.jpDb), dailyRunLogSha256: sha256File(DEFAULTS.updateLog) }
-  evidence['preflight-us-source.json'] = { status: 'PASS', expectedLatestSession: expected.us, observedLatestSession: freshness.dates.us.price,
-    source: 'Tiingo adjusted OHLC ratio v1', database: statEvidence(DEFAULTS.usDb), coveragePct: freshness.usAutomation.coveragePct,
-    ingestionStatus: freshness.usAutomation.ingestionStatus }
+  evidence['preflight-us-source.json'] = { expectedLatestSession: expected.us, observedLatestSession: freshness.dates.us.price,
+    source: 'Tiingo adjusted OHLC ratio v1', database: statEvidence(DEFAULTS.usDb), universe: freshness.usAutomation.universe,
+    covered: freshness.usAutomation.covered, ...expected.usIngestion }
   evidence['preflight-price-basis.json'] = { status: 'PASS', ...PRICE_BASIS }
   evidence['preflight-sma-freshness.json'] = { status: 'PASS', checkedAt: freshness.checkedAt, dryRun: freshness.dryRun, expected: freshness.expected,
     jp: freshness.dates.jp, us: freshness.dates.us, nonBlockingAttention: (freshness.actions ?? []).filter((action: any) => action.state !== 'fresh') }
@@ -209,7 +246,8 @@ async function main(): Promise<void> {
   const rollbackIdentity = JSON.parse(fs.readFileSync(path.join(path.dirname(rollbackTarget), 'runtime-manifest.json'), 'utf8')).hashes.runtimeIdentitySha256
   const live = path.join(releaseRoot, '.next-live')
   const summary = {
-    mode: args.mode, candidate: { commit: candidateManifest.candidateCommit, buildId: candidateBuild, artifactTreeSha256: candidateManifest.treeSha256 },
+    mode: args.mode, candidateKind: args.substituteCandidate ? 'SUBSTITUTE: 代わりの候補 (今の本番のビルドと束) で試した' : 'RELEASE_CANDIDATE',
+    usIngestion: expected.usIngestion, candidate: { commit: candidateManifest.candidateCommit, buildId: candidateBuild, artifactTreeSha256: candidateManifest.treeSha256 },
     runtime: { dir: args.runtime, identitySha256: candidateRuntime.hashes.runtimeIdentitySha256, baselineSha: candidateRuntime.baselineSha },
     rollback: { buildId: fs.readFileSync(path.join(live, 'BUILD_ID'), 'utf8').trim(), artifactTreeSha256: activeArtifactTreeIdentity(live).treeSha256,
       runtimeNodeModulesTarget: rollbackTarget, runtimeIdentitySha256: rollbackIdentity },

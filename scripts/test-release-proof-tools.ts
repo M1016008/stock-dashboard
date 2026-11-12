@@ -3,7 +3,7 @@ import fs, { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseBundleArguments } from './create-release-runtime-bundle'
-import { assertOutputDirectory, checkFreshness, checkHealth, checkHistory, writerProcesses } from './create-sma-release-preflight-proof'
+import { JP_FRESHNESS_KEYS, US_FRESHNESS_KEYS, assertOutputDirectory, checkFreshness, checkHealth, checkHistory, parseArguments, parseUsCompletion, writerProcesses } from './create-sma-release-preflight-proof'
 import { REHEARSAL_PARENT, REHEARSAL_PORTS, assertRehearsalRoot } from './rehearse-web-analog-release'
 
 const sha = (c: string) => c.repeat(40)
@@ -26,7 +26,7 @@ checkHealth({ status: 'ok', overall: 'healthy', storageStatus: 'available' }, 'w
 assert.throws(() => checkHealth({ status: 'degraded', overall: 'degraded', storageStatus: 'verifying' }, 'web'), /health:web/)
 
 // 証明: 鮮度 (米国の取り込みが partial なら止まる)
-const dates = (day: string) => Object.fromEntries(['price', 'snapshot', 'dashboardCache', 'physicalScores', 'feature', 'mlFeature', 'mlPrediction'].map((key) => [key, day]))
+const dates = (day: string) => Object.fromEntries([...new Set([...JP_FRESHNESS_KEYS, ...US_FRESHNESS_KEYS])].map((key) => [key, day]))
 const basis = 'tiingo_adj_ohlc_ratio_v1'
 const freshness = {
   checkedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
@@ -34,10 +34,38 @@ const freshness = {
   usAutomation: { priceBasis: basis, derivedPriceBasis: basis, analogPriceBasis: basis, priceBasisCurrent: true, ingestionStatus: 'complete', ingestionNeedsRetry: false },
   actions: [{ key: 'jp-core', state: 'fresh' }, { key: 'us', state: 'fresh' }], activeLocks: ['trigger_historical_worker'],
 }
-assert.deepEqual(checkFreshness(freshness), { jp: '2026-11-27', us: '2026-11-27' })
+assert.deepEqual(checkFreshness(freshness).usIngestion.status, 'PASS')
+assert.equal(checkFreshness(freshness).us, '2026-11-27')
 assert.throws(() => checkFreshness({ ...freshness, checkedAt: new Date(Date.now() - 61 * 60_000).toISOString() }), /freshness_report_stale/)
 assert.throws(() => checkFreshness({ ...freshness, checkedAt: 'x' }), /freshness_report_stale/)
-assert.throws(() => checkFreshness({ ...freshness, usAutomation: { ...freshness.usAutomation, ingestionStatus: 'partial', ingestionNeedsRetry: true } }), /us_price_basis_or_ingestion/)
+// 米国株の partial: 足りないのが「その日の行が無い」銘柄だけ、最新日が予定どおり、カバー率 98% 以上、派生のデータが最新なら、記録を残して通す。
+const completionLine = (fields: string) => `US OHLCV complete: status=partial, succeeded=11467, failed=0, pendingEmpty=0, ${fields}, providerNotFound=0, temporaryNotFound=0, newlyPermanent=0, revertedFromPermanent=0, promotionGuardTriggered=false, deferred=0, rows=11591, latest=2026-11-27`
+const completion = parseUsCompletion(`x\nUS OHLCV complete: status=partial, succeeded=0, pendingTargetMissing=11570, latest=2026-11-26\n${completionLine('pendingTargetMissing=83')}\n`)!
+assert.deepEqual(completion, { status: 'partial', failed: 0, pendingEmpty: 0, pendingTargetMissing: 83, temporaryNotFound: 0, deferred: 0, promotionGuardTriggered: 'false', latest: '2026-11-27' })
+const partial = { ...freshness, usAutomation: { ...freshness.usAutomation, ingestionStatus: 'partial', ingestionNeedsRetry: true, coveragePct: 99.28 },
+  usCoverageHealth: { pmsStatus: 'ok', featureStatus: 'ok', pmsDate: '2026-11-27', featureDate: '2026-11-27' },
+  actions: [{ key: 'jp-core', state: 'fresh' }, { key: 'us', state: 'would_trigger', reason: 'expected=2026-11-27, stale=-, ingestion=partial' }] }
+assert.deepEqual(checkFreshness(partial, new Date(), completion).usIngestion,
+  { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: 99.28, pendingTargetMissing: 83, completionLatest: '2026-11-27' })
+assert.throws(() => checkFreshness({ ...partial, usAutomation: { ...partial.usAutomation, coveragePct: 97.9 } }, new Date(), completion), /us_partial_coverage_below_98/)
+assert.throws(() => checkFreshness(partial, new Date(), { ...completion, failed: 1 }), /not_only_target_missing/)
+assert.throws(() => checkFreshness(partial, new Date(), { ...completion, deferred: 2 }), /not_only_target_missing/)
+assert.throws(() => checkFreshness(partial, new Date(), { ...completion, latest: '2026-11-26' }), /not_only_target_missing/)
+assert.throws(() => checkFreshness(partial, new Date(), null), /not_only_target_missing/)
+assert.throws(() => checkFreshness(partial, new Date(), { ...completion, promotionGuardTriggered: null }), /not_only_target_missing/)
+// 最後の行が 06:30 の止まった回 (最新日が古い) や古い形の行なら止まる。
+const stopped = parseUsCompletion(`${completionLine('pendingTargetMissing=83')}\nUS OHLCV complete: status=partial, succeeded=0, failed=0, pendingEmpty=0, pendingTargetMissing=11570, temporaryNotFound=0, promotionGuardTriggered=false, deferred=0, rows=295, latest=2026-11-26\n`)
+assert.throws(() => checkFreshness(partial, new Date(), stopped), /not_only_target_missing/)
+assert.throws(() => checkFreshness(partial, new Date(), parseUsCompletion('US OHLCV complete: succeeded=447, failed=0, unavailable=0, deferred=0, rows=0, latest=2026-11-27\n')), /not_only_target_missing/)
+assert.throws(() => checkFreshness({ ...partial, dates: { ...partial.dates, us: { ...partial.dates.us, mlSimilar: '2026-11-26' } } }, new Date(), completion), /us_freshness:mlSimilar/)
+// 代わりの候補は --check でだけ。
+const common = ['--release-root=/x', '--artifact=/a', '--runtime=/r', `--baseline=${sha('c')}`]
+assert.equal(parseArguments(['--check', '--substitute-candidate', ...common]).substituteCandidate, true)
+assert.throws(() => parseArguments(['--write', '--out=/o', '--substitute-candidate', ...common]), /substitute-candidate_is_only_for_--check/)
+assert.match(readFileSync('scripts/create-sma-release-preflight-proof.ts', 'utf8'), /candidateKind: args\.substituteCandidate \? 'SUBSTITUTE: 代わりの候補/)
+assert.throws(() => checkFreshness({ ...partial, usCoverageHealth: { ...partial.usCoverageHealth, featureDate: '2026-11-26' } }, new Date(), completion), /us_derived_health_not_current/)
+assert.throws(() => checkFreshness({ ...partial, actions: [partial.actions[0], { key: 'us', state: 'would_trigger', reason: 'stale=snapshot' }] }, new Date(), completion), /freshness_action:us/)
+assert.throws(() => checkFreshness({ ...freshness, usAutomation: { ...freshness.usAutomation, ingestionStatus: 'failed' } }), /us_ingestion:failed/)
 assert.throws(() => checkFreshness({ ...freshness, activeLocks: ['weekly'] }), /blocking_active_locks/)
 assert.throws(() => checkFreshness({ ...freshness, dates: { ...freshness.dates, jp: dates('2026-11-26') } }), /jp_freshness/)
 
