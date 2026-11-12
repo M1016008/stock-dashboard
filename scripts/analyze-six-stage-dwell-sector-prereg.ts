@@ -3,7 +3,7 @@
 // 研究 1・2 の集計 (analyze-six-stage-transitions-prereg.ts) の部品をそのまま使う。
 //
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx --env-file=<jquants.env> scripts/analyze-six-stage-dwell-sector-prereg.ts sectors --out=<dir>
-//   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts sector60 --db=<Backup の写しの stockboard.db> --out=<dir>
+//   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts sector60 --out=<dir>   (読み元は承認した四季報 CSV の写しに固定)
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts analyze --out=<dir>
 //   npx tsx scripts/analyze-six-stage-dwell-sector-prereg.ts render --out=<dir> --name=report-<suffix>.html
 import fs from 'node:fs'
@@ -20,13 +20,13 @@ import {
   pathBands, previousMonth, selectTickerEvents, storeOutcome, summarize, writeOnce, type EventInput, type Summary,
 } from './analyze-six-stage-transitions-prereg'
 import { renderDwellSectorReport } from './lib/six-stage-dwell-sector-report'
+import { classificationValidationOptionsFromEnv, readClassificationSource, validateClassificationSource } from '@/lib/classification-source'
 
 const FOUNDATION = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'v5', 'E039-JP-scale-consistent-phase1b0-foundation')
 const EVENTS_PATH = path.join(FOUNDATION, 'events.sqlite')
 const SOURCE_PATH = path.join(SIX_STAGE_REAL_RESEARCH_ROOT,
   'six-stage-discovery-source-export-20261025T211500JST-v2-r2.incomplete', 'jp-discovery-ohlcv.sqlite')
 export const RESULT_ROOT_AB = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'prereg-dwell-sector-20261111')
-const PRODUCTION_DB_DIRECTORY = '/Volumes/OWC Express 1M2 80G/stock-dashboard'
 const RETURN_ROWS = 20
 const B33_FROM = '2016-12-01'
 type Block = readonly [name: string, fromMonth: string, toMonth: string]
@@ -40,18 +40,28 @@ const STUDY_BLOCKS: Record<StudyKey, readonly Block[]> = { A: YEAR_BLOCKS, B33: 
 const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '', RESULT_ROOT_AB)
 const realPath = (file: string) => fs.realpathSync(file)
 
-// 今の 60 分類を、11/15 の Backup の写し (読み取り専用) から書き出す。本番の DB は読まない。
-function exportSector60(out: string): void {
-  const db = process.argv.find((arg) => arg.startsWith('--db='))?.slice(5) ?? ''
-  if (!path.isAbsolute(db) || !fs.existsSync(db)) throw new Error('--db=<absolute path of the backup copy> is required')
-  if (realPath(db).startsWith(`${realPath(PRODUCTION_DB_DIRECTORY)}${path.sep}`)) throw new Error('refusing to read the production DB directory')
-  const database = openImmutable(realPath(db))
-  const rows = database.prepare(`SELECT ticker, major_category FROM stock_classification WHERE major_category IS NOT NULL AND major_category <> ''`).all()
-  database.close()
-  const sectors = Object.fromEntries(rows.map((row) => [String(row.ticker), String(row.major_category)]))
+// 60 分類の読み元は、承認した四季報 CSV の写しに固定する (2026-11-12 オーナー決定。事前登録の「変更の記録」)。
+export const SECTOR60_CSV = path.join(RESULT_ROOT_AB, 'inputs-shikiho-csv-20261112', '会社四季報_20261112T1543.csv')
+export const SECTOR60_CSV_SHA256 = 'daae27ede8467ab63a2eadc11aa5d4db63e0f223b2dc50a8b85aba62a202a3fb'
+export const SECTOR60_CSV_NOTE = '60 分類は、事前登録の Backup の写しの stock_classification ではなく、その取り込み元の四季報 CSV (同じ分類の元データ) から読んだ。'
+  + '理由: 使える Backup の写しが「公開済み」ではなかったため (2026-11-12 オーナー決定)。CSV は今上場している銘柄だけを含む。'
+// 承認した CSV の写しを、classification-sync と同じ読み取りと確認 (60 分類・件数など) で読み、「大分類」を返す。
+async function readSector60Csv(): Promise<{ source: string; csv: string; csvSha256: string; note: string; sectors: Record<string, string> }> {
+  const csv = realPath(SECTOR60_CSV)
+  const csvSha256 = sha256File(csv)
+  if (csv !== SECTOR60_CSV || csvSha256 !== SECTOR60_CSV_SHA256) throw new Error('sector60 must be read from the approved Shikiho CSV copy')
+  const source = await readClassificationSource(csv)
+  validateClassificationSource(source, classificationValidationOptionsFromEnv())
+  return { source: 'shikiho-csv.大分類', csv, csvSha256, note: SECTOR60_CSV_NOTE,
+    sectors: Object.fromEntries(source.records.map((row) => [row.ticker, row.majorCategory])) }
+}
+
+// 今の 60 分類を、四季報 CSV の写しから書き出す。
+async function exportSector60(out: string): Promise<void> {
+  const record = await readSector60Csv()
   fs.mkdirSync(out, { recursive: true })
-  writeOnce(path.join(out, 'sector60.json'), `${JSON.stringify({ source: 'stock_classification.major_category', db: realPath(db), dbSha256: sha256File(realPath(db)), sectors })}\n`)
-  console.log(`sector60: ${rows.length} tickers, ${new Set(Object.values(sectors)).size} categories`)
+  writeOnce(path.join(out, 'sector60.json'), `${JSON.stringify(record)}\n`)
+  console.log(`sector60: ${Object.keys(record.sectors).length} tickers, ${new Set(Object.values(record.sectors)).size} categories`)
 }
 
 // 1 日分の業種ごとの 20 日騰落 (小さい順)。order は業種の並び順 (同じ値のときの順)。
@@ -130,13 +140,16 @@ function compact(s: Summary): number[] | 0 {
   return has(s) ? [s.n, ...[s.winLong, s.winShort, s.mean, s.median, s.q10, s.q25, s.q75, s.q90, s.mfeMedian, s.maeMedian].map(round)] : 0
 }
 
-function analyze(out: string): void {
+async function analyze(out: string): Promise<void> {
   const inputs = assertInputs()
   const segmentFile = path.join(out, 'segments.json')
   const sector60File = path.join(out, 'sector60.json')
   for (const file of [segmentFile, sector60File]) if (!fs.existsSync(file)) throw new Error(`run the ${path.basename(file, '.json').replace('segments', 'sectors')} step first`)
   const listing: { sector33Names: Record<string, string>; months: Record<string, { sectors33: Record<string, string> }> } = JSON.parse(fs.readFileSync(segmentFile, 'utf8'))
-  const sector60: Record<string, string> = JSON.parse(fs.readFileSync(sector60File, 'utf8')).sectors
+  // 書き出した 60 分類が、承認した CSV の写しから作ったものと同じことを、読み直して確かめる。
+  const sector60Record = await readSector60Csv()
+  if (fs.readFileSync(sector60File, 'utf8') !== `${JSON.stringify(sector60Record)}\n`) throw new Error('sector60.json does not match the approved Shikiho CSV copy')
+  const sector60: Record<string, string> = sector60Record.sectors
   const source = openImmutable(SOURCE_PATH)
   const eventsDb = openImmutable(EVENTS_PATH)
   const calendar = loadCalendar(source)
@@ -320,7 +333,8 @@ function analyze(out: string): void {
     namespace: 'PREREG_DWELL_SECTOR_20261111_RESULT_V1', generatedAt: new Date().toISOString(),
     prereg: 'research/6stage/event-path-research/PREREG_DWELL_SECTOR_20261111.md',
     inputs: { events: EVENTS_PATH, source: SOURCE_PATH, eventsSha256: inputs.eventsSha, sourceSha256: inputs.manifestSourceSha,
-      segments: segmentFile, segmentsSha256: sha256File(segmentFile), sector60: sector60File, sector60Sha256: sha256File(sector60File) },
+      segments: segmentFile, segmentsSha256: sha256File(segmentFile), sector60: sector60File, sector60Sha256: sha256File(sector60File),
+      sector60Source: { source: sector60Record.source, csv: sector60Record.csv, csvSha256: sector60Record.csvSha256, note: sector60Record.note } },
     counts, groups: GROUPS, blocks: STUDY_BLOCKS, sector33Names: listing.sector33Names, hypotheses,
     studies: { A: { tables: tables('A'), figures: figures('A'), dwell: dwell('A') }, B33: { tables: tables('B33'), figures: figures('B33') },
       B60: { tables: tables('B60') } },
@@ -345,8 +359,8 @@ if (require.main === module) {
   const mode = process.argv[2]
   const out = outputDirectory()
   if (mode === 'sectors') fetchSegments(out).catch((error) => { console.error(error); process.exit(1) })
-  else if (mode === 'sector60') exportSector60(out)
-  else if (mode === 'analyze') analyze(out)
+  else if (mode === 'sector60') exportSector60(out).catch((error) => { console.error(error); process.exit(1) })
+  else if (mode === 'analyze') analyze(out).catch((error) => { console.error(error); process.exit(1) })
   else if (mode === 'render') renderOnly(out)
   else throw new Error('mode must be sectors, sector60, analyze or render')
 }

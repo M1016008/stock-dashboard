@@ -11,6 +11,10 @@ const NOTICES = [
 
 export function renderDwellSectorReport(result: unknown): string {
   const data = JSON.stringify(result).replace(/</g, '\\u003c')
+  // 60 分類の読み元 (sector60.json の記録)。事前登録から変えた場合は、その旨と理由を表示する。
+  const source60 = (result as { inputs?: { sector60Source?: Record<string, string> } }).inputs?.sector60Source
+  const escape = (text: string) => text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+  const source60Html = source60 ? `<p>60 分類の読み元: ${escape(source60.csv ?? '')} (SHA-256 ${escape(source60.csvSha256 ?? '')})。${escape(source60.note ?? '')}</p>` : ''
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>滞在日数と業種の強さの研究 (事前登録 2026-11-11)</title><style>${REPORT_STYLE}</style></head><body>
 <header><h1>滞在日数と業種の強さで分けた遷移のその後の値動き</h1><p class="sub">事前登録: research/6stage/event-path-research/PREREG_DWELL_SECTOR_20261111.md (日本株、Discovery 期間 2022-12-30 まで)</p>
@@ -23,7 +27,7 @@ export function renderDwellSectorReport(result: unknown): string {
 <figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="pathA"></svg></figure></div><div id="tableA"></div></section>
 <section><h2>研究 B: 業種の強さ (33 業種)</h2><div class="grid"><figure><figcaption>③ リターンの分布 (割合 %)</figcaption><svg id="histB"></svg></figure>
 <figure><figcaption>④ シグナルの日からの値動きの道筋</figcaption><svg id="pathB"></svg></figure></div><div id="tableB"></div></section>
-<section><h2>研究 B: 業種の強さ (60 分類、探索)</h2><div id="tableB60"></div></section>
+<section><h2>研究 B: 業種の強さ (60 分類、探索)</h2>${source60Html}<div id="tableB60"></div></section>
 <section><h2>遷移ごとの数字 (探索)</h2><p id="tnote"></p><p>遷移を選ぶ (入力すると候補が出る。例: 111111&gt;111112) <input id="tkey" size="16" list="tlist"><datalist id="tlist"></datalist> <button id="tgo">表示</button></p><div id="tout"></div></section>
 <section><h2>件数の内訳 (除外・重複・結果の無い期間)</h2><div id="counts"></div></section></main>
 <script>const RESULT=${data};${REPORT_HELPERS}${SCRIPT}</script></body></html>

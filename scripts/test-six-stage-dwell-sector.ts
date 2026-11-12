@@ -88,4 +88,9 @@ const html = renderDwellSectorReport({ counts: {}, hypotheses: [], note: '</scri
 assert.match(html, /'transitions\/'\+sh\+'\.js'/)
 assert.doesNotMatch(html, /<\/script>"/)
 
+// 60 分類の読み元 (事前登録から変えた場合の理由) を、文字を逃がして報告ページに出す。
+const sourced = renderDwellSectorReport({ counts: {}, hypotheses: [], inputs: { sector60Source: { csv: '/x/a<b>.csv', csvSha256: 'abc', note: '理由&' } } })
+assert.match(sourced, /60 分類の読み元: \/x\/a&lt;b&gt;\.csv \(SHA-256 abc\)。理由&amp;/)
+assert.doesNotMatch(html, /60 分類の読み元/)
+
 console.log('test-six-stage-dwell-sector: ok')
