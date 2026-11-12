@@ -45,21 +45,23 @@ export const SECTOR60_CSV = path.join(RESULT_ROOT_AB, 'inputs-shikiho-csv-202611
 export const SECTOR60_CSV_SHA256 = 'daae27ede8467ab63a2eadc11aa5d4db63e0f223b2dc50a8b85aba62a202a3fb'
 export const SECTOR60_CSV_NOTE = '60 分類は、事前登録の Backup の写しの stock_classification ではなく、その取り込み元の四季報 CSV (同じ分類の元データ) から読んだ。'
   + '理由: 使える Backup の写しが「公開済み」ではなかったため (2026-11-12 オーナー決定)。CSV は今上場している銘柄だけを含む。'
-const assertSector60Csv = (file: string, sha256: string) => {
-  if (file !== realPath(SECTOR60_CSV) || sha256 !== SECTOR60_CSV_SHA256) throw new Error('sector60 must be read from the approved Shikiho CSV copy')
-}
-
-// 今の 60 分類を、四季報 CSV の写しの「大分類」から書き出す。classification-sync と同じ読み取りと確認 (60 分類・件数など) を通す。
-async function exportSector60(out: string): Promise<void> {
+// 承認した CSV の写しを、classification-sync と同じ読み取りと確認 (60 分類・件数など) で読み、「大分類」を返す。
+async function readSector60Csv(): Promise<{ source: string; csv: string; csvSha256: string; note: string; sectors: Record<string, string> }> {
   const csv = realPath(SECTOR60_CSV)
   const csvSha256 = sha256File(csv)
-  assertSector60Csv(csv, csvSha256)
+  if (csv !== SECTOR60_CSV || csvSha256 !== SECTOR60_CSV_SHA256) throw new Error('sector60 must be read from the approved Shikiho CSV copy')
   const source = await readClassificationSource(csv)
   validateClassificationSource(source, classificationValidationOptionsFromEnv())
-  const sectors = Object.fromEntries(source.records.map((row) => [row.ticker, row.majorCategory]))
+  return { source: 'shikiho-csv.大分類', csv, csvSha256, note: SECTOR60_CSV_NOTE,
+    sectors: Object.fromEntries(source.records.map((row) => [row.ticker, row.majorCategory])) }
+}
+
+// 今の 60 分類を、四季報 CSV の写しから書き出す。
+async function exportSector60(out: string): Promise<void> {
+  const record = await readSector60Csv()
   fs.mkdirSync(out, { recursive: true })
-  writeOnce(path.join(out, 'sector60.json'), `${JSON.stringify({ source: 'shikiho-csv.大分類', csv, csvSha256, note: SECTOR60_CSV_NOTE, sectors })}\n`)
-  console.log(`sector60: ${source.records.length} tickers, ${source.majorCategoryCount} categories`)
+  writeOnce(path.join(out, 'sector60.json'), `${JSON.stringify(record)}\n`)
+  console.log(`sector60: ${Object.keys(record.sectors).length} tickers, ${new Set(Object.values(record.sectors)).size} categories`)
 }
 
 // 1 日分の業種ごとの 20 日騰落 (小さい順)。order は業種の並び順 (同じ値のときの順)。
@@ -138,14 +140,15 @@ function compact(s: Summary): number[] | 0 {
   return has(s) ? [s.n, ...[s.winLong, s.winShort, s.mean, s.median, s.q10, s.q25, s.q75, s.q90, s.mfeMedian, s.maeMedian].map(round)] : 0
 }
 
-function analyze(out: string): void {
+async function analyze(out: string): Promise<void> {
   const inputs = assertInputs()
   const segmentFile = path.join(out, 'segments.json')
   const sector60File = path.join(out, 'sector60.json')
   for (const file of [segmentFile, sector60File]) if (!fs.existsSync(file)) throw new Error(`run the ${path.basename(file, '.json').replace('segments', 'sectors')} step first`)
   const listing: { sector33Names: Record<string, string>; months: Record<string, { sectors33: Record<string, string> }> } = JSON.parse(fs.readFileSync(segmentFile, 'utf8'))
-  const sector60Record = JSON.parse(fs.readFileSync(sector60File, 'utf8'))
-  assertSector60Csv(sector60Record.csv, sector60Record.csvSha256)
+  // 書き出した 60 分類が、承認した CSV の写しから作ったものと同じことを、読み直して確かめる。
+  const sector60Record = await readSector60Csv()
+  if (fs.readFileSync(sector60File, 'utf8') !== `${JSON.stringify(sector60Record)}\n`) throw new Error('sector60.json does not match the approved Shikiho CSV copy')
   const sector60: Record<string, string> = sector60Record.sectors
   const source = openImmutable(SOURCE_PATH)
   const eventsDb = openImmutable(EVENTS_PATH)
@@ -357,7 +360,7 @@ if (require.main === module) {
   const out = outputDirectory()
   if (mode === 'sectors') fetchSegments(out).catch((error) => { console.error(error); process.exit(1) })
   else if (mode === 'sector60') exportSector60(out).catch((error) => { console.error(error); process.exit(1) })
-  else if (mode === 'analyze') analyze(out)
+  else if (mode === 'analyze') analyze(out).catch((error) => { console.error(error); process.exit(1) })
   else if (mode === 'render') renderOnly(out)
   else throw new Error('mode must be sectors, sector60, analyze or render')
 }
