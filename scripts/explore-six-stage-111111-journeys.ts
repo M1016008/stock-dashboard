@@ -117,7 +117,7 @@ function analyzeTicker(bars: readonly Bar[], codes: readonly (string | null)[], 
       let m = n + 1
       while (m < rows.length && codes[rows[m]] !== HOME) m += 1
       const returned = m < rows.length
-      const end = returned ? rows[m] : e
+      const end = returned ? rows[m] : ended ? last : e   // つなげる範囲の行で終わったときは、データの最後の行まで数える
       const outcome: Outcome = returned ? 'RETURNED' : !ended ? 'BREAK' : bars[last].date === EVENT_PATH_DISCOVERY_CUTOFF ? 'DATA_END' : 'TRADING_END'
       if (hasGap(i, end)) { bump(`journeys.excludedGap.${outcome}`); n = m; continue }
       const states = rows.slice(n, m).map((k) => codes[k]!)
