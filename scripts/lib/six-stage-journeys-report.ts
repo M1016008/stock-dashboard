@@ -6,6 +6,7 @@ const NOTICES = [
   '探索。差がある・ないの判定はしない。',
   '配当を含まない株価の値動き。過去の参考値であり予測ではない。',
   '日本株、Discovery 期間 (2022-12-30 まで)。6 桁がすべて決まる日だけで数えるため、実際の期間は 2010 年以降。分割の補正漏れの 19 銘柄は除く。',
+  '主な読み方: 6 桁が決まらない行 (ほぼすべて 2 本の移動平均がちょうど同じ値の日) が 10 行以下で、10 営業日を超える売買の空白も無ければ、その行を飛ばして前後をつなぐ。飛ばした行も日数に入る。決まらない行で区切る今の見方は、下の「参考」と前の報告ページに残す。',
   '日数は、その銘柄の売買がある日で数える。途中に 10 営業日を超える売買の空白がある旅・滞在は除き、件数を下に示す。',
 ]
 
@@ -20,18 +21,19 @@ svg.ring{width:100%;max-width:560px;height:auto;aspect-ratio:1}svg.wide{width:10
 <main><section><h2>① 日A だけの遷移</h2><p>日A の桁が同じ日々を 1 つの滞在にまとめた。矢印の太さ = 回数。日数と騰落 (入った日の終値 → 次に移った日の終値) は、区間の初めから始まる滞在を除いて数える。矢印に指を置くと数字が出る。</p>
 <div class="grid"><figure><svg id="ring" class="ring"></svg></figure><div id="ringTable"></div></div></section>
 <section><h2>② 旅の集計</h2><div id="summary"></div><div class="grid"><figure><figcaption>戻るまでの日数 (戻った旅)</figcaption><svg id="hist"></svg></figure>
-<figure><figcaption>まだ戻っていない割合 (戻らずに終わった旅も入れる。Kaplan–Meier)</figcaption><svg id="km"></svg></figure></div><div id="worst"></div><div id="quant"></div></section>
+<figure><figcaption>まだ戻っていない割合 (戻らずに終わった旅も入れる。Kaplan–Meier)。点線 = 参考: 今の見方 (決まらない行で区切る)</figcaption><svg id="km"></svg></figure></div><div id="worst"></div><div id="quant"></div></section>
 <section><h2>③ よくある旅の型 上位 ${20} (戻った旅)</h2><p>型 = 出た日から戻る前日までの 6 桁の並び。途中の状態が 6 個以上なら「最初の 3 つ → …(省いた数)… → 最後の 2 つ」。
 図: 出た日の終値を基準にした終値の変化 (線 = 中央値、帯 = 25〜75%)。縦の線 = その型の戻るまでの日数の中央値。点線 = すべての旅 (戻らなかった旅も入れる) の中央値で、生き残った旅だけを見る偏りと比べるためのもの。</p>
 <div id="types"></div><div class="multi" id="typeFigs"></div></section>
 <section><h2>④ 出た直後の分かれ道 (1〜4 歩目)</h2><p>各歩で 1% 未満の状態は「その他」にまとめた。戻った・途切れ・データの終わり・売買の終わりは、そこで止める (まとめない)。</p><svg id="sankey" class="wide"></svg></section>
+<section><h2>参考: 今の見方との比べ</h2><div id="compare"></div></section>
 <section><h2>確認と件数</h2><div id="verify"></div><div id="counts"></div></section></main>
 <script>const RESULT=${data};${REPORT_HELPERS}${SCRIPT}</script></body></html>
 `
 }
 
 const SCRIPT = `
-const J=RESULT.journeys;const OUT={RETURNED:'戻った',BREAK:'途切れ (6 桁が決まらない日が来た)',DATA_END:'データの終わり (2022-12-30 まで戻らず)',TRADING_END:'売買の終わり (それより前に売買が終わった)'};
+const J=RESULT.journeys;const OUT={RETURNED:'戻った',BREAK:'途切れ (6 桁が決まらない行が 10 行を超えて続いた、または 10 営業日を超える空白をはさんだ)',DATA_END:'データの終わり (2022-12-30 まで戻らず)',TRADING_END:'売買の終わり (それより前に売買が終わった)'};
 const qrow=(name,q)=>'<tr><td class="k">'+name+'</td><td>'+num(q.n)+'</td>'+(q.n?[q.q10,q.q25,q.q50,q.q75,q.q90]:[null,null,null,null,null]).map(v=>'<td>'+pct(v)+'</td>').join('')+'</tr>';
 const QH='<tr><th>項目</th><th>件数</th><th>10%</th><th>25%</th><th>中央値</th><th>75%</th><th>90%</th></tr>';
 function ring(){const svg=document.getElementById('ring');svg.innerHTML='';svg.setAttribute('viewBox','0 0 520 520');const W=520,H=520,cx=W/2,cy=H/2,R=Math.min(W,H)/2-60;
@@ -53,6 +55,9 @@ function summary(){const o=J.outcomes;const r=o.RETURNED/J.total;
  h.histogram.forEach((n,i)=>{const v=n/tot;const b=el('rect',{x:f.x(i)+1,y:f.y(v),width:f.x(i+1)-f.x(i)-2,height:f.y(0)-f.y(v),fill:'var(--a)','fill-opacity':.55},hs);el('title',{},b).textContent=labels[i]+' 日: '+num(n)+' 件'});
  const k=J.kaplanMeier;const ks=document.getElementById('km');const g=frame(ks,[0,k.t.at(-1)||1],[0,1],{t:'出た日からの日数 (売買の日)',f:v=>v.toFixed(0)},{t:'まだ戻っていない割合',f:v=>(v*100).toFixed(0)+'%'});
  const st=[[0,1]];k.t.forEach((t,i)=>{st.push([t,st[st.length-1][1]],[t,k.survival[i]])});el('polyline',{points:st.map(([t,v])=>g.x(t)+','+g.y(v)).join(' '),fill:'none',stroke:'var(--a)','stroke-width':2},ks);
+ const rk=RESULT.reference.journeys.kaplanMeier;const rs=[[0,1]];rk.t.forEach((t,i)=>{if(t<=k.t.at(-1))rs.push([t,rs[rs.length-1][1]],[t,rk.survival[i]])});
+ el('polyline',{points:rs.map(([t,v])=>g.x(t)+','+g.y(v)).join(' '),fill:'none',stroke:'#7a8496','stroke-width':1.5,'stroke-dasharray':'4 3'},ks);
+
  const mark=[20,60,120,250,500].filter(t=>t<=k.t.length);el('text',{x:g.W-g.m.r-4,y:g.m.t+12,'font-size':11,'text-anchor':'end'},ks).textContent=mark.map(t=>t+' 日 '+pct(k.survival[t-1])+' (残り '+num(k.atRisk[t-1])+' 件)').join('、');
  const w=J.worst;document.getElementById('worst').innerHTML='<table><caption>途中でいちばん悪くなった状態: ステージ 4 の桁の数の最大</caption><tr><th>4 の桁の数</th>'+[0,1,2,3,4,5,6].map(c=>'<th>'+c+'</th>').join('')+'</tr><tr><td class="k">すべての旅</td>'+w.all.map(n=>'<td>'+num(n)+'<br>'+pct(n/J.total)+'</td>').join('')+
   '</tr><tr><td class="k">戻った旅</td>'+w.returned.map(n=>'<td>'+num(n)+'<br>'+pct(n/o.RETURNED)+'</td>').join('')+'</tr></table><p>444444 まで落ちた旅: すべての旅の '+pct(w.all[6]/J.total)+'、戻った旅の '+pct(w.returned[6]/o.RETURNED)+'。</p>'+
@@ -79,6 +84,14 @@ function sankey(){const svg=document.getElementById('sankey');svg.innerHTML='';c
  nodes.forEach((col,k)=>{el('text',{x:xs[k],y:14,'font-size':11},svg).textContent=k===0?'出る前':k+' 歩目';for(const [key,n] of Object.entries(col)){const r=el('rect',{x:xs[k],y:n.y,width:nodeW,height:n.h,fill:term.has(key)?'var(--b)':'#333'},svg);el('title',{},r).textContent=key+' '+num(n.n)+' 件 ('+pct(n.n/J.total)+')';
   if(n.h>=8)el('text',{x:xs[k]+nodeW+3,y:n.y+n.h/2+4,'font-size':10},svg).textContent=key+' '+pct(n.n/J.total)}})}
 function verify(){const v=RESULT.verification;document.getElementById('verify').innerHTML='<p>'+v.note+' 銘柄 '+num(v.tickers)+'、行 '+num(v.rows)+'、6 桁が決まる行 '+num(v.validStageRows)+'、区間 '+num(v.validBlocks)+'、状態の変化 '+num(v.stateChanges)+'。</p><p>読んだもの: Discovery の元データ (sha256 '+RESULT.inputs.manifestSourceSha+')、E039 events.sqlite (sha256 '+RESULT.inputs.eventsSha+')。</p>';
- const c=RESULT.counts;document.getElementById('counts').innerHTML='<table><tr><th>項目</th><th>件数</th></tr>'+Object.keys(c).sort().map(k=>'<tr><td class="k">'+k+'</td><td>'+num(c[k])+'</td></tr>').join('')+'</table><p>journeys.excludedGap.* = 10 営業日を超える空白がある旅 (終わり方ごと)、dailyA.excludedGap = 同じく日A の滞在、dailyA.leftCensoredStays = 日数と騰落から除いた、区間の初めから始まる滞在。</p>'}
-function draw(){ring();summary();types();sankey();verify()}window.onresize=draw;draw();
+ const c=RESULT.counts;document.getElementById('counts').innerHTML='<table><tr><th>項目</th><th>件数</th></tr>'+Object.keys(c).sort().map(k=>'<tr><td class="k">'+k+'</td><td>'+num(c[k])+'</td></tr>').join('')+'</table><p>journeys.excludedGap.* = 10 営業日を超える空白がある旅 (終わり方ごと)、dailyA.excludedGap = 同じく日A の滞在、dailyA.leftCensoredStays = 日数と騰落から除いた、区間の初めから始まる滞在、bridge.joins = 決まらない行を飛ばしてつないだ回数 (主な読み方)。</p>'}
+function compare(){const R=RESULT.reference,A=J,B=R.journeys;const km=(k,t)=>t<=k.t.length?pct(k.survival[t-1]):'—';const row=(name,f)=>'<tr><td class="k">'+name+'</td><td>'+f(A)+'</td><td>'+f(B)+'</td></tr>';
+ document.getElementById('compare').innerHTML='<p>参考の見方 = '+R.label+'。図をすべて載せた前の報告ページ: '+R.report+'</p><table><tr><th>項目</th><th>主な読み方 (つなぐ)</th><th>参考 (区切る)</th></tr>'+
+  row('旅の数',j=>num(j.total))+Object.keys(OUT).map(o=>row(OUT[o].split(' (')[0],j=>num(j.outcomes[o])+' ('+pct(j.outcomes[o]/j.total)+')')).join('')+
+  [20,60,120,250,500,1000].map(t=>row('まだ戻っていない割合 '+t+' 日',j=>km(j.kaplanMeier,t))).join('')+
+  row('戻るまでの日数 (戻った旅) 中央値 / 75% / 90%',j=>j.daysToReturn.quantiles.q50+' / '+j.daysToReturn.quantiles.q75+' / '+j.daysToReturn.quantiles.q90+' 日')+
+  row('最大の下落の中央値: 戻った旅 / 戻らなかった旅',j=>pct(j.maxDrawdown.returned.q50)+' / '+pct(j.maxDrawdown.notReturned.q50))+
+  row('戻ったときの騰落の中央値',j=>pct(j.returnAtBack.q50))+row('444444 まで落ちた旅 (すべての旅)',j=>pct(j.worst.all[6]/j.total))+
+  row('60 日後の騰落の中央値: 戻った旅 / すべての旅',j=>pct(j.paths.returned.q50[60])+' / '+pct(j.paths.all.q50[60]))+'</table>'}
+function draw(){ring();summary();types();sankey();compare();verify()}window.onresize=draw;draw();
 `
