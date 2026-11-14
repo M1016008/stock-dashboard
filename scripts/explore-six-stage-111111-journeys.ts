@@ -27,7 +27,6 @@ const PATH_DAYS = 60         // 型ごとの値動きを描く日数 (出た日 
 const STEPS = 4              // 流れの図の歩数
 const MIN_BRANCH_SHARE = 0.01
 const TOP_TYPES = 20
-const KM_MAX_DAYS = 750
 const DAY_BINS = [1, 2, 3, 5, 10, 20, 40, 60, 120, 250] as const   // 上限 (この値以下)。最後の棚は 251 日以上
 const QS = [0.1, 0.25, 0.5, 0.75, 0.9] as const
 type Outcome = 'RETURNED' | 'BREAK' | 'DATA_END' | 'TRADING_END'
@@ -35,7 +34,12 @@ type Bar = { date: string; open: number; high: number; low: number; close: numbe
 type Journey = { outcome: Outcome; days: number; states: string[]; worstCount: number; worstCode: string;
   maxDrawdown: number | null; returnAtBack: number | null; path: number[]; exitDate: string }
 
-const outputDirectory = () => assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '', RESULT_ROOT)
+// 書き出し先は、承認したフォルダそのもの、または試しの実行用の一時フォルダ (/private/tmp の下) だけ。
+function outputDirectory(): string {
+  const out = assertOutputDirectory(process.argv.find((arg) => arg.startsWith('--out='))?.slice(6) ?? '', SIX_STAGE_REAL_RESEARCH_ROOT)
+  if (out !== RESULT_ROOT && !out.startsWith(`${fs.realpathSync('/private/tmp')}${path.sep}`)) throw new Error(`output must be ${RESULT_ROOT} or under /private/tmp`)
+  return out
+}
 const round = (value: number) => Math.round(value * 1e5) / 1e5
 const positive = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0
 
@@ -96,7 +100,7 @@ function analyzeTicker(bars: readonly Bar[], codes: readonly (string | null)[], 
       const returned = j <= e
       const end = returned ? j : e
       const outcome: Outcome = returned ? 'RETURNED' : e < last ? 'BREAK' : bars[e].date === EVENT_PATH_DISCOVERY_CUTOFF ? 'DATA_END' : 'TRADING_END'
-      if (hasGap(i - 1, end)) { bump(`journeys.excludedGap.${outcome}`); i = end; continue }
+      if (hasGap(i, end)) { bump(`journeys.excludedGap.${outcome}`); i = end; continue }
       const lastState = returned ? j - 1 : e
       let worstCount = -1; let worstCode = ''
       for (let k = i; k <= lastState; k += 1) {
@@ -139,7 +143,7 @@ function kaplanMeier(all: readonly Journey[]): { t: number[]; survival: number[]
   const events = new Map<number, number>()
   for (const j of all) if (j.outcome === 'RETURNED') events.set(j.days, (events.get(j.days) ?? 0) + 1)
   let survival = 1; let k = 0
-  for (let t = 1; t <= KM_MAX_DAYS; t += 1) {
+  for (let t = 1; t <= times[times.length - 1]; t += 1) {
     while (k < times.length && times[k] < t) k += 1
     const atRisk = times.length - k
     if (atRisk === 0) break
@@ -254,7 +258,7 @@ async function analyze(out: string): Promise<void> {
     kind: 'EXPLORATION', title: '111111 からの旅 (探索)', market: 'JP', cutoff: EVENT_PATH_DISCOVERY_CUTOFF,
     inputs: { ...inputs, foundationManifest: path.join(FOUNDATION, 'manifest.json') },
     verification: { ...check, tickers: tickers.length, note: '日ごとの 6 桁を作り直し、E039 の状態の変化 (区間の番号・6 桁・日付) と全銘柄で完全に一致した。件数も E039 の記録と一致した。' },
-    rules: { gapLimitBusinessDays: GAP_LIMIT, pathDays: PATH_DAYS, steps: STEPS, minBranchShare: MIN_BRANCH_SHARE, topTypes: TOP_TYPES, kmMaxDays: KM_MAX_DAYS },
+    rules: { gapLimitBusinessDays: GAP_LIMIT, pathDays: PATH_DAYS, steps: STEPS, minBranchShare: MIN_BRANCH_SHARE, topTypes: TOP_TYPES },
     counts,
     dailyA: [...dailyA].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([key, edge]) => {
       const days = quantiles(edge.days)
