@@ -240,8 +240,9 @@ export function previousMonth(date: string): string {
 }
 
 // 1 銘柄のイベントに、除外 (空白) と重複の規則をこの順で適用し、終値で買った結果を付ける。
+// dedup: false は除外だけを適用する (研究 C の売買代金の基準の金額は、重複の規則の前のイベントで決めるため)。
 export function selectTickerEvents(bars: readonly EventPriceBar[], events: readonly EventInput[],
-  calendarIndex: ReadonlyMap<string, number>, bump: (key: string) => void) {
+  calendarIndex: ReadonlyMap<string, number>, bump: (key: string) => void, dedup = true) {
   const rowOf = new Map(bars.map((bar, index) => [bar.date, index]))
   const gapAfter = (row: number) => calendarIndex.get(bars[row + 1].date)! - calendarIndex.get(bars[row].date)! - 1
   const lastKept = new Map<string, number>()
@@ -263,7 +264,7 @@ export function selectTickerEvents(bars: readonly EventPriceBar[], events: reado
     if (evaluation.entryPrice == null) { bump(`s${study}.invalidEntry`); continue }
     // 重複は同じ型 (研究 1) / 同じ遷移 (研究 2) の中でだけ数える。
     const previous = lastKept.get(`${study}:${groupKey}`)
-    if (previous != null && signalRow - previous <= DEDUP_ROWS) { bump(`s${study}.dedupDropped`); continue }
+    if (dedup && previous != null && signalRow - previous <= DEDUP_ROWS) { bump(`s${study}.dedupDropped`); continue }
     lastKept.set(`${study}:${groupKey}`, signalRow)
     kept.push({ study, groupKey, states, signalRow, evaluation, event })
   }
