@@ -92,8 +92,8 @@ const verification = (market: 'JP' | 'US'): MarketVerification => ({
   quickCheck: 'ok',
   integrityCheck: 'ok',
   readOnlyReopen: true,
-  restoreQuickCheck: 'ok',
-  restoreIntegrityCheck: 'ok',
+  restoreSha256: market === 'JP' ? 'a'.repeat(64) : 'b'.repeat(64),
+  restoreReadOnlyReopen: true,
   sourceWalGrowthBytes: 0,
   candidatePhysicalGrowthBytes: market === 'JP' ? 35_000_000_000 : 45_000_000_000,
 })
@@ -128,7 +128,9 @@ assert.equal(manifest.priorGeneration.promotedAsVerified, false)
 
 const initialPlan = JSON.parse(fs.readFileSync(
   'docs/production-weekly-backup-initial-plan-20261101.json', 'utf8')) as WeeklyBackupPlan
-validateWeeklyBackupPlan(initialPlan)
+// The 2026-11-01 plan is expired and superseded (design B changed the runbook and
+// the kept-online label set). Only its frozen digest is checked here; the runner
+// rejects it at execution through RUNBOOK_SHA256_MISMATCH and the start window.
 const initialPlanHash = weeklyBackupPlanSha256(initialPlan)
 const frozenPlanHash = fs.readFileSync(
   'docs/production-weekly-backup-initial-plan-20261101.sha256', 'utf8').trim().split(/\s+/)[0]
@@ -138,7 +140,7 @@ assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, '0'.repeat(64)),
   /WEEKLY_BACKUP_PLAN_SHA256_MISMATCH/)
 assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, 'not-a-sha'),
   /INVALID_APPROVED_PLAN_SHA256/)
-assert.equal(initialPlan.runbookSha256, createHash('sha256')
+assert.notEqual(initialPlan.runbookSha256, createHash('sha256')
   .update(fs.readFileSync('docs/production-weekly-backup-runbook.md')).digest('hex'))
 
 function rejects(mutate: (nextPlan: WeeklyBackupPlan, nextObserved: WeeklyBackupObservation,
@@ -167,6 +169,8 @@ rejects((_, next) => { next.priorManifestSha256 = '0'.repeat(64) }, /PRIOR_GENER
 rejects((_, next) => { next.sqliteRsyncBinarySha256 = '0'.repeat(64) }, /SQLITE_TOOL_IDENTITY_MISMATCH/)
 rejects((_, __, next) => { next.jp.generationId = 'other-generation' }, /JP_GENERATION_MISMATCH/)
 rejects((_, __, next) => { next.us.integrityCheck = 'corrupt' }, /US_SQLITE_VERIFICATION_INCOMPLETE/)
+rejects((_, __, next) => { next.jp.restoreSha256 = 'c'.repeat(64) }, /JP_SQLITE_VERIFICATION_INCOMPLETE/)
+rejects((_, __, next) => { next.us.restoreReadOnlyReopen = false }, /US_SQLITE_VERIFICATION_INCOMPLETE/)
 rejects((_, __, next) => { next.jp.sourceWalGrowthBytes = 1 }, /JP_WAL_GROWTH_LIMIT_EXCEEDED/)
 rejects((_, __, next) => { next.destinationFreeBytesAfter = 149_999_999_999 }, /DESTINATION_RESERVE_BREACHED/)
 rejects((_, __, next) => { next.priorGenerationUnchanged = false }, /PRIOR_GENERATION_CHANGED/)

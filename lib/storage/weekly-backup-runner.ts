@@ -148,6 +148,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
 
   const generationRoot = path.join(args.plan.destinationRoot, args.plan.runId)
   if (fs.existsSync(generationRoot)) throw new Error('RUN_ID_COLLISION')
+  // The observation may predate this call by several slow probes; recheck the
+  // approved start window against the current time before the first write.
+  if (Date.now() >= Date.parse(args.plan.mustStartBefore)) throw new Error('START_WINDOW_CLOSED')
   args.onPhase?.('PREFLIGHT_PASSED')
 
   const markets = ['JP', 'US'] as const
@@ -202,6 +205,12 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     maximumHoldMs: args.plan.maximumWriterHoldMs,
     driver: args.writerDriver,
     operation: async (assertHoldValid) => {
+      // Baseline first, before the slower post-stop probes: a write to either market's
+      // database or WAL between here and the final comparison fails the run.
+      const sourceFiles = markets.flatMap((market) => [args.plan.sourceDatabasePaths[market],
+        `${args.plan.sourceDatabasePaths[market]}-wal`])
+      const sourceState = () => JSON.stringify(sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null)))
+      const sourceStateAtHoldStart = sourceState()
       const stoppedObservation = await args.observeDynamicGate()
       assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
       assertCombinedWalLimit(args.plan)
@@ -243,10 +252,13 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
         }
         await assertHoldValid()
       }
+      if (sourceState() !== sourceStateAtHoldStart) throw new Error('SOURCE_CHANGED_DURING_HOLD')
       return acquired
     },
   })
   args.onPhase?.('WRITERS_RESTORED')
+  // A hold that overran while writers were stopping or restarting can never publish.
+  if (held.receipt.holdDurationMs > args.plan.maximumWriterHoldMs) throw new Error('WRITER_HOLD_LIMIT_EXCEEDED')
 
   const verificationStartedAt = Date.now()
   const verificationDeadlineMs = Math.min(
@@ -282,6 +294,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     throw new Error('PRIOR_GENERATION_CHANGED')
   }
   const postflight = await args.observePostflight()
+  // Signals that arrived during synchronous verification are delivered while
+  // postflight awaits; recheck the abort flag before publishing.
+  args.assertRuntimeIdentity()
   if (Date.now() >= mustFinishBeforeMs) throw new Error('EXECUTION_DEADLINE_EXCEEDED')
   const manifest = buildWeeklyBackupCompleteManifest(args.plan, {
     generationId: args.plan.runId,

@@ -31,8 +31,8 @@ export type ReplicaVerification = {
   quickCheck: string
   integrityCheck: string
   readOnlyReopen: boolean
-  restoreQuickCheck: string
-  restoreIntegrityCheck: string
+  restoreSha256: string
+  restoreReadOnlyReopen: boolean
 }
 
 function command(binary: string, args: string[], timeoutMs: number): string {
@@ -127,9 +127,13 @@ export async function runMonitoredSqliteRsync(args: {
   onProgress?: (progress: RsyncProgress) => void
 }): Promise<{ elapsedMs: number; sourceWalGrowthBytes: number; stderr: string }> {
   assertRegularFile(args.sqliteRsyncBinary)
+  fs.accessSync(args.sqliteRsyncBinary, fs.constants.X_OK)
   assertRegularFile(args.sourceDatabasePath)
   assertRegularFile(args.candidateDatabasePath)
   args.assertRuntimeIdentity()
+  // Writers are stopped, so any WAL write (even one reusing the same length) changes its mtime.
+  const walMtimeMs = () => (fs.existsSync(args.limits.sourceWalPath) ? fs.lstatSync(args.limits.sourceWalPath).mtimeMs : null)
+  const walMtimeMsAtStart = walMtimeMs()
   const started = Date.now()
   let stderr = ''
   let stdout = ''
@@ -139,38 +143,64 @@ export async function runMonitoredSqliteRsync(args: {
     { stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout.on('data', (chunk) => { stdout = `${stdout}${String(chunk)}`.slice(-4_000_000) })
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4_000_000) })
-
+  // A spawn failure is reported through 'error' and never through 'exit'.
+  // Without this handler Node would exit before the writer hold restores writers.
+  // 'error' also fires when a kill fails; only a missing pid means the spawn failed.
+  // Otherwise keep waiting for 'exit' so writers are never restored while the child runs.
+  let spawnError: Error | null = null
   let monitorError: Error | null = null
-  while (child.exitCode === null && child.signalCode === null) {
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }))
+    child.on('error', (error) => {
+      if (child.pid !== undefined) { monitorError ??= error; return }
+      spawnError = error
+      resolve({ code: child.exitCode, signal: child.signalCode })
+    })
+  })
+
+  while (child.exitCode === null && child.signalCode === null && spawnError === null) {
+    // Check the hold deadline first: the identity probe below can block.
+    if (Date.now() >= args.limits.deadlineMs) {
+      monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
+      child.kill('SIGTERM')
+      break
+    }
     try { args.assertRuntimeIdentity() } catch (error) {
       monitorError = error instanceof Error ? error : new Error(String(error))
     }
-    const currentWalBytes = walBytes(args.limits.sourceWalPath)
-    const growth = Math.abs(currentWalBytes - args.limits.sourceWalBytesAtStart)
-    const available = args.readDestinationFreeBytes?.() ?? freeBytes(args.limits.destinationMount)
-    const candidateGrowth = Math.max(0, args.limits.destinationFreeBytesAtStart - available)
-    const sourceStat = fs.lstatSync(args.sourceDatabasePath)
-    peakWalGrowthBytes = Math.max(peakWalGrowthBytes, growth)
-    const progress: RsyncProgress = {
-      at: new Date().toISOString(),
-      elapsedMs: Date.now() - started,
-      destinationFreeBytes: available,
-      sourceWalBytes: currentWalBytes,
-      sourceWalGrowthBytes: growth,
-      candidatePhysicalGrowthBytes: candidateGrowth,
-    }
-    try { args.onProgress?.(progress) } catch (error) {
-      monitorError = error instanceof Error ? error : new Error(String(error))
-    }
-    if (Date.now() >= args.limits.deadlineMs) monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
-    else if (available < args.limits.destinationReserveBytes) monitorError = new Error('DESTINATION_RESERVE_BREACHED')
-    else if (candidateGrowth > args.limits.maximumCandidateGrowthBytes) {
-      monitorError = new Error('CANDIDATE_GROWTH_LIMIT_EXCEEDED')
-    }
-    else if (growth > args.limits.maximumWalGrowthBytes) monitorError = new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
-    else if (sourceStat.size !== args.limits.sourceDatabaseSizeAtStart
-      || sourceStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) {
-      monitorError = new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+    // Any probe failure (for example a disconnected volume) must still stop and
+    // reap the child below before the writer hold restores writers.
+    try {
+      const currentWalBytes = walBytes(args.limits.sourceWalPath)
+      const growth = Math.abs(currentWalBytes - args.limits.sourceWalBytesAtStart)
+      const available = args.readDestinationFreeBytes?.() ?? freeBytes(args.limits.destinationMount)
+      const candidateGrowth = Math.max(0, args.limits.destinationFreeBytesAtStart - available)
+      const sourceStat = fs.lstatSync(args.sourceDatabasePath)
+      peakWalGrowthBytes = Math.max(peakWalGrowthBytes, growth)
+      const progress: RsyncProgress = {
+        at: new Date().toISOString(),
+        elapsedMs: Date.now() - started,
+        destinationFreeBytes: available,
+        sourceWalBytes: currentWalBytes,
+        sourceWalGrowthBytes: growth,
+        candidatePhysicalGrowthBytes: candidateGrowth,
+      }
+      try { args.onProgress?.(progress) } catch (error) {
+        monitorError = error instanceof Error ? error : new Error(String(error))
+      }
+      if (Date.now() >= args.limits.deadlineMs) monitorError = new Error('SQLITE_RSYNC_DEADLINE_EXCEEDED')
+      else if (available < args.limits.destinationReserveBytes) monitorError = new Error('DESTINATION_RESERVE_BREACHED')
+      else if (candidateGrowth > args.limits.maximumCandidateGrowthBytes) {
+        monitorError = new Error('CANDIDATE_GROWTH_LIMIT_EXCEEDED')
+      }
+      else if (growth > args.limits.maximumWalGrowthBytes) monitorError = new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
+      else if (sourceStat.size !== args.limits.sourceDatabaseSizeAtStart
+        || sourceStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) {
+        monitorError = new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+      }
+      else if (walMtimeMs() !== walMtimeMsAtStart) monitorError = new Error('SOURCE_WAL_CHANGED_DURING_SYNC')
+    } catch (error) {
+      monitorError ??= error instanceof Error ? error : new Error(String(error))
     }
     if (monitorError) {
       child.kill('SIGTERM')
@@ -182,15 +212,23 @@ export async function runMonitoredSqliteRsync(args: {
   const killTimer = monitorError ? setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
   }, 5_000) : null
-  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) resolve({ code: child.exitCode, signal: child.signalCode })
-    else child.once('exit', (code, signal) => resolve({ code, signal }))
-  })
+  const result = spawnError !== null || child.exitCode !== null || child.signalCode !== null
+    ? { code: child.exitCode, signal: child.signalCode }
+    : await exited
   if (killTimer) clearTimeout(killTimer)
   if (monitorError) throw monitorError
+  if (spawnError !== null) throw new Error(`SQLITE_RSYNC_SPAWN_FAILED:${(spawnError as Error).message}`)
   if (result.code !== 0) {
     throw new Error(`SQLITE_RSYNC_FAILED:${result.code}:${result.signal}:${stderr.trim() || stdout.trim()}`)
   }
+  // Sample once more after exit: a source write after the last one-second sample must still fail the run.
+  const finalStat = fs.lstatSync(args.sourceDatabasePath)
+  peakWalGrowthBytes = Math.max(peakWalGrowthBytes,
+    Math.abs(walBytes(args.limits.sourceWalPath) - args.limits.sourceWalBytesAtStart))
+  if (peakWalGrowthBytes > args.limits.maximumWalGrowthBytes) throw new Error('SOURCE_WAL_GROWTH_LIMIT_EXCEEDED')
+  if (finalStat.size !== args.limits.sourceDatabaseSizeAtStart
+    || finalStat.mtimeMs !== args.limits.sourceDatabaseMtimeMsAtStart) throw new Error('SOURCE_DATABASE_CHANGED_DURING_SYNC')
+  if (walMtimeMs() !== walMtimeMsAtStart) throw new Error('SOURCE_WAL_CHANGED_DURING_SYNC')
   args.assertRuntimeIdentity()
   return { elapsedMs: Date.now() - started, sourceWalGrowthBytes: peakWalGrowthBytes, stderr: stderr.trim() }
 }
@@ -203,6 +241,13 @@ function remainingMs(deadlineMs: number): number {
 
 function pragma(sqliteBinary: string, databasePath: string, statement: string, timeoutMs: number): string {
   return command(sqliteBinary, ['-readonly', databasePath, statement], timeoutMs)
+}
+
+function assertNoPendingWal(databasePath: string): void {
+  const walPath = `${databasePath}-wal`
+  if (fs.existsSync(walPath) && fs.lstatSync(walPath).size !== 0) {
+    throw new Error(`WAL_NOT_CHECKPOINTED:${databasePath}`)
+  }
 }
 
 export function verifyReplica(args: {
@@ -223,6 +268,9 @@ export function verifyReplica(args: {
     'PRAGMA integrity_check;', remainingMs(args.deadlineMs))
   pragma(args.sqliteBinary, args.candidateDatabasePath,
     'SELECT count(*) FROM sqlite_schema;', remainingMs(args.deadlineMs))
+  // The restore clone copies only the main database file. Committed pages
+  // still in a WAL would be missing from it, so require a checkpointed candidate.
+  assertNoPendingWal(args.candidateDatabasePath)
   cloneReplicaSeed({
     priorGenerationRoot: args.candidateRoot,
     priorDatabasePath: args.candidateDatabasePath,
@@ -230,17 +278,22 @@ export function verifyReplica(args: {
     candidateDatabasePath: args.restoreDatabasePath,
     deadlineMs: args.deadlineMs,
   })
-  const restoreQuickCheck = pragma(args.sqliteBinary, args.restoreDatabasePath,
-    'PRAGMA quick_check;', remainingMs(args.deadlineMs))
-  const restoreIntegrityCheck = pragma(args.sqliteBinary, args.restoreDatabasePath,
-    'PRAGMA integrity_check;', remainingMs(args.deadlineMs))
+  // The restore smoke copy is an APFS clone of the candidate, so it shares the
+  // candidate's blocks. Re-running integrity_check on it would read the same
+  // blocks again; byte identity plus a read-only reopen proves the restore path.
+  const databaseSha256 = fileSha256(args.candidateDatabasePath, args.deadlineMs)
+  const restoreSha256 = fileSha256(args.restoreDatabasePath, args.deadlineMs)
+  pragma(args.sqliteBinary, args.restoreDatabasePath,
+    'SELECT count(*) FROM sqlite_schema;', remainingMs(args.deadlineMs))
+  assertNoPendingWal(args.candidateDatabasePath)
+  assertNoPendingWal(args.restoreDatabasePath)
   return {
-    databaseSha256: fileSha256(args.candidateDatabasePath, args.deadlineMs),
+    databaseSha256,
     quickCheck,
     integrityCheck,
     readOnlyReopen: true,
-    restoreQuickCheck,
-    restoreIntegrityCheck,
+    restoreSha256,
+    restoreReadOnlyReopen: true,
   }
 }
 
