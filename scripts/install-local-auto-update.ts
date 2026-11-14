@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseEnv } from 'node:util'
 import {
   calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
 } from './lib/launchagent-install'
@@ -14,6 +15,18 @@ const label = 'com.stockboard.update-latest'
 const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
 const runtimeEnvPath = path.join(configDir, 'runtime.env')
 const productionEnvPath = path.join(configDir, 'production.env')
+// EDINET is not in runtime.env; it is read from its own one-key file. It is optional for
+// update-latest (the EDINET holdings refresh is skipped without it), so a missing file must
+// never stop the daily update: the plist uses --env-file-if-exists.
+const edinetEnvPath = path.join(configDir, 'edinet.env')
+// The generated command runs on this same Node (process.execPath) and uses --env-file-if-exists
+// (Node >= 22.9) plus util.parseEnv. Production runs v24.11.1; CI pins Node 24.
+{
+  const [major, minor] = process.versions.node.split('.').map(Number)
+  if (major < 22 || (major === 22 && minor < 9)) {
+    throw new Error(`install-local-auto-update requires Node >= 22.9 (running ${process.versions.node})`)
+  }
+}
 
 function marketDayRetrySchedule(): string {
   // launchd Weekday: 1=Monday ... 5=Friday.
@@ -40,6 +53,19 @@ for (const envPath of [runtimeEnvPath, productionEnvPath]) {
 }
 if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
   throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
+}
+if (fs.existsSync(edinetEnvPath)) {
+  if ((fs.statSync(edinetEnvPath).mode & 0o077) !== 0) {
+    throw new Error(`Canonical machine env must be owner-only: ${edinetEnvPath}`)
+  }
+  const edinetText = fs.readFileSync(edinetEnvPath, 'utf8')
+  const assignments = edinetText.split('\n').filter((line) => /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line))
+  const parsed = parseEnv(edinetText)
+  if (assignments.length !== 1 || Object.keys(parsed).length !== 1 || !(parsed.EDINET_API_KEY ?? '').trim()) {
+    throw new Error('edinet.env must contain exactly one key: EDINET_API_KEY (non-empty)')
+  }
+} else {
+  console.warn(`${edinetEnvPath} is absent; update-latest will skip the EDINET holdings refresh`)
 }
 
 const command = [
@@ -81,6 +107,7 @@ const command = [
     JSON.stringify(process.execPath),
     `--env-file=${JSON.stringify(runtimeEnvPath)}`,
     `--env-file=${JSON.stringify(productionEnvPath)}`,
+    `--env-file-if-exists=${JSON.stringify(edinetEnvPath)}`,
     '--import tsx scripts/update-latest.ts',
   ].join(' '),
 ].join(' && ')
