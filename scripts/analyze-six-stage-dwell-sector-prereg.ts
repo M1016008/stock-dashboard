@@ -29,8 +29,8 @@ const SOURCE_PATH = path.join(SIX_STAGE_REAL_RESEARCH_ROOT,
 export const RESULT_ROOT_AB = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'prereg-dwell-sector-20261111')
 const RETURN_ROWS = 20
 const B33_FROM = '2016-12-01'
-type Block = readonly [name: string, fromMonth: string, toMonth: string]
-const YEAR_BLOCKS: readonly Block[] = BLOCKS.map(([name, from, to]) => [name, `${from}-01`, `${to}-12`] as const)
+export type Block = readonly [name: string, fromMonth: string, toMonth: string]
+export const YEAR_BLOCKS: readonly Block[] = BLOCKS.map(([name, from, to]) => [name, `${from}-01`, `${to}-12`] as const)
 const B33_BLOCKS: readonly Block[] = [
   ['2016-12〜2018-12', '2016-12', '2018-12'], ['2019-01〜2020-12', '2019-01', '2020-12'], ['2021-01〜2022-12', '2021-01', '2022-12'],
 ]
@@ -94,7 +94,7 @@ export function twentyDayReturns(bars: readonly EventPriceBar[], calendarIndex: 
   }
 }
 
-type Comparison = {
+export type Comparison = {
   measure: 'median' | 'winRate'; difference: number
   interval95: { lower: number; upper: number }; intervalStrong: { lower: number; upper: number }
   tickerReplicates: number; monthReplicates: number
@@ -103,7 +103,9 @@ type Comparison = {
 }
 
 // a − b (LONG)。区間は銘柄・年月のまとまりのブートストラップ (研究 1 と同じ種) の、両方を含む広い方。
-function compare(c: EventColumns, a: number[], b: number[], h: number, calendar: string[], blocks: readonly Block[]): Comparison[] {
+// 研究 C・D は、強い証拠の区間 (16 個の Bonferroni) と、再標本がちょうど 2,000 回そろうこと (足りなければ止める) を渡す。
+export function compare(c: EventColumns, a: number[], b: number[], h: number, calendar: string[], blocks: readonly Block[],
+  options: { strongLevel?: number; requireAllReplicates?: boolean } = {}): Comparison[] {
   const k = HORIZONS.indexOf(h as typeof HORIZONS[number])
   const records: TransitionComparisonRecord[] = []
   const push = (rows: number[], cohort: 'H001' | 'C2') => {
@@ -115,6 +117,9 @@ function compare(c: EventColumns, a: number[], b: number[], h: number, calendar:
   push(a, 'H001'); push(b, 'C2')
   const byTicker = bootstrapCohortDifferences(records, 'ticker', BOOTSTRAP, SEED ^ 0x5449434b)
   const byMonth = bootstrapCohortDifferences(records, 'signalMonth', BOOTSTRAP, SEED ^ 0x44415445)
+  if (options.requireAllReplicates && (byTicker.median.length !== BOOTSTRAP || byMonth.median.length !== BOOTSTRAP)) {
+    throw new Error(`bootstrap replicates ${byTicker.median.length}/${byMonth.median.length} != ${BOOTSTRAP}`)
+  }
   const point = (left: Summary, right: Summary, measure: Comparison['measure']) => has(left) && has(right)
     ? measure === 'median' ? left.median - right.median : left.winLong - right.winLong : null
   const full = { a: summarize(c, a, h), b: summarize(c, b, h) }
@@ -122,7 +127,7 @@ function compare(c: EventColumns, a: number[], b: number[], h: number, calendar:
     const difference = point(full.a, full.b, measure)!
     const axes = [byTicker[measure], byMonth[measure]]
     const interval95 = envelope(axes, 0.95)
-    const intervalStrong = envelope(axes, STRONG_LEVEL)
+    const intervalStrong = envelope(axes, options.strongLevel ?? STRONG_LEVEL)
     const blockRows = blocks.map(([name, from, to]) => {
       const inBlock = (row: number) => { const month = calendar[c.date[row]].slice(0, 7); return month >= from && month <= to }
       const value = point(summarize(c, a.filter(inBlock), h), summarize(c, b.filter(inBlock), h), measure)
