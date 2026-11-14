@@ -1,9 +1,11 @@
-// 探索「111111 からの旅」(2026-11-13 オーナー承認の計画)。判定 (差がある・ない) はしない。
+// 探索「111111 からの旅」(2026-11-13 オーナー承認の計画、11-14 につなぐ見方を追加)。判定 (差がある・ない) はしない。
 // 日本株・Discovery (〜2022-12-30)。読み取りはすべて immutable、書き込みは出力フォルダだけ (write-once)。
 //
 // 6 桁の状態は、Discovery の元データから今の計算 (buildSnapshotCalculations) で日ごとに作り直し、
 // E039 の「状態が変わった」記録 (length=2 ENTRY) と銘柄ごとに完全に一致することを確かめてから使う。1 件でも違えば止める。
 // 作り直す理由: E039 には途切れのない区間 (block) の終わりの日が無く、戻らずに終わった旅の終わりの日と理由が分からないため。
+// 主な見方: 6 桁が決まらない行 (ほぼすべて 2 本の移動平均が同じ値の日) が BRIDGE_ROWS 行以下で、10 営業日を超える空白も無ければ、
+// その行を飛ばして前後の区間をつなぐ。参考: 今の見方 (決まらない行で区切る。E039 と同じ)。
 //
 //   SIX_STAGE_REAL_RESEARCH_ONLY=1 npx tsx scripts/explore-six-stage-111111-journeys.ts analyze --out=<dir>
 //   npx tsx scripts/explore-six-stage-111111-journeys.ts render --out=<dir>
@@ -21,7 +23,9 @@ const FOUNDATION = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'v5', 'E039-JP-scale-
 const EVENTS_PATH = path.join(FOUNDATION, 'events.sqlite')
 const SOURCE_PATH = path.join(SIX_STAGE_REAL_RESEARCH_ROOT,
   'six-stage-discovery-source-export-20261025T211500JST-v2-r2.incomplete', 'jp-discovery-ohlcv.sqlite')
-const RESULT_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'explore-111111-journeys-20261113')
+const RESULT_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'explore-111111-journeys-bridged-20261114')
+const PREVIOUS_ROOT = path.join(SIX_STAGE_REAL_RESEARCH_ROOT, 'explore-111111-journeys-20261113')   // 今の見方だけの報告 (消さない)
+const BRIDGE_ROWS = 10       // つなぐときに飛ばせる、6 桁が決まらない行の数の上限
 const HOME = '111111'
 const PATH_DAYS = 60         // 型ごとの値動きを描く日数 (出た日 = 0)
 const STEPS = 4              // 流れの図の歩数
@@ -31,6 +35,7 @@ const DAY_BINS = [1, 2, 3, 5, 10, 20, 40, 60, 120, 250] as const   // 上限 (�
 const QS = [0.1, 0.25, 0.5, 0.75, 0.9] as const
 type Outcome = 'RETURNED' | 'BREAK' | 'DATA_END' | 'TRADING_END'
 type Bar = { date: string; open: number; high: number; low: number; close: number; volume: number }
+type View = { dailyA: Map<string, { n: number; days: number[]; returns: number[] }>; journeys: Journey[]; counts: Record<string, number> }
 type Journey = { outcome: Outcome; days: number; states: string[]; worstCount: number; worstCode: string;
   maxDrawdown: number | null; returnAtBack: number | null; path: number[]; exitDate: string }
 
@@ -62,62 +67,75 @@ function stageCodes(bars: readonly Bar[]): (string | null)[] {
   })
 }
 
-// 連続した日の並び [from..to] を、同じ状態ごとにまとめる。
-function collapse(codes: readonly (string | null)[], from: number, to: number): string[] {
-  const out: string[] = []
-  for (let i = from; i <= to; i += 1) if (codes[i] !== out.at(-1)) out.push(codes[i]!)
+// 区間 = 6 桁が決まる行の番号の並び。bridge のときは、決まらない行が BRIDGE_ROWS 行以下で 10 営業日を超える空白も無ければ前の区間につなぐ。
+function blocksOf(codes: readonly (string | null)[], hasGap: (a: number, b: number) => boolean, bridge: boolean): number[][] {
+  const out: number[][] = []
+  let prev = -1
+  codes.forEach((code, i) => {
+    if (code == null) return
+    if (prev >= 0 && (i === prev + 1 || (bridge && i - prev - 1 <= BRIDGE_ROWS && !hasGap(prev, i)))) out.at(-1)!.push(i)
+    else out.push([i])
+    prev = i
+  })
   return out
 }
 
+// 同じ状態が続く行をまとめる。
+function collapse(states: readonly string[]): string[] {
+  return states.filter((code, k) => k === 0 || code !== states[k - 1])
+}
+
 function analyzeTicker(bars: readonly Bar[], codes: readonly (string | null)[], hasGap: (a: number, b: number) => boolean,
-  dailyA: Map<string, { n: number; days: number[]; returns: number[] }>, journeys: Journey[], counts: Record<string, number>): void {
+  bridge: boolean, { dailyA, journeys, counts }: View): void {
   const bump = (key: string) => { counts[key] = (counts[key] ?? 0) + 1 }
   const last = bars.length - 1
-  for (let s = 0; s <= last; s += 1) {
-    if (codes[s] == null) continue
-    let e = s
-    while (e < last && codes[e + 1] != null) e += 1
+  for (const rows of blocksOf(codes, hasGap, bridge)) {
+    const e = rows.at(-1)!
+    // 区間の後ろが、つなげる範囲の決まらない行だけでデータが終わるときは、途切れではなくデータ (売買) の終わりとする。
+    const ended = e === last || (bridge && last - e <= BRIDGE_ROWS && !hasGap(e, last))
     // ① 日A の桁だけの滞在と遷移。
-    let p = s
-    for (let i = s + 1; i <= e; i += 1) {
-      if (codes[i]![0] === codes[i - 1]![0]) continue
-      const key = `${codes[i - 1]![0]}>${codes[i]![0]}`
+    let p = rows[0]
+    for (let n = 1; n < rows.length; n += 1) {
+      const i = rows[n]; const h = rows[n - 1]
+      if (i - h > 1) bump('bridge.joins')
+      if (codes[i]![0] === codes[h]![0]) continue
+      const key = `${codes[h]![0]}>${codes[i]![0]}`
       if (hasGap(p, i)) bump('dailyA.excludedGap')
       else {
         const edge = dailyA.get(key) ?? { n: 0, days: [], returns: [] }
         edge.n += 1
-        if (p === s) bump('dailyA.leftCensoredStays')
+        if (p === rows[0]) bump('dailyA.leftCensoredStays')
         else { edge.days.push(i - p); edge.returns.push(bars[i].close / bars[p].close - 1) }
         dailyA.set(key, edge)
       }
       p = i
     }
     // ② 111111 を出た日 (i) から、同じ区間の中で初めて 111111 に戻った日 (j) まで。
-    for (let i = s + 1; i <= e; i += 1) {
-      if (!(codes[i - 1] === HOME && codes[i] !== HOME)) continue
-      let j = i + 1
-      while (j <= e && codes[j] !== HOME) j += 1
-      const returned = j <= e
-      const end = returned ? j : e
-      const outcome: Outcome = returned ? 'RETURNED' : e < last ? 'BREAK' : bars[e].date === EVENT_PATH_DISCOVERY_CUTOFF ? 'DATA_END' : 'TRADING_END'
-      if (hasGap(i, end)) { bump(`journeys.excludedGap.${outcome}`); i = end; continue }
-      const lastState = returned ? j - 1 : e
+    for (let n = 1; n < rows.length; n += 1) {
+      const i = rows[n]
+      if (!(codes[rows[n - 1]] === HOME && codes[i] !== HOME)) continue
+      let m = n + 1
+      while (m < rows.length && codes[rows[m]] !== HOME) m += 1
+      const returned = m < rows.length
+      const end = returned ? rows[m] : e
+      const outcome: Outcome = returned ? 'RETURNED' : !ended ? 'BREAK' : bars[last].date === EVENT_PATH_DISCOVERY_CUTOFF ? 'DATA_END' : 'TRADING_END'
+      if (hasGap(i, end)) { bump(`journeys.excludedGap.${outcome}`); n = m; continue }
+      const states = rows.slice(n, m).map((k) => codes[k]!)
       let worstCount = -1; let worstCode = ''
-      for (let k = i; k <= lastState; k += 1) {
-        const fours = [...codes[k]!].filter((digit) => digit === '4').length
-        if (fours > worstCount) { worstCount = fours; worstCode = codes[k]! }
+      for (const code of states) {
+        const fours = [...code].filter((digit) => digit === '4').length
+        if (fours > worstCount) { worstCount = fours; worstCode = code }
       }
       const base = bars[i].close
       let low = Infinity
-      for (let k = i + 1; k <= end; k += 1) low = Math.min(low, bars[k].low)
+      for (let k = i + 1; k <= end; k += 1) if (positive(bars[k].low)) low = Math.min(low, bars[k].low)
       const pricePath: number[] = []
       for (let d = 0; d <= PATH_DAYS && i + d <= last && positive(bars[i + d].close) && !hasGap(i, i + d); d += 1) pricePath.push(bars[i + d].close / base - 1)
-      journeys.push({ outcome, days: end - i, states: collapse(codes, i, lastState), worstCount, worstCode,
-        maxDrawdown: Number.isFinite(low) ? low / base - 1 : null, returnAtBack: returned ? bars[j].close / base - 1 : null,
+      journeys.push({ outcome, days: end - i, states: collapse(states), worstCount, worstCode,
+        maxDrawdown: Number.isFinite(low) ? low / base - 1 : null, returnAtBack: returned ? bars[end].close / base - 1 : null,
         path: pricePath, exitDate: bars[i].date })
-      i = end
+      n = m
     }
-    s = e
   }
 }
 
@@ -210,6 +228,18 @@ function summarizeJourneys(journeys: Journey[]) {
   }
 }
 
+function summarizeView({ dailyA, journeys, counts }: View, excludedSplitTickers: number) {
+  return {
+    counts: { ...counts, excludedSplitTickers },
+    dailyA: [...dailyA].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([key, edge]) => {
+      const days = quantiles(edge.days)
+      return { key, n: edge.n, measured: edge.days.length, meanDays: edge.days.length ? round(edge.days.reduce((a, b) => a + b, 0) / edge.days.length) : null,
+        medianDays: days.q50 ?? null, medianReturn: quantiles(edge.returns).q50 ?? null }
+    }),
+    journeys: summarizeJourneys(journeys),
+  }
+}
+
 async function analyze(out: string): Promise<void> {
   const inputs = assertInputs()
   const foundation = JSON.parse(fs.readFileSync(path.join(FOUNDATION, 'manifest.json'), 'utf8'))
@@ -222,9 +252,9 @@ async function analyze(out: string): Promise<void> {
   const prices = source.prepare('SELECT date,open,high,low,close,volume FROM ohlcv_daily WHERE ticker=? AND date<=? ORDER BY date')
   const entries = eventsDb.prepare(`SELECT block_id,sequence_key,signal_date FROM events WHERE ticker=? AND event_type='ENTRY' AND length=2 ORDER BY regime_id_c`)
   const check = { rows: 0, validStageRows: 0, validBlocks: 0, regimes: 0, stateChanges: 0 }
-  const counts: Record<string, number> = {}
-  const dailyA = new Map<string, { n: number; days: number[]; returns: number[] }>()
-  const journeys: Journey[] = []
+  const view = (): View => ({ dailyA: new Map(), journeys: [], counts: {} })
+  const main = view(); const reference = view()
+  let excludedSplitTickers = 0
   for (const ticker of tickers) {
     const bars = prices.all(ticker, EVENT_PATH_DISCOVERY_CUTOFF) as unknown as Bar[]
     const codes = stageCodes(bars)
@@ -243,12 +273,14 @@ async function analyze(out: string): Promise<void> {
       const at = recorded.findIndex((key, i) => key !== changes[i])
       throw new Error(`E039 mismatch ${ticker}: recomputed ${changes.length}, recorded ${recorded.length}, first difference ${changes[at]} vs ${recorded[at]}`)
     }
-    if (SPLIT_EXCLUDED.has(ticker)) { counts.excludedSplitTickers = (counts.excludedSplitTickers ?? 0) + 1; continue }
+    if (SPLIT_EXCLUDED.has(ticker)) { excludedSplitTickers += 1; continue }
     const gapBefore = new Int32Array(bars.length)   // gapBefore[k] = 行 0..k の間の、10 営業日を超える空白の数
     for (let k = 1; k < bars.length; k += 1) {
       gapBefore[k] = gapBefore[k - 1] + (calendarIndex.get(bars[k].date)! - calendarIndex.get(bars[k - 1].date)! - 1 > GAP_LIMIT ? 1 : 0)
     }
-    analyzeTicker(bars, codes, (a, b) => gapBefore[b] - gapBefore[a] > 0, dailyA, journeys, counts)
+    const hasGap = (a: number, b: number) => gapBefore[b] - gapBefore[a] > 0
+    analyzeTicker(bars, codes, hasGap, true, main)
+    analyzeTicker(bars, codes, hasGap, false, reference)
   }
   const expected = foundation.diagnostics
   for (const key of Object.keys(check) as (keyof typeof check)[]) {
@@ -258,18 +290,13 @@ async function analyze(out: string): Promise<void> {
     kind: 'EXPLORATION', title: '111111 からの旅 (探索)', market: 'JP', cutoff: EVENT_PATH_DISCOVERY_CUTOFF,
     inputs: { ...inputs, foundationManifest: path.join(FOUNDATION, 'manifest.json') },
     verification: { ...check, tickers: tickers.length, note: '日ごとの 6 桁を作り直し、E039 の状態の変化 (区間の番号・6 桁・日付) と全銘柄で完全に一致した。件数も E039 の記録と一致した。' },
-    rules: { gapLimitBusinessDays: GAP_LIMIT, pathDays: PATH_DAYS, steps: STEPS, minBranchShare: MIN_BRANCH_SHARE, topTypes: TOP_TYPES },
-    counts,
-    dailyA: [...dailyA].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([key, edge]) => {
-      const days = quantiles(edge.days)
-      return { key, n: edge.n, measured: edge.days.length, meanDays: edge.days.length ? round(edge.days.reduce((a, b) => a + b, 0) / edge.days.length) : null,
-        medianDays: days.q50 ?? null, medianReturn: quantiles(edge.returns).q50 ?? null }
-    }),
-    journeys: summarizeJourneys(journeys),
+    rules: { bridgeRows: BRIDGE_ROWS, gapLimitBusinessDays: GAP_LIMIT, pathDays: PATH_DAYS, steps: STEPS, minBranchShare: MIN_BRANCH_SHARE, topTypes: TOP_TYPES },
+    ...summarizeView(main, excludedSplitTickers),
+    reference: { label: '今の見方 (決まらない行で区切る。E039 と同じ)', report: path.join(PREVIOUS_ROOT, 'report.html'), ...summarizeView(reference, excludedSplitTickers) },
   }
   fs.mkdirSync(out, { recursive: true })
   writeOnce(path.join(out, 'result.json'), `${JSON.stringify(result)}\n`)
-  console.log(`journeys ${journeys.length}, returned ${result.journeys.outcomes.RETURNED}, dailyA edges ${result.dailyA.length}`)
+  console.log(`journeys ${result.journeys.total} (reference ${result.reference.journeys.total}), returned ${result.journeys.outcomes.RETURNED} (reference ${result.reference.journeys.outcomes.RETURNED})`)
 }
 
 async function main(): Promise<void> {
