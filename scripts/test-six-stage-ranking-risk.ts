@@ -47,15 +47,14 @@ assert.ok(riskOutcome(risk, 0, 2)!.drawdown < 0)
 // 月末の日。
 assert.deepEqual(monthEnds(['2020-01-30', '2020-01-31', '2020-02-03', '2020-02-28', '2020-03-02']), ['2020-01-31', '2020-02-28', '2020-03-02'])
 
-// E039 だけで決まる状態: 同じ区間の次のイベントの前の日まで。区間の最後の状態と、区間をまたぐ所は決まらない。
+// E039 だけで決まる状態: X>Y のイベントの前の dwell_b 行は X。区間の最後の状態 (次の変化が無い) と、区間の切れ目の行は決まらない。
 const events = [
-  { blockId: 0, sequenceKey: '111111>211111', signalDate: '2020-01-10' },
-  { blockId: 0, sequenceKey: '211111>111111', signalDate: '2020-02-10' },
-  { blockId: 1, sequenceKey: '111111>112111', signalDate: '2020-04-10' },
-  { blockId: 1, sequenceKey: '112111>111111', signalDate: '2020-06-10' },
+  { sequenceKey: '111111>211111', signalRow: 10, dwellB: 4 },   // 行 6〜9 は 111111 (区間の初めから)
+  { sequenceKey: '211111>111111', signalRow: 15, dwellB: 5 },   // 行 10〜14 は 211111
+  { sequenceKey: '111111>112111', signalRow: 30, dwellB: 3 },   // 行 16 で区間が切れ、行 27〜29 は 111111 (行 15 からの 111111 は決まらない)
 ]
-const states = e039StatesAt(events, ['2020-01-05', '2020-01-31', '2020-02-10', '2020-03-31', '2020-04-30', '2020-05-29', '2020-06-30'])
-assert.deepEqual([...states], [['2020-01-31', '211111'], ['2020-04-30', '112111'], ['2020-05-29', '112111']])
+const states = e039StatesAt(events, [5, 6, 9, 12, 15, 20, 28, 30, 31])
+assert.deepEqual([...states].sort((a, b) => a[0] - b[0]), [[6, '111111'], [9, '111111'], [12, '211111'], [28, '111111']])
 
 // 重複の規則を外すと、20 行以内の同じ遷移も残る (売買代金の基準の金額を決めるときだけ使う)。
 const prices = Array.from({ length: 40 }, (_, i) => ({ date: new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10), open: 100, high: 101, low: 99, close: 100 }))

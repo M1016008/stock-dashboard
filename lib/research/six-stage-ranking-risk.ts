@@ -60,16 +60,13 @@ export function monthEnds(calendar: readonly string[]): string[] {
   return calendar.filter((date, i) => i === calendar.length - 1 || calendar[i + 1].slice(0, 7) !== date.slice(0, 7))
 }
 
-// E039 のイベント (状態が変わった日、ticker ごとに日付順) だけで決まる、各日の 6 桁。
-// 状態 Y は、X>Y のイベントの日から、同じ区間 (block_id) の次のイベントの前の日まで続く。区間の最後の状態は、終わりの日が無いため決まらない。
-export function e039StatesAt(events: readonly { blockId: number; sequenceKey: string; signalDate: string }[], dates: readonly string[]): Map<string, string> {
-  const out = new Map<string, string>()
-  let d = 0
-  for (let k = 0; k + 1 < events.length; k += 1) {
-    const from = events[k].signalDate; const to = events[k + 1].signalDate
-    while (d < dates.length && dates[d] < from) d += 1
-    if (events[k + 1].blockId !== events[k].blockId) continue
-    for (let j = d; j < dates.length && dates[j] < to; j += 1) out.set(dates[j], events[k].sequenceKey.split('>')[1])
+// E039 のイベント (状態が変わった日) だけで決まる、各行の 6 桁。X>Y のイベントの前の dwell_b 行 (X の状態が続いた行) は X。
+// 区間の最後の状態は次の変化が無いため決まらない。signalRow はイベントの日の行、rows は調べる行 (小さい順)。
+export function e039StatesAt(events: readonly { sequenceKey: string; signalRow: number; dwellB: number }[], rows: readonly number[]): Map<number, string> {
+  const out = new Map<number, string>()
+  for (const event of events) {
+    const from = event.signalRow - event.dwellB
+    for (const row of rows) if (row >= from && row < event.signalRow) out.set(row, event.sequenceKey.split('>')[0])
   }
   return out
 }

@@ -93,7 +93,9 @@ class ScoreStudy {
   }
 }
 
-type Hypothesis = { id: string; study: 'C' | 'D'; judged: boolean; label: string; measureName: string; horizon: number } & Comparison
+type Hypothesis = { id: string; study: 'C' | 'D'; judged: boolean; label: string; measureName: string; horizon: number } & Omit<Comparison, 'level'> & { level?: Comparison['level'] }
+// 判定しない比べ (確認用・探索) には段階を付けない。
+const stage = ({ level, ...rest }: Comparison, judged: boolean) => (judged ? { ...rest, level } : rest)
 const tableOf = (c: EventColumns, lists: number[][], calendar: string[]) => Object.fromEntries(HORIZONS.map((h) => [h, lists.map((list) => ({
   full: summarize(c, list, h),
   blocks: Object.fromEntries(YEAR_BLOCKS.map(([name, from, to]) => [name, summarize(c, list.filter((row) => {
@@ -206,7 +208,8 @@ async function analyze(out: string): Promise<void> {
   const riskB = new EventColumns(ends.length * tickers.length)   // ret = (b) 標準偏差
   const codeIds = new Map<string, number>()
   const segmentNames = ['不明']
-  const e039 = eventsDb.prepare(`SELECT block_id,sequence_key,signal_date FROM events WHERE ticker=? AND event_type='ENTRY' AND length=2 ORDER BY regime_id_c`)
+  const e039 = eventsDb.prepare(`SELECT sequence_key,signal_date,dwell_b FROM events WHERE ticker=? AND event_type='ENTRY' AND length=2 ORDER BY regime_id_c`)
+  const reconciled = new Uint8Array(ends.length * tickers.length)   // 1 = E039 で照合できた組 (探索の内訳に使う)
   const reconcile = { determined: 0, pairsFrom2010: 0, prefixTickers: 0 }
   for (const ticker of tickers) {
     const bars = barsOf(ticker)
@@ -225,17 +228,20 @@ async function analyze(out: string): Promise<void> {
       const valid = (v: unknown) => typeof v === 'number' && v >= 1 && v <= 6
       return { code: digits.every(valid) ? digits.join('') : null, dailyA: valid(digits[0]) ? digits[0] as number : null }
     }
-    const recorded = e039StatesAt(e039.all(ticker).map((row) => ({ blockId: Number(row.block_id), sequenceKey: String(row.sequence_key), signalDate: String(row.signal_date) })),
-      rows.map((row) => bars[row].date))
+    const recorded = e039StatesAt(e039.all(ticker).map((row) => {
+      const signalRow = rowOf.get(String(row.signal_date))
+      if (signalRow == null) throw new Error(`E039 signal date not in source ${ticker} ${row.signal_date}`)
+      return { sequenceKey: String(row.sequence_key), signalRow, dwellB: Number(row.dwell_b) }
+    }), rows)
     const split = SPLIT_EXCLUDED.has(ticker)
     const gapAfter = gapsOf(bars)
     for (const row of rows) {
       const date = bars[row].date
       const state = stateAt(row)
       if (date >= '2010-01-01') reconcile.pairsFrom2010 += 1
-      if (recorded.has(date)) {
+      if (recorded.has(row)) {
         reconcile.determined += 1
-        if (recorded.get(date) !== state.code) throw new Error(`E039 mismatch ${ticker} ${date}: recomputed ${state.code} vs E039 ${recorded.get(date)}`)
+        if (recorded.get(row) !== state.code) throw new Error(`E039 mismatch ${ticker} ${date}: recomputed ${state.code} vs E039 ${recorded.get(row)}`)
       }
       if (split) { bump('D.excludedSplitTickers'); continue }
       if (!(bars[row].close > 0)) { bump('D.excludedInvalidBase'); continue }
@@ -243,6 +249,7 @@ async function analyze(out: string): Promise<void> {
       for (let i = row; i < Math.min(row + RISK_ROWS, bars.length - 1) && !gap; i += 1) if (gapAfter(i) > GAP_LIMIT) gap = true
       if (gap) { bump('D.excludedGap'); continue }
       const index = riskA.size++; riskB.size++
+      reconciled[index] = recorded.has(row) ? 1 : 0
       for (const c of [riskA, riskB]) {
         c.ticker[index] = tickerId.get(ticker)!
         c.date[index] = calendarIndex.get(date)!
@@ -275,7 +282,7 @@ async function analyze(out: string): Promise<void> {
       for (const h of MAIN_HORIZONS) {
         for (const comparison of compare(study.c, top, bottom, h, calendar, YEAR_BLOCKS, options)) {
           hypotheses.push({ id: `${judged ? 'C' : 'C-turnover'}-${name}-${comparison.measure}-${h}`, study: 'C', judged,
-            label: name === 'UP' ? '上向き: 上位 − 下位' : '下向き: 上位 − 下位', measureName: comparison.measure === 'median' ? '向きにそろえた騰落の中央値' : '勝率', horizon: h, ...comparison })
+            label: name === 'UP' ? '上向き: 上位 − 下位' : '下向き: 上位 − 下位', measureName: comparison.measure === 'median' ? '向きにそろえた騰落の中央値' : '勝率', horizon: h, ...stage(comparison, judged) })
         }
       }
     })
@@ -286,12 +293,16 @@ async function analyze(out: string): Promise<void> {
   const dailyARows = (stage: number) => { const out: number[] = []; for (let r = 0; r < riskA.size; r += 1) if (riskA.sub[r] === stage) out.push(r); return out }
   const allRisk = Array.from({ length: riskA.size }, (_, r) => r)
   const dGroups = { '①': [codeRows('111111'), codeRows('444444')], '②': [dailyARows(1), dailyARows(4)] } as const
-  for (const [name, [one, four]] of Object.entries(dGroups)) {
-    for (const [kind, c] of [['a', riskA], ['b', riskB]] as const) {
-      for (const h of MAIN_HORIZONS) {
-        const [median] = compare(c, four, one, h, calendar, YEAR_BLOCKS, options)
-        hypotheses.push({ id: `D-${name}-${kind}-${h}`, study: 'D', judged: true, label: `${name} 4 の群 − 1 の群`,
-          measureName: kind === 'a' ? '(a) 最大の下落率の中央値' : '(b) 標準偏差の中央値', horizon: h, ...median })
+  // 研究 D の判定は全組。探索として、E039 で照合できた組だけ・照合できなかった組だけでも同じ差を計算する (段階は付けない)。
+  const subsets = [['', () => true], ['照合できた組だけ', (row: number) => reconciled[row] === 1], ['照合できなかった組だけ', (row: number) => reconciled[row] === 0]] as const
+  for (const [subset, keep] of subsets) {
+    for (const [name, [one, four]] of Object.entries(dGroups)) {
+      for (const [kind, c] of [['a', riskA], ['b', riskB]] as const) {
+        for (const h of MAIN_HORIZONS) {
+          const [median] = compare(c, four.filter(keep), one.filter(keep), h, calendar, YEAR_BLOCKS, options)
+          hypotheses.push({ id: `D-${subset ? `${subset}-` : ''}${name}-${kind}-${h}`, study: 'D', judged: !subset, label: `${name} 4 の群 − 1 の群${subset ? ` (${subset})` : ''}`,
+            measureName: kind === 'a' ? '(a) 最大の下落率の中央値' : '(b) 標準偏差の中央値', horizon: h, ...stage(median, !subset) })
+        }
       }
     }
   }
@@ -307,12 +318,14 @@ async function analyze(out: string): Promise<void> {
       figures: Object.fromEntries(MAIN_HORIZONS.map((h) => [h, { histogram: lists.map((list) => bothSides(study.c, list, h).LONG), path: lists.map((list) => pathBands(study.c, list, h)) }])) }]
   }))
   const riskSummary = (rows: number[]) => Object.fromEntries(HORIZONS.map((h) => [h, { a: summarize(riskA, rows, h), b: summarize(riskB, rows, h) }]))
-  const codeCounts = [...codeIds.keys()].map((code) => [code, codeRows(code)] as const).filter(([, rows]) => rows.length >= MIN_EVENTS)
+  // ほかの 6 桁 (探索): すべての 6 桁。件数・25%・中央値・75%・平均を (a)(b) ごとに、期間ごとに持つ。
+  const brief = (s: Summary) => (has(s) ? [s.n, round(s.q25), round(s.median), round(s.q75), round(s.mean)] : 0)
   const studyD = {
     groups: Object.fromEntries(Object.entries(dGroups).map(([name, lists]) => [name, lists.map(riskSummary)])),
     all: riskSummary(allRisk),
     dailyA: [1, 2, 3, 4, 5, 6].map((stage) => riskSummary(dailyARows(stage))),
-    codes: Object.fromEntries(codeCounts.sort(([a], [b]) => (a < b ? -1 : 1)).map(([code, rows]) => [code, riskSummary(rows)])),
+    codes: Object.fromEntries([...codeIds.keys()].sort().map((code) => [code, Object.fromEntries(HORIZONS.map((h) =>
+      [h, [brief(summarize(riskA, codeRows(code), h)), brief(summarize(riskB, codeRows(code), h))]]))])),
     bySegment: Object.fromEntries(segmentNames.map((segment, s) => [segment, Object.fromEntries(Object.entries(dGroups).map(([name, lists]) =>
       [name, lists.map((list) => riskSummary(list.filter((row) => riskA.segment[row] === s)))]))])),
     figures: Object.fromEntries(MAIN_HORIZONS.map((h) => [h, Object.fromEntries((['a', 'b'] as const).map((kind) => [kind, {
@@ -350,7 +363,7 @@ async function analyze(out: string): Promise<void> {
   fs.mkdirSync(out, { recursive: true })
   writeOnce(path.join(out, 'transitions.json'), `${JSON.stringify(transitions)}\n`)
   writeOnce(path.join(out, 'result.json'), `${JSON.stringify(result)}\n`)
-  writeOnce(path.join(out, 'report.html'), renderRankingRiskReport(result))
+  writeOnce(path.join(out, 'report.html'), renderRankingRiskReport(result, transitions))
   console.log(JSON.stringify({ out, counts, turnoverCheck: result.turnoverCheck, reconcile,
     judged: hypotheses.filter((row) => row.judged).map((row) => [row.id, row.level]) }, null, 2))
 }
