@@ -43,7 +43,7 @@ function htable(rows,levels){return'<table><tr><th>研究</th><th>比べるも�
  r.blocks.map(b=>'<td>'+pct(b.difference)+(b.sameDirection?' 同じ向き':' 同じ向きでない')+'</td>').join('')+'<td>'+(levels?LV[r.level]:'—')+'</td></tr>').join('')+'</table>'}
 function judge(){document.getElementById('judge').innerHTML=htable(RESULT.hypotheses.filter(r=>r.judged),true)+'<p>研究 C の差 = 上位 20% − 下位 20%、研究 D の差 = 4 の群 − 1 の群。研究 D の値は比率 (−0.05 = −5%)。</p>'}
 function studyC(){const c=RESULT.studyC.main[S.d];const f=c.figures[S.h];
- hist(document.getElementById('histC'),[0,1,2].map(g=>[CN[g],f.histogram[g],CC[g]]));bands(document.getElementById('pathC'),[2,0].map(g=>[CN[g],f.path[g],CC[g]]));
+ hist(document.getElementById('histC'),[0,1,2].map(g=>[CN[g],f.histogram[g],CC[g]]));bands(document.getElementById('pathC'),[2,1,0].map(g=>[CN[g],f.path[g],CC[g]]));
  let html='<p>区切りの値 ('+DIRN[S.d]+'): 20% 点 '+c.cut.p20.toFixed(5)+'、80% 点 '+c.cut.p80.toFixed(5)+'</p><table><tr><th>群</th><th>点数 最小</th><th>10%</th><th>25%</th><th>中央値</th><th>75%</th><th>90%</th><th>最大</th></tr>'+
   c.scoreQuantiles.map((q,g)=>'<tr><td class="k">'+CN[g]+'</td>'+(q.length?q.map(v=>'<td>'+v.toFixed(5)+'</td>').join(''):'<td colspan="7">0 件</td>')+'</tr>').join('')+'</table>';
  for(const h of [5,10,15,20])html+='<table><caption>'+DIRN[S.d]+'、'+h+' 営業日'+(h===10||h===20?'':' (探索)')+'</caption>'+HEAD+c.tables[h].map((t,g)=>row(CN[g],t.full)+Object.entries(t.blocks).map(([k,b])=>row(CN[g]+' '+k,b)).join('')).join('')+'</table>';

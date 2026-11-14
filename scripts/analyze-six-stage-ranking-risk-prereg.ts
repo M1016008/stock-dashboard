@@ -39,6 +39,8 @@ const PINNED_FILES: Record<string, string> = {
   'lib/physical-momentum.ts': '54bb26950abc79d4faec39075ad539480be42ae62f71c833059f4ccdaf580605',
 }
 const MONTH_ENDS = 176
+// 事前登録の「データの確認」の件数。照合できる組と 2010 年以降の組がこの数でなければ止める。
+const REGISTERED_PAIRS = { determined: 375_444, from2010: 439_115 }
 const DIRECTIONS = ['UP', 'DOWN'] as const
 const GROUPS = ['IMPROVE', 'DETERIORATE', 'MIXED', 'INVALID'] as const
 const RISK_ROWS = 20
@@ -272,6 +274,9 @@ async function analyze(out: string): Promise<void> {
     }
   }
   source.close(); eventsDb.close()
+  if (reconcile.determined !== REGISTERED_PAIRS.determined || reconcile.pairsFrom2010 !== REGISTERED_PAIRS.from2010) {
+    throw new Error(`E039 reconciliation pairs ${reconcile.determined}/${reconcile.pairsFrom2010} != registered ${REGISTERED_PAIRS.determined}/${REGISTERED_PAIRS.from2010}`)
+  }
 
   // ---- 判定する 16 個と、確認用の 8 個 (段階は付けない)。 ----
   const options = { strongLevel: STRONG_LEVEL_CD, requireAllReplicates: true }
