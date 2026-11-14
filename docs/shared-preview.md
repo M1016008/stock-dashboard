@@ -1,69 +1,37 @@
-# StockBoard 共有プレビュー手順
+# StockBoard の友人向けの閲覧 (Friend Access)
 
-知人に一時共有する場合は、ローカルのStockBoardを起動し、Cloudflare Tunnelで外部URLを発行します。
-DB移行を伴わないため、現在のローカル表示に近い状態を安全に共有できます。
+ごく限られた友人に、StockBoard を読み取り専用で見せるための構成。2026-11-11 時点。
+秘密情報 (トークン・許可したメールアドレス) はここに書かない。
 
-## 1. 共有用の環境変数
+## 構成
 
-`.env.local` に以下を追加します。実値はリポジトリへコミットしません。
-
-```bash
-STOCKBOARD_SHARE_MODE=1
-STOCKBOARD_SHARE_BASIC_USER=friend
-STOCKBOARD_SHARE_BASIC_PASSWORD=長くて推測されにくいパスワード
-STOCKBOARD_SHARE_READ_ONLY=1
-STOCKBOARD_SHARE_ALLOW_ADMIN=0
+```
+利用者 → stock.marketframe.jp (Cloudflare Access: ワンタイムコード、許可したメールだけ)
+       → Cloudflare Tunnel (cloudflared)
+       → 読み取り専用の Gateway (127.0.0.1:3136)
+       → Web (127.0.0.1:3000)
 ```
 
-共有モードでは、全ページ/APIにBasic認証がかかります。
-`/admin` と `/api/admin` は共有時にブロックされます。
-`STOCKBOARD_SHARE_READ_ONLY=1` では、POST/PUT/PATCH/DELETEもブロックされます。
+| 部品 | 場所 | 管理 |
+|---|---|---|
+| Cloudflare Access | Cloudflare Zero Trust の管理画面 (アプリと許可するメールの方針) | オーナー |
+| Cloudflare Tunnel | システムの LaunchDaemon `com.cloudflare.cloudflared`。トークンは `/Library/Application Support/com.cloudflare.cloudflared/token` (値は表に出さない)。行き先は Cloudflare 側の設定 | オーナー |
+| Gateway | LaunchAgent `com.stockboard.friend-readonly-gateway`。`npm run friend-access:install-gateway` で登録する (コードは `lib/friend-readonly-gateway.ts`・`lib/friend-readonly-policy.ts`) | 登録・再起動はオーナー |
 
-## 2. 本番ビルドで起動
+## Gateway が通すもの
+- 管理の画面と API (下) を除き、`GET`・`HEAD` は通す。
+- `POST` は、読み取りだけの API (`FRIEND_READ_ONLY_JSON_POST_PATHS`、検索・Screener など) だけを通す。それ以外の書き込みは止める。
+- 管理の画面と API (`/admin`、`/api/admin`、大量保有の管理) は止める。
+- `cf-access-*` などの認証の情報は Web に渡さない。Web には `x-stockboard-access-mode: friend-read-only` を付けて渡す。
 
-```bash
-npm run build
-npm run share:start
-```
+## 利用者の追加・削除
+Cloudflare Access の方針で、許可するメールアドレスを足す・消す (オーナーが管理画面で行う)。StockBoard の側の作業は無い。
 
-開発中の見た目をそのまま共有するだけなら、代わりに以下でも起動できます。
+## 変更したとき・確かめるとき
+- Gateway のコードを変えたら、`npm run test:friend-access-gateway` と `npm run test:friend-access-ui` を通してから、オーナーが登録し直す。
+- 確かめること: 認証の後に主な画面 (日本株・米国株) が開くこと。Mac mini の上で Gateway (`http://127.0.0.1:3136`) に、管理の API (`/api/admin/...`) と書き込みの `POST` を送り、止まる (403 など) こと。Gateway のログ (`~/Library/Logs/StockBoard/friend-readonly-gateway.log`) は起動の記録だけで、要求ごとの記録は無い。
 
-```bash
-npm run share:dev
-```
-
-## 3. Cloudflare Tunnelで外部URLを出す
-
-`cloudflared` が未インストールの場合:
-
-```bash
-brew install cloudflare/cloudflare/cloudflared
-```
-
-短時間の確認だけならQuick Tunnel:
-
-```bash
-npm run share:tunnel:quick
-```
-
-表示された `https://...trycloudflare.com` のURLを知人に共有します。
-Basic認証のユーザー名・パスワードは別経路で伝えてください。
-
-継続利用する場合は、Cloudflareアカウントで正式TunnelとCloudflare Accessを設定する方が安全です。
-
-## 4. 共有前チェック
-
-```bash
-npm run build
-curl -I http://localhost:3000/
-curl -I http://localhost:3000/admin/db
-```
-
-共有モードで未認証なら `/` は `401`、認証後の `/admin/db` は `403` になります。
-
-## 注意
-
-- APIキーや `.env.local` は絶対に共有しない。
-- 知人共有では、原則 `STOCKBOARD_SHARE_READ_ONLY=1` のままにする。
-- AIチャットや保存系POSTを許可したい場合は `STOCKBOARD_SHARE_READ_ONLY=0` にできるが、OpenAI API利用コストや書き込みを許可する意味を確認してから行う。
-- データ更新バッチは共有URLから実行せず、ローカル運用側だけで実行する。
+## 守ること
+- 認証の無い直接の Tunnel は使わない (`npm run share:tunnel:quick` は止めてある)。
+- DB や SSD をクラウドに複製しない。
+- 友人に見せるデータは、取得元ごとの表示の許可の範囲に限る (AGENTS.md)。
