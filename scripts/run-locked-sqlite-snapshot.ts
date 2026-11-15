@@ -27,6 +27,7 @@ const sources = (options.get('db') ?? []).map((value) => {
   const at = value.indexOf('=')
   return { label: value.slice(0, at), databasePath: path.resolve(value.slice(at + 1)) }
 })
+if (!sources.length || sources.some((source) => !source.label)) throw new Error('DB_ARGUMENT_REQUIRED')
 const minimumFreeBytes = Number(one('min-free-bytes'))
 const maximumLockMs = Number(options.get('max-lock-ms')?.[0] ?? 60_000)
 if (!Number.isSafeInteger(minimumFreeBytes) || minimumFreeBytes <= 0) throw new Error('MIN_FREE_BYTES_INVALID')
@@ -37,7 +38,8 @@ const sqliteBinary = one('sqlite3')
 if (fileSha256(sqliteBinary) !== one('sqlite3-sha256')) throw new Error('SQLITE3_SHA256_MISMATCH')
 if (fileSha256(cloneBinary) !== one('clone-binary-sha256')) throw new Error('CLONE_BINARY_SHA256_MISMATCH')
 const freeBytes = () => {
-  const stat = fs.statfsSync(path.dirname(staging), { bigint: true })
+  // The DB's volume (the snapshot refuses a staging directory on any other volume).
+  const stat = fs.statfsSync(sources[0].databasePath, { bigint: true })
   return Number(stat.bavail * stat.bsize)
 }
 const describe = () => sources.map(({ label, databasePath }) => {

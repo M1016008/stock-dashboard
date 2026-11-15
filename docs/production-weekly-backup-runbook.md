@@ -238,8 +238,9 @@ owner instead of being changed.
    candidate directory in place; it is never published without a new run.
 5. **Leftover snapshot (only after a crash).** A lock connection whose parent
    died reads end-of-input, rolls back and exits without checkpointing
-   (`no_ckpt_on_close`); confirm `pgrep -fl 'sqlite-3.54.1/sqlite3'` prints
-   nothing. Then list `<stagingRoot>/<runId>/{JP,US}/` and delete only the
+   (`no_ckpt_on_close`). A clone helper already running finishes on its own and
+   may leave one unlocked clone (it only reads Production). Confirm
+   `pgrep -fl 'sqlite-3.54.1/sqlite3|apfs-clone-file'` prints nothing. Then list `<stagingRoot>/<runId>/{JP,US}/` and delete only the
    files there (the clones and their `-wal`/`-shm`) and those two directories,
    never anything outside `<stagingRoot>/<runId>`.
 
