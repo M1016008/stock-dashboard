@@ -12,6 +12,7 @@ import {
   type WeeklyBackupPlan,
 } from '@/lib/storage/weekly-backup-policy'
 import {
+  checkpointSnapshotClone,
   cloneReplicaSeed,
   fileSha256,
   publishVerifiedGeneration,
@@ -20,6 +21,7 @@ import {
   type RsyncProgress,
   type ReplicaVerification,
 } from '@/lib/storage/sqlite-rsync-generation'
+import { createLockedSqliteSnapshot, removeLockedSnapshot } from '@/lib/storage/locked-sqlite-snapshot'
 import {
   withWeeklyWriterHold,
   type ApprovedWriterIdentity,
@@ -29,6 +31,7 @@ import {
 export type WeeklyBackupRunnerPhase =
   | 'PREFLIGHT_PASSED'
   | 'SEEDS_CLONED'
+  | 'SOURCE_SNAPSHOT_CREATED'
   | 'WRITERS_RESTORED'
   | 'VERIFICATION_STARTED'
   | 'VERIFICATION_PASSED'
@@ -51,12 +54,15 @@ export type WeeklyBackupRunnerArguments = {
   observeDynamicGate: () => Promise<WeeklyBackupDynamicObservation>
   observePostflight: () => Promise<WeeklyBackupPostflight>
   readDestinationFreeBytes?: () => number
+  readSourceFreeBytes?: () => number
   onPhase?: (phase: WeeklyBackupRunnerPhase) => void
   onProgress?: (market: Market, progress: RsyncProgress) => void
   operations?: {
     cloneReplicaSeed: typeof cloneReplicaSeed
+    createLockedSqliteSnapshot: typeof createLockedSqliteSnapshot
+    checkpointSnapshotClone: typeof checkpointSnapshotClone
     runMonitoredSqliteRsync: typeof runMonitoredSqliteRsync
-    verifyReplica: (args: Parameters<typeof verifyReplica>[0]) => ReplicaVerification
+    verifyReplica: (args: Parameters<typeof verifyReplica>[0]) => Promise<ReplicaVerification>
     publishVerifiedGeneration: typeof publishVerifiedGeneration
   }
 }
@@ -77,17 +83,6 @@ function assertRegularFile(filePath: string): fs.Stats {
 function immutableFileSnapshot(filePath: string): ImmutableFileSnapshot {
   const { dev, ino, size, mtimeMs, ctimeMs } = assertRegularFile(filePath)
   return { dev, ino, size, mtimeMs, ctimeMs }
-}
-
-// Names each changed file and field so a failed hold can be diagnosed afterwards (2026-11-15 v2 failed without it).
-function sourceStateChanges(labels: string[], before: (ImmutableFileSnapshot | null)[],
-  after: (ImmutableFileSnapshot | null)[]): string[] {
-  return labels.flatMap((label, i) => {
-    const [a, b] = [before[i], after[i]]
-    if (!a || !b) return a === b ? [] : [`${label}:${a ? 'present' : 'missing'}->${b ? 'present' : 'missing'}`]
-    return (Object.keys(a) as (keyof ImmutableFileSnapshot)[])
-      .filter((key) => a[key] !== b[key]).map((key) => `${label}.${key}:${a[key]}->${b[key]}`)
-  })
 }
 
 function assertImmutableFileSnapshot(filePath: string, expected: ImmutableFileSnapshot): void {
@@ -139,6 +134,7 @@ function assertStaticEvidence(args: WeeklyBackupRunnerArguments): void {
     || fileSha256(args.plan.sqliteRsyncBinaryPath) !== args.plan.sqliteRsyncBinarySha256) {
     throw new Error('SQLITE_TOOL_BINARY_SHA256_MISMATCH')
   }
+  if (fileSha256(args.plan.cloneBinaryPath) !== args.plan.cloneBinarySha256) throw new Error('CLONE_BINARY_SHA256_MISMATCH')
 }
 
 export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArguments): Promise<{
@@ -148,6 +144,8 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
 }> {
   const operations = args.operations ?? {
     cloneReplicaSeed,
+    createLockedSqliteSnapshot,
+    checkpointSnapshotClone,
     runMonitoredSqliteRsync,
     verifyReplica,
     publishVerifiedGeneration,
@@ -200,6 +198,10 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   }
   args.onPhase?.('SEEDS_CLONED')
 
+  const verified = {} as Record<Market, MarketVerification>
+  let holdDurationMs = -1
+  let writerStatesRestored = false
+  let verificationStarted = 0
   const refreshedBeforeHold = await args.observeDynamicGate()
   assertWeeklyBackupDynamicGate(args.plan, refreshedBeforeHold)
   assertCombinedWalLimit(args.plan)
@@ -207,96 +209,110 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   const mustFinishBeforeMs = Date.parse(args.plan.mustFinishBefore)
   if (Date.now() + args.plan.maximumWriterHoldMs + args.plan.maximumVerificationMs
     > mustFinishBeforeMs) throw new Error('REMAINING_EXECUTION_WINDOW_TOO_SHORT')
-  const holdDeadlineMs = Math.min(
-    Date.now() + args.plan.maximumWriterHoldMs,
-    mustFinishBeforeMs - args.plan.maximumVerificationMs,
-  )
-  const held = await withWeeklyWriterHold({
-    approved: args.approvedWriters,
-    maximumHoldMs: args.plan.maximumWriterHoldMs,
-    driver: args.writerDriver,
-    operation: async (assertHoldValid) => {
-      // Baseline first, before the slower post-stop probes: a write to either market's
-      // database or WAL between here and the final comparison fails the run.
-      const sourceFiles = markets.flatMap((market) => [args.plan.sourceDatabasePaths[market],
-        `${args.plan.sourceDatabasePaths[market]}-wal`])
-      const sourceLabels = markets.flatMap((market) => [`${market}.db`, `${market}.wal`])
-      const sourceState = () => sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null))
-      const sourceStateAtHoldStart = sourceState()
-      const stoppedObservation = await args.observeDynamicGate()
-      assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
-      assertCombinedWalLimit(args.plan)
-      const acquired = {} as Record<Market, Acquisition>
-      for (const market of markets) {
+  const stagingDirectory = path.join(args.plan.stagingRoot, args.plan.runId)
+  if (fs.existsSync(stagingDirectory)) throw new Error('STAGING_DIRECTORY_COLLISION')
+  const snapshotPaths = Object.fromEntries(markets.map((market) => [market,
+    path.join(stagingDirectory, market, path.basename(args.plan.sourceDatabasePaths[market]))])) as Record<Market, string>
+  // The clones share blocks with production until production rewrites them, and that volume
+  // holds production, so its free space is watched until the clones are removed.
+  const readSourceFreeBytes = args.readSourceFreeBytes ?? (() => freeBytes(args.plan.sourceMount))
+  const assertSourceReserve = () => {
+    if (readSourceFreeBytes() < args.plan.sourceReserveBytes) throw new Error('SOURCE_RESERVE_BREACHED')
+  }
+  let snapshotLockHeldMs = -1
+  try {
+    const held = await withWeeklyWriterHold({
+      approved: args.approvedWriters,
+      maximumHoldMs: args.plan.maximumWriterHoldMs,
+      driver: args.writerDriver,
+      operation: async (assertHoldValid) => {
+        const stoppedObservation = await args.observeDynamicGate()
+        assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
+        assertCombinedWalLimit(args.plan)
+        assertSourceReserve()
         await assertHoldValid()
         args.assertRuntimeIdentity()
-        assertCombinedWalLimit(args.plan)
-        const sourcePath = args.plan.sourceDatabasePaths[market]
-        const sourceStat = assertRegularFile(sourcePath)
-        const sourceWalPath = `${sourcePath}-wal`
-        const sourceWalBytesAtStart = optionalRegularFileSize(sourceWalPath)
-        const destinationFreeBytesAtStart = readDestinationFreeBytes()
-        const result = await operations.runMonitoredSqliteRsync({
-          sqliteRsyncBinary: args.plan.sqliteRsyncBinaryPath,
-          sourceDatabasePath: sourcePath,
-          candidateDatabasePath: candidatePaths[market],
-          assertRuntimeIdentity: args.assertRuntimeIdentity,
-          readDestinationFreeBytes,
-          limits: {
-            deadlineMs: holdDeadlineMs,
-            destinationMount: args.plan.destinationMount,
-            destinationReserveBytes: args.plan.destinationReserveBytes,
-            destinationFreeBytesAtStart: initialDestinationFreeBytes,
-            maximumCandidateGrowthBytes: args.plan.maximumCandidateGrowthBytes,
-            sourceWalPath,
-            sourceWalBytesAtStart,
-            maximumWalGrowthBytes: args.plan.maximumWalGrowthBytes,
-            sourceDatabaseSizeAtStart: sourceStat.size,
-            sourceDatabaseMtimeMsAtStart: sourceStat.mtimeMs,
-          },
-          onProgress: (progress) => args.onProgress?.(market, progress),
+        const snapshot = await operations.createLockedSqliteSnapshot({
+          sqliteBinary: args.plan.sqliteBinaryPath,
+          cloneBinary: args.plan.cloneBinaryPath,
+          sources: markets.map((market) => ({ label: market, databasePath: args.plan.sourceDatabasePaths[market] })),
+          stagingDirectory,
+          lockWaitMs: Math.min(30_000, args.plan.maximumSnapshotLockMs),
+          maximumLockMs: args.plan.maximumSnapshotLockMs,
         })
-        const afterSync = readDestinationFreeBytes()
-        acquired[market] = {
-          sourceWalGrowthBytes: result.sourceWalGrowthBytes,
-          candidatePhysicalGrowthBytes: seedGrowth[market]
-            + Math.max(0, destinationFreeBytesAtStart - afterSync),
-        }
+        snapshotLockHeldMs = snapshot.lockHeldMs
+        args.onPhase?.('SOURCE_SNAPSHOT_CREATED')
         await assertHoldValid()
-        // Checked after each market (last, as before), so a change stops the run early and says when it was first seen.
-        const changes = sourceStateChanges(sourceLabels, sourceStateAtHoldStart, sourceState())
-        if (changes.length) throw new Error(`SOURCE_CHANGED_DURING_HOLD:after=${market}:${changes.join(',')}`)
-      }
-      return acquired
-    },
-  })
-  args.onPhase?.('WRITERS_RESTORED')
-  // A hold that overran while writers were stopping or restarting can never publish.
-  if (held.receipt.holdDurationMs > args.plan.maximumWriterHoldMs) throw new Error('WRITER_HOLD_LIMIT_EXCEEDED')
-
-  const verificationStartedAt = Date.now()
-  const verificationDeadlineMs = Math.min(
-    verificationStartedAt + args.plan.maximumVerificationMs,
-    mustFinishBeforeMs,
-  )
-  args.onPhase?.('VERIFICATION_STARTED')
-  const verified = {} as Record<Market, MarketVerification>
-  for (const market of markets) {
-    args.assertRuntimeIdentity()
-    const result = operations.verifyReplica({
-      sqliteBinary: args.plan.sqliteBinaryPath,
-      candidateRoot: generationRoot,
-      candidateDatabasePath: candidatePaths[market],
-      restoreDatabasePath: restorePaths[market],
-      deadlineMs: verificationDeadlineMs,
+      },
     })
-    verified[market] = {
-      market,
-      generationId: args.plan.runId,
-      syncStatus: 'PASS',
-      ...result,
-      ...held.result[market],
+    args.onPhase?.('WRITERS_RESTORED')
+    // A hold that overran while writers were stopping or restarting can never publish.
+    if (held.receipt.holdDurationMs > args.plan.maximumWriterHoldMs) throw new Error('WRITER_HOLD_LIMIT_EXCEEDED')
+
+    // From here only the private clones are read; production is not touched again.
+    const verificationStartedAt = Date.now()
+    const verificationDeadlineMs = Math.min(verificationStartedAt + args.plan.maximumVerificationMs, mustFinishBeforeMs)
+    const acquired = {} as Record<Market, Acquisition>
+    for (const market of markets) {
+      args.assertRuntimeIdentity()
+      assertSourceReserve()
+      await operations.checkpointSnapshotClone({
+        sqliteBinary: args.plan.sqliteBinaryPath,
+        snapshotRoot: stagingDirectory,
+        databasePath: snapshotPaths[market],
+        deadlineMs: verificationDeadlineMs,
+        check: assertSourceReserve,
+      })
+      const snapshotStat = assertRegularFile(snapshotPaths[market])
+      const destinationFreeBytesAtStart = readDestinationFreeBytes()
+      const result = await operations.runMonitoredSqliteRsync({
+        sqliteRsyncBinary: args.plan.sqliteRsyncBinaryPath,
+        sourceDatabasePath: snapshotPaths[market],
+        candidateDatabasePath: candidatePaths[market],
+        assertRuntimeIdentity: args.assertRuntimeIdentity,
+        readDestinationFreeBytes,
+        monitorSourceWal: false,
+        extraCheck: assertSourceReserve,
+        limits: {
+          deadlineMs: verificationDeadlineMs,
+          destinationMount: args.plan.destinationMount,
+          destinationReserveBytes: args.plan.destinationReserveBytes,
+          destinationFreeBytesAtStart: initialDestinationFreeBytes,
+          maximumCandidateGrowthBytes: args.plan.maximumCandidateGrowthBytes,
+          sourceWalPath: `${snapshotPaths[market]}-wal`,
+          sourceWalBytesAtStart: 0,
+          maximumWalGrowthBytes: args.plan.maximumWalGrowthBytes,
+          sourceDatabaseSizeAtStart: snapshotStat.size,
+          sourceDatabaseMtimeMsAtStart: snapshotStat.mtimeMs,
+        },
+        onProgress: (progress) => args.onProgress?.(market, progress),
+      })
+      acquired[market] = {
+        sourceWalGrowthBytes: result.sourceWalGrowthBytes,
+        candidatePhysicalGrowthBytes: seedGrowth[market]
+          + Math.max(0, destinationFreeBytesAtStart - readDestinationFreeBytes()),
+      }
     }
+
+    args.onPhase?.('VERIFICATION_STARTED')
+    for (const market of markets) {
+      args.assertRuntimeIdentity()
+      const result = await operations.verifyReplica({
+        sqliteBinary: args.plan.sqliteBinaryPath,
+        candidateRoot: generationRoot,
+        candidateDatabasePath: candidatePaths[market],
+        restoreDatabasePath: restorePaths[market],
+        snapshotDatabasePath: snapshotPaths[market],
+        deadlineMs: verificationDeadlineMs,
+        check: assertSourceReserve,
+      })
+      verified[market] = { market, generationId: args.plan.runId, syncStatus: 'PASS', ...result, ...acquired[market] }
+    }
+    holdDurationMs = held.receipt.holdDurationMs
+    writerStatesRestored = held.receipt.restored
+    verificationStarted = verificationStartedAt
+  } finally {
+    removeLockedSnapshot(stagingDirectory, [...markets])
   }
   args.onPhase?.('VERIFICATION_PASSED')
 
@@ -317,13 +333,14 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     priorGenerationId: args.plan.priorGenerationId,
     priorGenerationStatus: args.plan.priorGenerationStatus,
     priorGenerationUnchanged: true,
-    writerHoldDurationMs: held.receipt.holdDurationMs,
-    verificationDurationMs: Date.now() - verificationStartedAt,
+    writerHoldDurationMs: holdDurationMs,
+    snapshotLockHeldMs,
+    verificationDurationMs: Date.now() - verificationStarted,
     destinationFreeBytesAfter: readDestinationFreeBytes(),
     completeManifestExists: fs.existsSync(path.join(generationRoot, 'COMPLETE.manifest.json')),
     candidateIsUniquePath: path.dirname(generationRoot) === path.resolve(args.plan.destinationRoot)
       && path.basename(generationRoot) === args.plan.runId,
-    writerStatesRestored: held.receipt.restored,
+    writerStatesRestored,
     dailySchedulesUnchanged: postflight.dailySchedulesUnchanged,
     webHealthyAfter: postflight.webHealthy,
     analogHealthyAfter: postflight.analogHealthy,

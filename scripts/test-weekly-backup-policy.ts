@@ -57,6 +57,11 @@ const plan: WeeklyBackupPlan = {
   sqliteRsyncBinaryPath: '/fixture/tools/sqlite3_rsync',
   sqliteRsyncBinarySha256: 'f'.repeat(64),
   sqliteToolsArchiveSha3: toolSha3,
+  stagingRoot: '/fixture/source/weekly-backup-staging',
+  cloneBinaryPath: '/fixture/tools/apfs-clone-file',
+  cloneBinarySha256: '1'.repeat(64),
+  sourceReserveBytes: 500_000_000_000,
+  maximumSnapshotLockMs: 60_000,
 }
 
 const observed: WeeklyBackupObservation = {
@@ -68,6 +73,7 @@ const observed: WeeklyBackupObservation = {
   sourceVolumeUuid: 'source-uuid',
   destinationVolumeUuid: 'destination-uuid',
   destinationFreeBytes: 894_700_000_000,
+  sourceFreeBytes: 2_000_000_000_000,
   combinedWalBytes: 1_000_000,
   activeWriterLabels: ['com.stockboard.update-latest', 'com.stockboard.us-update-latest'],
   unknownWriterLabels: [],
@@ -89,6 +95,8 @@ const verification = (market: 'JP' | 'US'): MarketVerification => ({
   generationId: 'weekly-generation-v2',
   syncStatus: 'PASS',
   databaseSha256: market === 'JP' ? 'a'.repeat(64) : 'b'.repeat(64),
+  contentSha256: market === 'JP' ? '2'.repeat(64) : '3'.repeat(64),
+  snapshotContentSha256: market === 'JP' ? '2'.repeat(64) : '3'.repeat(64),
   quickCheck: 'ok',
   integrityCheck: 'ok',
   readOnlyReopen: true,
@@ -104,6 +112,7 @@ const evidence: PromotionEvidence = {
   priorGenerationStatus: 'ACQUIRED_WITH_LIMITATIONS',
   priorGenerationUnchanged: true,
   writerHoldDurationMs: 90 * 60 * 1_000,
+  snapshotLockHeldMs: 4_000,
   verificationDurationMs: 12 * 60 * 60 * 1_000,
   destinationFreeBytesAfter: 800_000_000_000,
   completeManifestExists: false,
@@ -177,6 +186,14 @@ rejects((_, __, next) => { next.priorGenerationUnchanged = false }, /PRIOR_GENER
 rejects((_, __, next) => { next.completeManifestExists = true }, /COMPLETE_MANIFEST_ALREADY_EXISTS/)
 rejects((_, __, next) => { next.writerStatesRestored = false }, /WRITER_RUNTIME_STATE_NOT_RESTORED/)
 rejects((_, __, next) => { next.webHealthyAfter = false }, /READ_SERVICE_NOT_HEALTHY_AFTER_BACKUP/)
+rejects((_, next) => { next.sourceFreeBytes = 499_999_999_999 }, /INSUFFICIENT_SOURCE_HEADROOM/)
+rejects((next) => { next.sourceReserveBytes = 299_999_999_999 }, /SOURCE_RESERVE_BELOW_300GB/)
+rejects((next) => { next.stagingRoot = '/fixture/weekly-backups/staging' }, /STAGING_ROOT_INVALID/)
+rejects((next) => { next.stagingRoot = '/fixture/source' }, /STAGING_ROOT_INVALID/)
+rejects((next) => { next.cloneBinarySha256 = 'x' }, /INVALID_CLONE_BINARY_SHA256/)
+rejects((next) => { next.maximumSnapshotLockMs = 5 * 60 * 1_000 + 1 }, /SNAPSHOT_LOCK_LIMIT_INVALID/)
+rejects((_, __, next) => { next.jp.snapshotContentSha256 = 'c'.repeat(64) }, /JP_REPLICA_DIFFERS_FROM_SNAPSHOT/)
+rejects((_, __, next) => { next.snapshotLockHeldMs = 60_001 }, /SNAPSHOT_LOCK_LIMIT_EXCEEDED/)
 
 console.log(JSON.stringify({
   verdict: 'PASS',
@@ -185,5 +202,5 @@ console.log(JSON.stringify({
   oldLimitedGenerationPromoted: false,
   writerHoldMaximumHours: plan.maximumWriterHoldMs / 3_600_000,
   verificationMaximumHours: plan.maximumVerificationMs / 3_600_000,
-  failClosedCases: 18,
+  failClosedCases: 26,
 }, null, 2))

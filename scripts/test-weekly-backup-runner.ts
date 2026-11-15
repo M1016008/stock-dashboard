@@ -39,6 +39,8 @@ async function main(): Promise<void> {
     const sqliteRsyncBinaryPath = path.join(toolsRoot, 'sqlite3_rsync')
     fs.writeFileSync(sqliteBinaryPath, 'fixture sqlite3\n')
     fs.writeFileSync(sqliteRsyncBinaryPath, 'fixture sqlite3_rsync\n')
+    const cloneBinaryPath = path.join(toolsRoot, 'apfs-clone-file')
+    fs.writeFileSync(cloneBinaryPath, 'fixture clone\n')
 
     const sourceDatabasePaths = {} as Record<Market, string>
     const priorDatabasePaths = {} as Record<Market, string>
@@ -92,7 +94,13 @@ async function main(): Promise<void> {
       sqliteRsyncBinaryPath,
       sqliteRsyncBinarySha256: fileSha256(sqliteRsyncBinaryPath),
       sqliteToolsArchiveSha3: sha256('fixture-tools-archive'),
+      stagingRoot: path.join(sourceMount, 'staging'),
+      cloneBinaryPath,
+      cloneBinarySha256: fileSha256(cloneBinaryPath),
+      sourceReserveBytes: 300_000_000_000,
+      maximumSnapshotLockMs: 60_000,
     }
+    fs.mkdirSync(plan.stagingRoot)
     const approvedWriters: ApprovedWriterIdentity[] = plan.writerLabels.map((label) => ({
       label,
       definitionSha256: sha256(label),
@@ -134,6 +142,7 @@ async function main(): Promise<void> {
       sourceVolumeUuid: plan.sourceVolumeUuid,
       destinationVolumeUuid: plan.destinationVolumeUuid,
       destinationFreeBytes: 900_000_000_000,
+      sourceFreeBytes: 2_000_000_000_000,
       combinedWalBytes: 0,
       activeWriterLabels: [plan.writerLabels[0]],
       unknownWriterLabels: [],
@@ -158,12 +167,29 @@ async function main(): Promise<void> {
         ...dynamic } = observation
       return { ...dynamic, now: new Date().toISOString() }
     }
+    const events: string[] = []
     const operations: NonNullable<WeeklyBackupRunnerArguments['operations']> = {
       cloneReplicaSeed: ({ priorDatabasePath, candidateDatabasePath }) => {
         fs.mkdirSync(path.dirname(candidateDatabasePath), { recursive: true })
         fs.copyFileSync(priorDatabasePath, candidateDatabasePath)
       },
+      // Copies stand in for APFS clones: what matters here is when they are taken and what is read later.
+      createLockedSqliteSnapshot: async ({ sources, stagingDirectory }) => {
+        events.push(`snapshot:held=${writerState.get(plan.writerLabels[0])!.loaded === false}`)
+        fs.mkdirSync(stagingDirectory)
+        const files = sources.map(({ label, databasePath }) => {
+          const clonePath = path.join(stagingDirectory, label, path.basename(databasePath))
+          fs.mkdirSync(path.dirname(clonePath))
+          fs.copyFileSync(databasePath, clonePath)
+          return { label, kind: 'db' as const, sourcePath: databasePath, clonePath, bytes: fs.statSync(clonePath).size }
+        })
+        return { stagingDirectory, files, lockHeldMs: 250 }
+      },
+      checkpointSnapshotClone: async ({ databasePath }) => { events.push(`checkpoint:${path.basename(databasePath)}`) },
       runMonitoredSqliteRsync: async (syncArgs) => {
+        events.push(`sync:${path.relative(sourceMount, syncArgs.sourceDatabasePath)}:held=${writerState.get(plan.writerLabels[0])!.loaded === false}`)
+        assert.equal(syncArgs.monitorSourceWal, false)
+        syncArgs.extraCheck?.()
         syncArgs.assertRuntimeIdentity()
         fs.copyFileSync(syncArgs.sourceDatabasePath, syncArgs.candidateDatabasePath)
         syncArgs.onProgress?.({
@@ -176,11 +202,15 @@ async function main(): Promise<void> {
         })
         return { elapsedMs: 1, sourceWalGrowthBytes: 0, stderr: '' }
       },
-      verifyReplica: ({ candidateDatabasePath, restoreDatabasePath }) => {
+      verifyReplica: async ({ candidateDatabasePath, restoreDatabasePath, snapshotDatabasePath, check }) => {
+        events.push(`verify:${path.relative(sourceMount, snapshotDatabasePath)}`)
+        check?.()
         fs.mkdirSync(path.dirname(restoreDatabasePath), { recursive: true })
         fs.copyFileSync(candidateDatabasePath, restoreDatabasePath)
         return {
           databaseSha256: fileSha256(candidateDatabasePath),
+          contentSha256: fileSha256(candidateDatabasePath),
+          snapshotContentSha256: fileSha256(snapshotDatabasePath),
           quickCheck: 'ok',
           integrityCheck: 'ok',
           readOnlyReopen: true,
@@ -200,6 +230,7 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => undefined,
       observeDynamicGate: async () => dynamicObservation(),
       readDestinationFreeBytes: () => 900_000_000_000,
+      readSourceFreeBytes: () => 2_000_000_000_000,
       observePostflight: async () => ({
         dailySchedulesUnchanged: true,
         webHealthy: true,
@@ -213,6 +244,7 @@ async function main(): Promise<void> {
     assert.deepEqual(phases, [
       'PREFLIGHT_PASSED',
       'SEEDS_CLONED',
+      'SOURCE_SNAPSHOT_CREATED',
       'WRITERS_RESTORED',
       'VERIFICATION_STARTED',
       'VERIFICATION_PASSED',
@@ -221,6 +253,16 @@ async function main(): Promise<void> {
     assert.ok(lifecycle[0].startsWith('bootout:'))
     assert.ok(lifecycle.at(-1)?.startsWith('bootstrap:'))
     assert.deepEqual([...progressMarkets].sort(), ['JP', 'US'])
+    // The snapshot is taken while writers are held; every later step reads only the staging clones,
+    // after writers are back, and the clones are removed at the end.
+    assert.deepEqual(events, [
+      'snapshot:held=true',
+      'checkpoint:jp.db', 'sync:staging/weekly-runner-fixture-v1/JP/jp.db:held=false',
+      'checkpoint:us.db', 'sync:staging/weekly-runner-fixture-v1/US/us.db:held=false',
+      'verify:staging/weekly-runner-fixture-v1/JP/jp.db', 'verify:staging/weekly-runner-fixture-v1/US/us.db',
+    ])
+    assert.deepEqual(fs.readdirSync(plan.stagingRoot), [])
+    assert.equal(JSON.parse(fs.readFileSync(result.manifestPath, 'utf8')).snapshotLockHeldMs, 250)
     assert.ok(dynamicChecks >= 2, 'Dynamic state must be recollected before and after Writer Hold')
     const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'))
     assert.equal(manifest.status, 'VERIFIED')
@@ -244,6 +286,7 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => undefined,
       observeDynamicGate: async () => dynamicObservation(),
       readDestinationFreeBytes: () => 900_000_000_000,
+      readSourceFreeBytes: () => 2_000_000_000_000,
       observePostflight: async () => ({ dailySchedulesUnchanged: true,
         webHealthy: true, analogHealthy: true }),
       operations,
@@ -263,6 +306,7 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => undefined,
       observeDynamicGate: async () => ({ ...dynamicObservation(), updateWindowConflict: true }),
       readDestinationFreeBytes: () => 900_000_000_000,
+      readSourceFreeBytes: () => 2_000_000_000_000,
       observePostflight: async () => ({ dailySchedulesUnchanged: true,
         webHealthy: true, analogHealthy: true }),
       operations,
@@ -285,6 +329,7 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => { if (abortRequested) throw new Error('OPERATOR_ABORT_REQUESTED:SIGINT') },
       observeDynamicGate: async () => dynamicObservation(),
       readDestinationFreeBytes: () => 900_000_000_000,
+      readSourceFreeBytes: () => 2_000_000_000_000,
       observePostflight: async () => {
         abortRequested = true
         return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
@@ -293,13 +338,9 @@ async function main(): Promise<void> {
     }), /OPERATOR_ABORT_REQUESTED/)
     assert.equal(fs.existsSync(path.join(destinationRoot, abortPlan.runId, 'COMPLETE.manifest.json')), false)
 
-    // A write to the other market while JP is copying must fail the whole run.
-    const crossPlan = structuredClone(plan)
-    crossPlan.runId = 'weekly-runner-fixture-cross-market-write'
-    const crossSyncs: string[] = []
-    await assert.rejects(() => runWeeklyBackupGeneration({
-      plan: crossPlan,
-      expectedPlanSha256: weeklyBackupPlanSha256(crossPlan),
+    const baseRun = (runPlan: WeeklyBackupPlan, extra: Partial<WeeklyBackupRunnerArguments> = {}) => runWeeklyBackupGeneration({
+      plan: runPlan,
+      expectedPlanSha256: weeklyBackupPlanSha256(runPlan),
       observation: { ...observation, now: new Date().toISOString() },
       runbookPath,
       approvedWriters,
@@ -307,89 +348,57 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => undefined,
       observeDynamicGate: async () => dynamicObservation(),
       readDestinationFreeBytes: () => 900_000_000_000,
-      observePostflight: async () => ({ dailySchedulesUnchanged: true,
-        webHealthy: true, analogHealthy: true }),
-      operations: {
-        ...operations,
-        runMonitoredSqliteRsync: async (syncArgs) => {
-          crossSyncs.push(syncArgs.sourceDatabasePath)
-          if (syncArgs.sourceDatabasePath === crossPlan.sourceDatabasePaths.JP) {
-            fs.utimesSync(crossPlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 5_000))
-          }
-          return operations.runMonitoredSqliteRsync(syncArgs)
-        },
-      },
-    }), /SOURCE_CHANGED_DURING_HOLD:after=JP:US\.db\.mtimeMs:\d+(\.\d+)?->\d+(\.\d+)?[,;]/)
-    // The change is caught right after JP, so US is never copied.
-    assert.deepEqual(crossSyncs, [crossPlan.sourceDatabasePaths.JP])
-    assert.equal(fs.existsSync(path.join(destinationRoot, crossPlan.runId, 'COMPLETE.manifest.json')), false)
-
-    // A WAL that appears during the US copy, and a write during the last hold check, are both named.
-    for (const variant of ['wal-appears', 'write-during-last-hold-check'] as const) {
-      const latePlan = structuredClone(plan)
-      latePlan.runId = `weekly-runner-fixture-${variant}`
-      const jpWal = `${latePlan.sourceDatabasePaths.JP}-wal`
-      let usCopied = false
-      await assert.rejects(() => runWeeklyBackupGeneration({
-        plan: latePlan,
-        expectedPlanSha256: weeklyBackupPlanSha256(latePlan),
-        observation: { ...observation, now: new Date().toISOString() },
-        runbookPath,
-        approvedWriters,
-        writerDriver: { ...writerDriver, observe: async (label) => {
-          if (variant === 'write-during-last-hold-check' && usCopied) {
-            fs.utimesSync(latePlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 7_000))
-          }
-          return writerDriver.observe(label)
-        } },
-        assertRuntimeIdentity: () => undefined,
-        observeDynamicGate: async () => dynamicObservation(),
-        readDestinationFreeBytes: () => 900_000_000_000,
-        observePostflight: async () => ({ dailySchedulesUnchanged: true,
-          webHealthy: true, analogHealthy: true }),
-        operations: {
-          ...operations,
-          runMonitoredSqliteRsync: async (syncArgs) => {
-            const result = await operations.runMonitoredSqliteRsync(syncArgs)
-            if (syncArgs.sourceDatabasePath === latePlan.sourceDatabasePaths.US) {
-              if (variant === 'wal-appears') fs.writeFileSync(jpWal, '')
-              usCopied = true
-            }
-            return result
-          },
-        },
-      }), variant === 'wal-appears'
-        ? /SOURCE_CHANGED_DURING_HOLD:after=US:JP\.wal:missing->present;/
-        : /SOURCE_CHANGED_DURING_HOLD:after=US:US\.db\.mtimeMs:/)
-      fs.rmSync(jpWal, { force: true })
-      assert.equal(fs.existsSync(path.join(destinationRoot, latePlan.runId, 'COMPLETE.manifest.json')), false)
-    }
-
-    // The baseline is taken before the post-stop gate, so a write during that gate fails the run.
-    const gatePlan = structuredClone(plan)
-    gatePlan.runId = 'weekly-runner-fixture-write-during-stopped-gate'
-    let gateCalls = 0
-    await assert.rejects(() => runWeeklyBackupGeneration({
-      plan: gatePlan,
-      expectedPlanSha256: weeklyBackupPlanSha256(gatePlan),
-      observation: { ...observation, now: new Date().toISOString() },
-      runbookPath,
-      approvedWriters,
-      writerDriver,
-      assertRuntimeIdentity: () => undefined,
-      observeDynamicGate: async () => {
-        gateCalls += 1
-        // Call 1 is before the hold; call 2 is the post-stop gate inside it.
-        if (gateCalls === 2) fs.utimesSync(gatePlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 9_000))
-        return dynamicObservation()
-      },
-      readDestinationFreeBytes: () => 900_000_000_000,
-      observePostflight: async () => ({ dailySchedulesUnchanged: true,
-        webHealthy: true, analogHealthy: true }),
+      readSourceFreeBytes: () => 2_000_000_000_000,
+      observePostflight: async () => ({ dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }),
       operations,
-    }), /SOURCE_CHANGED_DURING_HOLD:after=JP:US\.db\.mtimeMs:/)
-    assert.equal(gateCalls, 2)
-    assert.equal(fs.existsSync(path.join(destinationRoot, gatePlan.runId, 'COMPLETE.manifest.json')), false)
+      ...extra,
+    })
+
+    // Production writes after the snapshot (writers back, Web caches) neither fail the run nor reach the copy.
+    const latePlan = structuredClone(plan)
+    latePlan.runId = 'weekly-runner-fixture-write-after-snapshot'
+    const late = await baseRun(latePlan, { operations: { ...operations,
+      runMonitoredSqliteRsync: async (syncArgs) => {
+        fs.appendFileSync(latePlan.sourceDatabasePaths.JP, 'written-after-snapshot\n')
+        return operations.runMonitoredSqliteRsync(syncArgs)
+      } } })
+    assert.doesNotMatch(fs.readFileSync(path.join(late.generationRoot, 'JP', 'stockboard.db'), 'utf8'), /written-after-snapshot/)
+
+    // The source-volume reserve is watched until the clones are gone: a breach stops the run and removes them.
+    const reservePlan = structuredClone(plan)
+    reservePlan.runId = 'weekly-runner-fixture-source-reserve'
+    let sourceFree = 2_000_000_000_000
+    await assert.rejects(() => baseRun(reservePlan, {
+      readSourceFreeBytes: () => sourceFree,
+      operations: { ...operations, checkpointSnapshotClone: async () => { sourceFree = 299_999_999_999 } },
+    }), /SOURCE_RESERVE_BREACHED/)
+    assert.equal(fs.existsSync(path.join(reservePlan.stagingRoot, reservePlan.runId)), false)
+    assert.equal(fs.existsSync(path.join(destinationRoot, reservePlan.runId, 'COMPLETE.manifest.json')), false)
+
+    // A snapshot failure (for example a lock that cannot be taken) restores writers and leaves no clones.
+    const lockPlan = structuredClone(plan)
+    lockPlan.runId = 'weekly-runner-fixture-lock-failed'
+    const bootstrapsBefore = lifecycle.filter((event) => event.startsWith('bootstrap:')).length
+    await assert.rejects(() => baseRun(lockPlan, { operations: { ...operations,
+      createLockedSqliteSnapshot: async () => { throw new Error('SNAPSHOT_LOCK_FAILED:JP:database is locked') } } }),
+    /SNAPSHOT_LOCK_FAILED:JP/)
+    assert.equal(lifecycle.filter((event) => event.startsWith('bootstrap:')).length - bootstrapsBefore, 1)
+    assert.equal(fs.existsSync(path.join(lockPlan.stagingRoot, lockPlan.runId)), false)
+
+    // Not enough room on the source volume, or an existing staging directory, stops before writers are held.
+    const lifecycleBeforeGates = lifecycle.length
+    const headroomPlan = structuredClone(plan)
+    headroomPlan.runId = 'weekly-runner-fixture-source-headroom'
+    await assert.rejects(() => baseRun(headroomPlan, {
+      observeDynamicGate: async () => ({ ...dynamicObservation(), sourceFreeBytes: 299_999_999_999 }) }),
+    /INSUFFICIENT_SOURCE_HEADROOM/)
+    const collisionPlan = structuredClone(plan)
+    collisionPlan.runId = 'weekly-runner-fixture-staging-collision'
+    fs.mkdirSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId))
+    fs.writeFileSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId, 'keep'), 'x')
+    await assert.rejects(() => baseRun(collisionPlan), /STAGING_DIRECTORY_COLLISION/)
+    assert.equal(fs.readFileSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId, 'keep'), 'utf8'), 'x')
+    assert.equal(lifecycle.length, lifecycleBeforeGates)
 
     // A start window that closed after observation must fail before any write.
     const closedPlan = structuredClone(plan)
@@ -406,6 +415,7 @@ async function main(): Promise<void> {
       assertRuntimeIdentity: () => undefined,
       observeDynamicGate: async () => dynamicObservation(),
       readDestinationFreeBytes: () => 900_000_000_000,
+      readSourceFreeBytes: () => 2_000_000_000_000,
       observePostflight: async () => ({ dailySchedulesUnchanged: true,
         webHealthy: true, analogHealthy: true }),
       operations,

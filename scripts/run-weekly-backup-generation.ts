@@ -65,13 +65,14 @@ validateWeeklyBackupPlan(plan)
 assertWeeklyBackupPlanSha256(plan, expectedPlanSha256)
 // Downstream containment checks are lexical, so no planned path may pass through a symlink.
 for (const planned of [plan.sourceMount, plan.destinationMount, plan.destinationRoot, plan.priorManifestPath,
-  plan.sqliteBinaryPath, plan.sqliteRsyncBinaryPath,
+  plan.sqliteBinaryPath, plan.sqliteRsyncBinaryPath, plan.stagingRoot, plan.cloneBinaryPath,
   ...MARKETS.flatMap((market) => [plan.sourceDatabasePaths[market], plan.priorDatabasePaths[market]])]) {
   if (resolveThroughExistingAncestor(planned) !== planned) throw new Error(`PLANNED_PATH_NOT_CANONICAL:${planned}`)
 }
 // The pinned tools run against Production during observation, so verify them before any spawn.
 if (fileSha256(plan.sqliteBinaryPath) !== plan.sqliteBinarySha256
   || fileSha256(plan.sqliteRsyncBinaryPath) !== plan.sqliteRsyncBinarySha256) throw new Error('SQLITE_TOOL_SHA256_MISMATCH')
+if (fileSha256(plan.cloneBinaryPath) !== plan.cloneBinarySha256) throw new Error('CLONE_BINARY_SHA256_MISMATCH')
 
 function run(file: string, args: string[], timeoutMs = 60_000): string {
   const result = spawnSync(file, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
@@ -258,6 +259,7 @@ async function observeDynamic(): Promise<WeeklyBackupDynamicObservation> {
     sourceVolumeUuid: source.uuid,
     destinationVolumeUuid: destination.uuid,
     destinationFreeBytes: destination.freeBytes,
+    sourceFreeBytes: source.freeBytes,
     combinedWalBytes: MARKETS.reduce((total, market) => {
       const wal = `${plan.sourceDatabasePaths[market]}-wal`
       return total + (fs.existsSync(wal) ? fs.statSync(wal).size : 0)
