@@ -150,8 +150,8 @@ Accepted risks (recorded, not coded):
 
 ## Abort and writer restoration
 
-The plan's `maximumWriterHoldMs` is the hold limit (3 hours for the first
-Production run). The CLI treats SIGHUP as an operator abort, so `nohup` alone
+The plan's `maximumWriterHoldMs` is the hold limit (30 minutes in the first
+clone-first plan; the hold itself is normally tens of seconds). The CLI treats SIGHUP as an operator abort, so `nohup` alone
 does not protect it from a closing terminal. Start it as one command line in a
 single zsh, which records its PID, removes it from the shell's job table so that
 closing the terminal sends it no SIGHUP, and keeps the Mac from idle sleep for
@@ -248,8 +248,9 @@ Syncs and checks run after the writers are restored, so aborting then needs no
 writer action. A running `quick_check`/`integrity_check` reads the clone, so stop
 it with `pkill -INT -f '<stagingRoot>/<runId>'` (and signal the CLI): the check
 fails, the CLI removes the clones and exits non-zero. Hashing runs inside the
-CLI synchronously, so a signal takes effect only after the current file's hash
-finishes (minutes on OWC, up to about 40 minutes per database on SanDisk). The CLI rechecks the abort flag after
+CLI synchronously and a market's three hashes (clone, candidate, restore) run
+back to back, so a signal takes effect only after that market's verification
+finishes (up to about 1.5 hours per market on SanDisk). The CLI rechecks the abort flag after
 postflight, immediately before publishing, so the candidate stays unpublished.
 
 ## First Production approval must name
