@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
-export const WEEKLY_BACKUP_SCHEMA_VERSION = 1 as const
+// 2: clone first on the source volume (short writer hold), then sync the clone off-device.
+export const WEEKLY_BACKUP_SCHEMA_VERSION = 2 as const
 export const MINIMUM_DESTINATION_RESERVE_BYTES = 150_000_000_000
+// The source volume holds production, so its free space never goes below this while clones exist.
+export const MINIMUM_SOURCE_RESERVE_BYTES = 300_000_000_000
+export const MAXIMUM_SNAPSHOT_LOCK_MS = 5 * 60 * 1_000
 export const MAXIMUM_WRITER_HOLD_MS = 8 * 60 * 60 * 1_000
-export const MAXIMUM_VERIFICATION_MS = 40 * 60 * 60 * 1_000
+export const MAXIMUM_VERIFICATION_MS = 96 * 60 * 60 * 1_000
 
 export const WEEKLY_BACKUP_WRITER_LABELS = [
   'com.stockboard.classification-sync',
@@ -30,6 +34,8 @@ export const WEEKLY_BACKUP_READER_LABELS = [
   'com.stockboard.analog-search',
   'com.stockboard.friend-readonly-gateway',
   'com.stockboard.web-health',
+  // Not a database client: checks internal SSD / OWC free space hourly.
+  'com.stockboard.dev-capacity-monitor',
 ] as const
 
 export type Market = 'JP' | 'US'
@@ -70,6 +76,11 @@ export type WeeklyBackupPlan = {
   sqliteRsyncBinaryPath: string
   sqliteRsyncBinarySha256: string
   sqliteToolsArchiveSha3: string
+  stagingRoot: string
+  cloneBinaryPath: string
+  cloneBinarySha256: string
+  sourceReserveBytes: number
+  maximumSnapshotLockMs: number
 }
 
 export type WeeklyBackupObservation = {
@@ -81,6 +92,7 @@ export type WeeklyBackupObservation = {
   sourceVolumeUuid: string
   destinationVolumeUuid: string
   destinationFreeBytes: number
+  sourceFreeBytes: number
   combinedWalBytes: number
   activeWriterLabels: string[]
   unknownWriterLabels: string[]
@@ -105,11 +117,15 @@ export type MarketVerification = {
   generationId: string
   syncStatus: 'PASS' | 'FAIL'
   databaseSha256: string
+  /** Replica digest with the two header counters sqlite3_rsync bumps zeroed. */
+  contentSha256: string
+  /** quick_check and integrity_check ran on this source clone; its content digest must equal the replica's. */
+  snapshotContentSha256: string
   quickCheck: 'ok' | string
   integrityCheck: 'ok' | string
   readOnlyReopen: boolean
-  restoreQuickCheck: 'ok' | string
-  restoreIntegrityCheck: 'ok' | string
+  restoreSha256: string
+  restoreReadOnlyReopen: boolean
   sourceWalGrowthBytes: number
   candidatePhysicalGrowthBytes: number
 }
@@ -120,6 +136,7 @@ export type PromotionEvidence = {
   priorGenerationStatus: PriorGenerationStatus
   priorGenerationUnchanged: boolean
   writerHoldDurationMs: number
+  snapshotLockHeldMs: number
   verificationDurationMs: number
   destinationFreeBytesAfter: number
   completeManifestExists: boolean
@@ -145,6 +162,7 @@ export type WeeklyBackupCompleteManifest = {
   }
   markets: { JP: MarketVerification; US: MarketVerification }
   writerHoldDurationMs: number
+  snapshotLockHeldMs: number
   verificationDurationMs: number
   destinationFreeBytesAfter: number
   writerStatesRestored: true
@@ -260,6 +278,18 @@ export function validateWeeklyBackupPlan(plan: WeeklyBackupPlan): void {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error(`INVALID_${name}`)
   }
   if (!/^[a-f0-9]{64}$/.test(plan.sqliteToolsArchiveSha3)) throw new Error('INVALID_SQLITE_TOOL_ARCHIVE_SHA3')
+  if (!pathLikeAbsolute(plan.stagingRoot) || !isWithin(plan.sourceMount, plan.stagingRoot)
+    || plan.sourceDatabasePaths.JP.startsWith(`${path.resolve(plan.stagingRoot)}${path.sep}`)
+    || plan.sourceDatabasePaths.US.startsWith(`${path.resolve(plan.stagingRoot)}${path.sep}`)) {
+    throw new Error('STAGING_ROOT_INVALID')
+  }
+  if (!pathLikeAbsolute(plan.cloneBinaryPath)) throw new Error('CLONE_BINARY_PATH_INVALID')
+  if (!/^[a-f0-9]{64}$/.test(plan.cloneBinarySha256)) throw new Error('INVALID_CLONE_BINARY_SHA256')
+  assertFiniteNonNegative('SOURCE_RESERVE_BYTES', plan.sourceReserveBytes)
+  if (plan.sourceReserveBytes < MINIMUM_SOURCE_RESERVE_BYTES) throw new Error('SOURCE_RESERVE_BELOW_300GB')
+  assertFiniteNonNegative('MAXIMUM_SNAPSHOT_LOCK_MS', plan.maximumSnapshotLockMs)
+  if (plan.maximumSnapshotLockMs === 0 || plan.maximumSnapshotLockMs > MAXIMUM_SNAPSHOT_LOCK_MS
+    || plan.maximumSnapshotLockMs > plan.maximumWriterHoldMs) throw new Error('SNAPSHOT_LOCK_LIMIT_INVALID')
 }
 
 function pathLikeAbsolute(value: string): boolean {
@@ -318,6 +348,8 @@ export function assertWeeklyBackupDynamicGate(
   if (availableCandidateGrowthBytes(plan, observed.destinationFreeBytes) < plan.maximumCandidateGrowthBytes) {
     throw new Error('INSUFFICIENT_DESTINATION_HEADROOM')
   }
+  assertFiniteNonNegative('SOURCE_FREE_BYTES', observed.sourceFreeBytes)
+  if (observed.sourceFreeBytes < plan.sourceReserveBytes) throw new Error('INSUFFICIENT_SOURCE_HEADROOM')
   if (observed.unknownWriterLabels.length > 0) throw new Error('UNKNOWN_WRITER_LABEL')
   if (observed.writerLockOwners.length > 0) throw new Error('ACTIVE_WRITER_LOCK')
   if (observed.updateWindowConflict) throw new Error('DAILY_UPDATE_WINDOW_CONFLICT')
@@ -335,8 +367,11 @@ function assertVerification(market: Market, expectedGeneration: string, value: M
   }
   if (value.syncStatus !== 'PASS') throw new Error(`${market}_SYNC_NOT_PASS`)
   if (!/^[a-f0-9]{64}$/.test(value.databaseSha256)) throw new Error(`${market}_HASH_INVALID`)
+  if (!/^[a-f0-9]{64}$/.test(value.contentSha256) || value.snapshotContentSha256 !== value.contentSha256) {
+    throw new Error(`${market}_REPLICA_DIFFERS_FROM_SNAPSHOT`)
+  }
   if (value.quickCheck !== 'ok' || value.integrityCheck !== 'ok' || !value.readOnlyReopen
-    || value.restoreQuickCheck !== 'ok' || value.restoreIntegrityCheck !== 'ok') {
+    || value.restoreSha256 !== value.databaseSha256 || !value.restoreReadOnlyReopen) {
     throw new Error(`${market}_SQLITE_VERIFICATION_INCOMPLETE`)
   }
   if (value.sourceWalGrowthBytes < 0 || value.sourceWalGrowthBytes > plan.maximumWalGrowthBytes) {
@@ -363,6 +398,9 @@ export function buildWeeklyBackupCompleteManifest(plan: WeeklyBackupPlan, eviden
   if (evidence.writerHoldDurationMs < 0 || evidence.writerHoldDurationMs > plan.maximumWriterHoldMs) {
     throw new Error('WRITER_HOLD_LIMIT_EXCEEDED')
   }
+  if (evidence.snapshotLockHeldMs < 0 || evidence.snapshotLockHeldMs > plan.maximumSnapshotLockMs) {
+    throw new Error('SNAPSHOT_LOCK_LIMIT_EXCEEDED')
+  }
   if (evidence.verificationDurationMs < 0 || evidence.verificationDurationMs > plan.maximumVerificationMs) {
     throw new Error('VERIFICATION_LIMIT_EXCEEDED')
   }
@@ -387,6 +425,7 @@ export function buildWeeklyBackupCompleteManifest(plan: WeeklyBackupPlan, eviden
     },
     markets: { JP: evidence.jp, US: evidence.us },
     writerHoldDurationMs: evidence.writerHoldDurationMs,
+    snapshotLockHeldMs: evidence.snapshotLockHeldMs,
     verificationDurationMs: evidence.verificationDurationMs,
     destinationFreeBytesAfter: evidence.destinationFreeBytesAfter,
     writerStatesRestored: true,

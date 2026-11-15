@@ -13,7 +13,10 @@ import {
   type WeeklyBackupPlan,
 } from '@/lib/storage/weekly-backup-policy'
 import {
+  checkpointSnapshotClone,
   cloneReplicaSeed,
+  fileDigests,
+  runMonitoredCommand,
   publishVerifiedGeneration,
   runMonitoredSqliteRsync,
   verifyReplica,
@@ -30,7 +33,7 @@ function command(binary: string, args: string[]): string {
 }
 
 function marketVerification(market: 'JP' | 'US', generationId: string,
-  verified: ReturnType<typeof verifyReplica>): MarketVerification {
+  verified: Awaited<ReturnType<typeof verifyReplica>>): MarketVerification {
   return {
     market,
     generationId,
@@ -64,9 +67,14 @@ try {
       INSERT INTO fixture(value) VALUES('prior');
     `])
     fs.copyFileSync(origin, prior)
+    // 2026-11-15: the real JP prior is read-only (0400) and cp -c keeps the mode, so the replica could not be written.
+    if (market === 'JP') fs.chmodSync(prior, 0o400)
     command(SQLITE, [origin, `INSERT INTO fixture(value) VALUES('${market}-new');`])
+    const priorModeBefore = fs.statSync(prior).mode & 0o777
+    const priorBytesBefore = fs.readFileSync(prior)
     cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: prior,
       candidateRoot, candidateDatabasePath: candidate })
+    assert.equal(fs.statSync(candidate).mode & 0o777, 0o600)
     const walPath = `${origin}-wal`
     const walAtStart = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0
     const sourceStat = fs.statSync(origin)
@@ -91,14 +99,95 @@ try {
       },
     })
     assert.equal(command(SQLITE, ['-readonly', candidate, 'SELECT COUNT(*) FROM fixture;']), '2')
-    verified[market] = marketVerification(market, generationId, verifyReplica({
+    assert.equal(fs.statSync(prior).mode & 0o777, priorModeBefore)
+    assert.equal(fs.readFileSync(prior).equals(priorBytesBefore), true)
+    // The origin closed cleanly (no WAL), so it stands in for the checkpointed snapshot clone.
+    verified[market] = marketVerification(market, generationId, await verifyReplica({
       sqliteBinary: SQLITE,
       candidateRoot,
       candidateDatabasePath: candidate,
       restoreDatabasePath: restore,
+      snapshotDatabasePath: origin,
       deadlineMs: Date.now() + 60_000,
     }))
+    assert.equal(verified[market].snapshotContentSha256, verified[market].contentSha256)
   }
+
+  // A snapshot clone with a WAL: the checkpoint folds it into the clone only, then the sync from it
+  // (sqlite3_rsync as its only user creates and removes the WAL) passes with WAL monitoring off.
+  const snapshotRoot = path.join(sourceRoot, 'snapshot')
+  fs.mkdirSync(snapshotRoot)
+  const snapshotClone = path.join(snapshotRoot, 'jp.db')
+  const walWriter = spawnSync(SQLITE, [snapshotClone], { encoding: 'utf8', input: '.dbconfig no_ckpt_on_close on\n'
+    + 'PRAGMA journal_mode=WAL;\nCREATE TABLE fixture(id INTEGER PRIMARY KEY, value TEXT);\n'
+    + "INSERT INTO fixture(value) VALUES('a'),('b'),('c');\n" })
+  assert.equal(walWriter.status, 0, walWriter.stderr)
+  assert.ok(fs.statSync(`${snapshotClone}-wal`).size > 0)
+  await checkpointSnapshotClone({ sqliteBinary: SQLITE, snapshotRoot, databasePath: snapshotClone,
+    deadlineMs: Date.now() + 60_000 })
+  assert.equal(fs.existsSync(`${snapshotClone}-wal`) && fs.statSync(`${snapshotClone}-wal`).size > 0, false)
+  await assert.rejects(() => checkpointSnapshotClone({ sqliteBinary: SQLITE, snapshotRoot,
+    databasePath: path.join(sourceRoot, 'jp-origin.db'), deadlineMs: Date.now() + 60_000 }), /PATH_OUTSIDE_APPROVED_ROOT/)
+  const fromSnapshot = path.join(candidateRoot, 'from-snapshot.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: fromSnapshot })
+  const snapshotStat = fs.statSync(snapshotClone)
+  const freeNow = Number(fs.statfsSync(os.tmpdir(), { bigint: true }).bavail * fs.statfsSync(os.tmpdir(), { bigint: true }).bsize)
+  let reserveChecks = 0
+  await runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC, sourceDatabasePath: snapshotClone, candidateDatabasePath: fromSnapshot,
+    assertRuntimeIdentity: () => undefined, monitorSourceWal: false, extraCheck: () => { reserveChecks += 1 },
+    limits: { deadlineMs: Date.now() + 60_000, destinationMount: os.tmpdir(), destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: freeNow, maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: `${snapshotClone}-wal`, sourceWalBytesAtStart: 0, maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: snapshotStat.size, sourceDatabaseMtimeMsAtStart: snapshotStat.mtimeMs },
+  })
+  assert.equal(command(SQLITE, ['-readonly', fromSnapshot, 'SELECT count(*) FROM fixture;']), '3')
+  // The source-volume reserve check stops a sync too.
+  const reserveCandidate = path.join(candidateRoot, 'reserve-abort.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: reserveCandidate })
+  await assert.rejects(() => runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC, sourceDatabasePath: snapshotClone, candidateDatabasePath: reserveCandidate,
+    assertRuntimeIdentity: () => undefined, monitorSourceWal: false,
+    extraCheck: () => { throw new Error('SOURCE_RESERVE_BREACHED') },
+    limits: { deadlineMs: Date.now() + 60_000, destinationMount: os.tmpdir(), destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: freeNow, maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: `${snapshotClone}-wal`, sourceWalBytesAtStart: 0, maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: snapshotStat.size, sourceDatabaseMtimeMsAtStart: snapshotStat.mtimeMs },
+  }), /SOURCE_RESERVE_BREACHED/)
+  // A monitored command that ignores SIGTERM is killed, so a stopped check never hangs the run.
+  const stubbornStarted = Date.now()
+  await assert.rejects(() => runMonitoredCommand('/bin/sh', ['-c', 'trap "" TERM; sleep 60'], {
+    deadlineMs: Date.now() + 60_000, check: () => { throw new Error('SOURCE_RESERVE_BREACHED') } }), /SOURCE_RESERVE_BREACHED/)
+  assert.ok(Date.now() - stubbornStarted < 15_000)
+
+  // The content digest ignores only the two header counters sqlite3_rsync bumps (bytes 24-27, 92-95).
+  const digestBase = path.join(root, 'digest-base.bin')
+  fs.writeFileSync(digestBase, Buffer.alloc(9 * 1024 * 1024, 7))
+  const flipped = (name: string, offset: number) => {
+    const file = path.join(root, name)
+    const bytes = fs.readFileSync(digestBase)
+    bytes[offset] ^= 0xff
+    fs.writeFileSync(file, bytes)
+    return fileDigests(file)
+  }
+  const baseDigest = fileDigests(digestBase)
+  for (const offset of [24, 27, 92, 95]) {
+    const digest = flipped(`counter-${offset}.bin`, offset)
+    assert.equal(digest.sqliteContentSha256, baseDigest.sqliteContentSha256)
+    assert.notEqual(digest.sha256, baseDigest.sha256)
+  }
+  for (const offset of [0, 23, 28, 91, 96, 100, 8 * 1024 * 1024 + 24]) {
+    assert.notEqual(flipped(`content-${offset}.bin`, offset).sqliteContentSha256, baseDigest.sqliteContentSha256)
+  }
+
+  // A replica whose bytes differ from the checked snapshot is never verified.
+  await assert.rejects(() => verifyReplica({ sqliteBinary: SQLITE, candidateRoot,
+    candidateDatabasePath: path.join(candidateRoot, 'jp-candidate.db'),
+    restoreDatabasePath: path.join(candidateRoot, 'differs-restore.db'),
+    snapshotDatabasePath: snapshotClone, deadlineMs: Date.now() + 60_000 }), /REPLICA_DIFFERS_FROM_SNAPSHOT/)
+  assert.ok(reserveChecks > 0)
 
   const capacityOrigin = path.join(sourceRoot, 'jp-origin.db')
   const capacityCandidate = path.join(candidateRoot, 'capacity-abort.db')
@@ -154,11 +243,65 @@ try {
   }), /RUNTIME_DEVICE_IDENTITY_CHANGED/)
   assert.ok(identityChecks > 1)
 
-  assert.throws(() => verifyReplica({
+  // A source write seen during or right after the sync fails the run instead of publishing.
+  const changedCandidate = path.join(candidateRoot, 'source-changed.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: changedCandidate })
+  await assert.rejects(() => runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC,
+    sourceDatabasePath: capacityOrigin,
+    candidateDatabasePath: changedCandidate,
+    assertRuntimeIdentity: () => undefined,
+    limits: {
+      deadlineMs: Date.now() + 60_000,
+      destinationMount: os.tmpdir(),
+      destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: tmpFree,
+      maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: `${capacityOrigin}-wal`,
+      sourceWalBytesAtStart: 0,
+      maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: capacitySourceStat.size,
+      sourceDatabaseMtimeMsAtStart: capacitySourceStat.mtimeMs - 1,
+    },
+  }), /SOURCE_DATABASE_CHANGED_DURING_SYNC/)
+
+  // A WAL rewrite at the same length (only its mtime moves) also fails the run.
+  const walProbe = path.join(sourceRoot, 'same-length.wal')
+  fs.writeFileSync(walProbe, '')
+  fs.utimesSync(walProbe, new Date(0), new Date(0))
+  const walCandidate = path.join(candidateRoot, 'wal-changed.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: path.join(priorRoot, 'jp.db'),
+    candidateRoot, candidateDatabasePath: walCandidate })
+  let walIdentityChecks = 0
+  await assert.rejects(() => runMonitoredSqliteRsync({
+    sqliteRsyncBinary: SQLITE_RSYNC,
+    sourceDatabasePath: capacityOrigin,
+    candidateDatabasePath: walCandidate,
+    assertRuntimeIdentity: () => {
+      walIdentityChecks += 1
+      if (walIdentityChecks === 2) fs.utimesSync(walProbe, new Date(), new Date())
+    },
+    limits: {
+      deadlineMs: Date.now() + 60_000,
+      destinationMount: os.tmpdir(),
+      destinationReserveBytes: 0,
+      destinationFreeBytesAtStart: tmpFree,
+      maximumCandidateGrowthBytes: 1_000_000_000,
+      sourceWalPath: walProbe,
+      sourceWalBytesAtStart: 0,
+      maximumWalGrowthBytes: 0,
+      sourceDatabaseSizeAtStart: capacitySourceStat.size,
+      sourceDatabaseMtimeMsAtStart: capacitySourceStat.mtimeMs,
+    },
+  }), /SOURCE_WAL_CHANGED_DURING_SYNC/)
+
+  await assert.rejects(() => verifyReplica({
     sqliteBinary: SQLITE,
     candidateRoot,
     candidateDatabasePath: path.join(candidateRoot, 'jp-candidate.db'),
     restoreDatabasePath: path.join(candidateRoot, 'expired-restore.db'),
+    snapshotDatabasePath: path.join(sourceRoot, 'jp-origin.db'),
     deadlineMs: Date.now() - 1,
   }), /VERIFICATION_DEADLINE_EXCEEDED/)
 
@@ -203,6 +346,11 @@ try {
     sqliteRsyncBinaryPath: SQLITE_RSYNC,
     sqliteRsyncBinarySha256: 'f'.repeat(64),
     sqliteToolsArchiveSha3: 'a3106c6db3b50ec9ef4fde4edfafe7504179e9bfd7e0816a280b29c4d56a2e7b',
+    stagingRoot: path.join(sourceRoot, 'staging'),
+    cloneBinaryPath: path.join(root, 'apfs-clone-file'),
+    cloneBinarySha256: '1'.repeat(64),
+    sourceReserveBytes: 300_000_000_000,
+    maximumSnapshotLockMs: 60_000,
   }
   const manifest = buildWeeklyBackupCompleteManifest(plan, {
     generationId,
@@ -210,6 +358,7 @@ try {
     priorGenerationStatus: plan.priorGenerationStatus,
     priorGenerationUnchanged: true,
     writerHoldDurationMs: 1_000,
+    snapshotLockHeldMs: 500,
     verificationDurationMs: 2_000,
     destinationFreeBytesAfter: 900_000_000_000,
     completeManifestExists: false,
