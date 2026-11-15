@@ -1,6 +1,6 @@
 // Point-in-time APFS clones of live SQLite databases on their own volume (the P1 pre-deploy copy
 // and the weekly-backup rehearsal). Default is observe only; creating clones needs --confirm.
-//   --staging=<new dir on the DB volume> --db=<LABEL>=<path> (repeat) --sqlite3=<path>
+//   --staging=<new dir on the DB volume> --db=<LABEL>=<path> (repeat) --sqlite3=<path> --sqlite3-sha256=<hex>
 //   --clone-binary=<path> --clone-binary-sha256=<hex> --min-free-bytes=<n> [--max-lock-ms=60000]
 //   [--remove-after] [--confirm=WRITE_APPROVED_LOCKED_SNAPSHOT]
 import fs from 'node:fs'
@@ -19,7 +19,7 @@ const one = (name: string): string => {
   if (!values || values.length !== 1) throw new Error(`ARGUMENT_REQUIRED_ONCE:--${name}`)
   return values[0]
 }
-const known = ['staging', 'db', 'sqlite3', 'clone-binary', 'clone-binary-sha256', 'min-free-bytes', 'max-lock-ms', 'remove-after', 'confirm']
+const known = ['staging', 'db', 'sqlite3', 'sqlite3-sha256', 'clone-binary', 'clone-binary-sha256', 'min-free-bytes', 'max-lock-ms', 'remove-after', 'confirm']
 for (const name of options.keys()) if (!known.includes(name)) throw new Error(`UNKNOWN_ARGUMENT:--${name}`)
 
 const staging = path.resolve(one('staging'))
@@ -32,6 +32,9 @@ const maximumLockMs = Number(options.get('max-lock-ms')?.[0] ?? 60_000)
 if (!Number.isSafeInteger(minimumFreeBytes) || minimumFreeBytes <= 0) throw new Error('MIN_FREE_BYTES_INVALID')
 if (!Number.isSafeInteger(maximumLockMs) || maximumLockMs <= 0 || maximumLockMs > 5 * 60_000) throw new Error('MAX_LOCK_MS_INVALID')
 const cloneBinary = one('clone-binary')
+const sqliteBinary = one('sqlite3')
+// Only the pinned sqlite3 is known to honour no_ckpt_on_close; never open production with anything else.
+if (fileSha256(sqliteBinary) !== one('sqlite3-sha256')) throw new Error('SQLITE3_SHA256_MISMATCH')
 if (fileSha256(cloneBinary) !== one('clone-binary-sha256')) throw new Error('CLONE_BINARY_SHA256_MISMATCH')
 const freeBytes = () => {
   const stat = fs.statfsSync(path.dirname(staging), { bigint: true })
@@ -51,12 +54,12 @@ async function main(): Promise<void> {
   }
   const started = Date.now()
   const snapshot = await createLockedSqliteSnapshot({
-    sqliteBinary: one('sqlite3'), cloneBinary, sources, stagingDirectory: staging,
+    sqliteBinary, cloneBinary, sources, stagingDirectory: staging,
     lockWaitMs: Math.min(30_000, maximumLockMs), maximumLockMs,
   })
   const after = { at: new Date().toISOString(), freeBytes: freeBytes(), elapsedMs: Date.now() - started }
   const removed = options.has('remove-after')
-  if (removed) removeLockedSnapshot(staging, sources.map((source) => source.label))
+  if (removed) removeLockedSnapshot(staging, sources)
   console.log(JSON.stringify({ mode: 'execute', before, snapshot, after, removed,
     freeBytesAfterRemoval: removed ? freeBytes() : null }, null, 2))
 }

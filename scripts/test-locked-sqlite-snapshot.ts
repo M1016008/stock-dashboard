@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createLockedSqliteSnapshot } from '@/lib/storage/locked-sqlite-snapshot'
+import { createLockedSqliteSnapshot, removeLockedSnapshot } from '@/lib/storage/locked-sqlite-snapshot'
 
 const SQLITE = process.env.SQLITE3_BIN || '/tmp/stockboard-sqlite-tools-3540100/sqlite3'
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-locked-snapshot-'))
@@ -83,6 +83,13 @@ async function main(): Promise<void> {
     await assert.rejects(() => createLockedSqliteSnapshot({ ...base, lockWaitMs: 300,
       stagingDirectory: path.join(root, 'staging-3'), sources: [{ label: 'JP', databasePath: busy }] }), /SNAPSHOT_LOCK_FAILED:JP/)
     assert.equal(fs.existsSync(path.join(root, 'staging-3')), false)
+    // With one lock already held, waiting for the next counts against the lock limit (not a fresh full wait).
+    const boundedStart = Date.now()
+    await assert.rejects(() => createLockedSqliteSnapshot({ ...base, lockWaitMs: 30_000, maximumLockMs: 6_000,
+      stagingDirectory: path.join(root, 'staging-3b'),
+      sources: [{ label: 'JP', databasePath: jp }, { label: 'US', databasePath: busy }] }), /SNAPSHOT_LOCK_FAILED:US|SNAPSHOT_LOCK_LIMIT_EXCEEDED/)
+    assert.ok(Date.now() - boundedStart < 12_000, `lock wait not bounded: ${Date.now() - boundedStart} ms`)
+    assert.equal(fs.existsSync(path.join(root, 'staging-3b')), false)
     holder.stdin.end('ROLLBACK;\n')
 
     // 4. Cloning past the lock limit fails, removes the staging copy, and releases the lock.
@@ -102,7 +109,34 @@ async function main(): Promise<void> {
       sources: [{ label: 'JP', databasePath: jp }] }), /SNAPSHOT_STAGING_DIRECTORY_INVALID/)
     assert.equal(fs.readFileSync(path.join(root, 'staging-5', 'keep'), 'utf8'), 'x')
 
-    console.log(JSON.stringify({ lastCloseKeepsProductionBytes: true, checkpointDuringCloneConsistent: true,
+    // 6. A sqlite3 that does not confirm no_ckpt_on_close is killed, never closed normally (a normal close
+    //    could checkpoint production). The fake records its stdin: a graceful release would append ROLLBACK.
+    const fakeLog = path.join(root, 'fake-stdin.log')
+    const fake = path.join(root, 'fake-sqlite3.sh')
+    fs.writeFileSync(fake, `#!/bin/sh\necho SNAPSHOT_LOCKED\nexec cat > "${fakeLog}"\n`, { mode: 0o700 })
+    await assert.rejects(() => createLockedSqliteSnapshot({ ...base, sqliteBinary: fake,
+      stagingDirectory: path.join(root, 'staging-6'), sources: [{ label: 'JP', databasePath: jp }] }), /SNAPSHOT_NO_CKPT_ON_CLOSE_NOT_SET:JP/)
+    assert.doesNotMatch(fs.readFileSync(fakeLog, 'utf8'), /ROLLBACK|\.quit/)
+    assert.equal(fs.existsSync(path.join(root, 'staging-6')), false)
+
+    // 7. Cleanup removes only the names it creates and refuses symlinked directories.
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(outside, 'jp.db'), 'keep')
+    fs.mkdirSync(path.join(root, 'staging-7'))
+    fs.symlinkSync(outside, path.join(root, 'staging-7', 'JP'))
+    assert.throws(() => removeLockedSnapshot(path.join(root, 'staging-7'), [{ label: 'JP', databasePath: jp }]),
+      /SNAPSHOT_STAGING_NOT_A_DIRECTORY/)
+    assert.equal(fs.readFileSync(path.join(outside, 'jp.db'), 'utf8'), 'keep')
+    fs.mkdirSync(path.join(root, 'staging-8', 'JP'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'staging-8', 'JP', 'jp.db'), 'clone')
+    fs.writeFileSync(path.join(root, 'staging-8', 'JP', 'unrelated.txt'), 'keep')
+    assert.throws(() => removeLockedSnapshot(path.join(root, 'staging-8'), [{ label: 'JP', databasePath: jp }]), /ENOTEMPTY/)
+    assert.equal(fs.readFileSync(path.join(root, 'staging-8', 'JP', 'unrelated.txt'), 'utf8'), 'keep')
+    assert.equal(fs.existsSync(path.join(root, 'staging-8', 'JP', 'jp.db')), false)
+
+    console.log(JSON.stringify({ lastCloseKeepsProductionBytes: true, unconfirmedSettingKilledNotClosed: true,
+      cleanupScopedToCreatedNames: true, checkpointDuringCloneConsistent: true,
       busyLockFailsClean: true, lockLimitFailsClean: true, existingStagingRefused: true, lockHeldMs: snapshot.lockHeldMs }, null, 2))
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

@@ -57,8 +57,9 @@ Web/Analog, which stay online, wrote dashboard caches into the JP database durin
    Then the isolated APFS restore clone on SanDisk must equal the candidate's
    full SHA-256 and reopen read-only. One shared deadline of at most 96 hours
    covers the syncs and all checks.
-10. Recheck the prior generation, generation IDs and hashes. Publish a new
-   `COMPLETE.manifest.json` atomically only after every check passes.
+10. Recheck the prior generation and the candidate/restore file identity (size,
+   mtime, inode; not a second hash). Publish a new `COMPLETE.manifest.json`
+   atomically only after every check passes.
 11. Remove the staging clones in every case (success or failure). The
    source-volume reserve is checked about every second during syncs and checks,
    and every 1 GiB while hashing, until then.
@@ -287,7 +288,7 @@ ordinary npm invocation cannot write those fixtures.
 ```
 node --import tsx scripts/run-locked-sqlite-snapshot.ts --staging=<new dir on OWC> \
   --db=JP=<JP db> --db=US=<US db> [--db=<LABEL>=<other db> ...] \
-  --sqlite3=<pinned sqlite3> --clone-binary=<helper> --clone-binary-sha256=<hex> \
+  --sqlite3=<pinned sqlite3> --sqlite3-sha256=<hex> --clone-binary=<helper> --clone-binary-sha256=<hex> \
   --min-free-bytes=<n> [--max-lock-ms=60000] [--remove-after] [--confirm=...]
 ```
 

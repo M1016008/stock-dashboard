@@ -16,6 +16,7 @@ import {
   checkpointSnapshotClone,
   cloneReplicaSeed,
   fileDigests,
+  runMonitoredCommand,
   publishVerifiedGeneration,
   runMonitoredSqliteRsync,
   verifyReplica,
@@ -155,6 +156,12 @@ try {
       sourceWalPath: `${snapshotClone}-wal`, sourceWalBytesAtStart: 0, maximumWalGrowthBytes: 0,
       sourceDatabaseSizeAtStart: snapshotStat.size, sourceDatabaseMtimeMsAtStart: snapshotStat.mtimeMs },
   }), /SOURCE_RESERVE_BREACHED/)
+  // A monitored command that ignores SIGTERM is killed, so a stopped check never hangs the run.
+  const stubbornStarted = Date.now()
+  await assert.rejects(() => runMonitoredCommand('/bin/sh', ['-c', 'trap "" TERM; sleep 60'], {
+    deadlineMs: Date.now() + 60_000, check: () => { throw new Error('SOURCE_RESERVE_BREACHED') } }), /SOURCE_RESERVE_BREACHED/)
+  assert.ok(Date.now() - stubbornStarted < 15_000)
+
   // The content digest ignores only the two header counters sqlite3_rsync bumps (bytes 24-27, 92-95).
   const digestBase = path.join(root, 'digest-base.bin')
   fs.writeFileSync(digestBase, Buffer.alloc(9 * 1024 * 1024, 7))

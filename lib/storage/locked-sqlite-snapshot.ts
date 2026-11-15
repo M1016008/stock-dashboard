@@ -17,7 +17,7 @@ export type SnapshotFile = { label: string; kind: 'db' | 'wal'; sourcePath: stri
 export type LockedSnapshot = { stagingDirectory: string; files: SnapshotFile[]; lockHeldMs: number }
 
 type WalIdentity = { ino: number; size: number; header: string } | null
-type LockHolder = { label: string; child: ChildProcessWithoutNullStreams; stdout: () => string }
+type LockHolder = { label: string; child: ChildProcessWithoutNullStreams; exited: Promise<void> }
 
 const LABEL = /^[A-Za-z0-9_-]{1,32}$/
 
@@ -42,58 +42,85 @@ function walIdentity(walPath: string): WalIdentity {
   } finally { fs.closeSync(descriptor) }
 }
 
+const settled = (child: ChildProcessWithoutNullStreams) => child.exitCode !== null || child.signalCode !== null
+
 async function acquireLock(sqliteBinary: string, source: SnapshotSource, waitMs: number): Promise<LockHolder> {
   const child = spawn(sqliteBinary, ['-bail', '-batch', source.databasePath], { stdio: ['pipe', 'pipe', 'pipe'] })
   let out = ''
   let err = ''
+  let spawnError = ''
   child.stdout.on('data', (chunk) => { out += String(chunk) })
   child.stderr.on('data', (chunk) => { err += String(chunk) })
-  const holder = { label: source.label, child, stdout: () => out }
+  // Without these, a failed spawn or a closed pipe would crash the process before writers are restored.
+  child.on('error', (error) => { spawnError ||= error.message })
+  child.stdin.on('error', () => undefined)
+  const holder = { label: source.label, child, exited: new Promise<void>((resolve) => child.once('close', () => resolve())) }
   child.stdin.write(`.dbconfig no_ckpt_on_close on\n.timeout ${waitMs}\nBEGIN IMMEDIATE;\nSELECT 'SNAPSHOT_LOCKED';\n`)
   const deadline = Date.now() + waitMs + 5_000
   while (!/^SNAPSHOT_LOCKED$/m.test(out)) {
-    if (child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
-      await releaseLock(holder)
-      throw new Error(`SNAPSHOT_LOCK_FAILED:${source.label}:${err.trim().slice(0, 200)}`)
+    if (settled(child) || spawnError || Date.now() >= deadline) {
+      // The setting may not have been applied, so never let this connection close normally.
+      await releaseLock(holder, { graceful: /no_ckpt_on_close\s+on/.test(out) })
+      throw new Error(`SNAPSHOT_LOCK_FAILED:${source.label}:${(spawnError || err).trim().slice(0, 200)}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
-  // Refuse to hold a lock whose close could checkpoint the source.
+  // Refuse to hold a lock whose close could checkpoint the source: kill it instead of closing it,
+  // since a killed sqlite3 never runs its close path and so cannot checkpoint.
   if (!/no_ckpt_on_close\s+on/.test(out)) {
-    await releaseLock(holder)
+    await releaseLock(holder, { graceful: false })
     throw new Error(`SNAPSHOT_NO_CKPT_ON_CLOSE_NOT_SET:${source.label}`)
   }
   return holder
 }
 
-async function releaseLock(holder: LockHolder): Promise<void> {
+/** Resolves only once the lock process has exited (its lock is then gone), escalating to SIGKILL. */
+async function releaseLock(holder: LockHolder, options: { graceful: boolean }): Promise<void> {
   const { child } = holder
-  if (child.exitCode === null && child.signalCode === null) {
-    if (child.stdin.writable) child.stdin.end('ROLLBACK;\n.quit\n')
-    const exited = await Promise.race([
-      new Promise<boolean>((resolve) => child.once('exit', () => resolve(true))),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10_000)),
-    ])
-    // A killed sqlite3 never runs its close path, so it cannot checkpoint either.
-    if (!exited) child.kill('SIGTERM')
+  const waitExit = (ms: number) => Promise.race([holder.exited.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms))])
+  if (settled(child)) { await waitExit(1_000); return }
+  if (options.graceful && child.stdin.writable) {
+    child.stdin.end('ROLLBACK;\n.quit\n')
+    if (await waitExit(10_000)) return
   }
+  child.kill(options.graceful ? 'SIGTERM' : 'SIGKILL')
+  if (await waitExit(5_000)) return
+  child.kill('SIGKILL')
+  if (!(await waitExit(5_000))) throw new Error(`SNAPSHOT_LOCK_PROCESS_DID_NOT_EXIT:${holder.label}`)
 }
 
 function cloneFile(cloneBinary: string, source: string, destination: string, timeoutMs: number): void {
-  const result = spawnSync(cloneBinary, [source, destination], { encoding: 'utf8', timeout: Math.max(1, timeoutMs) })
+  const result = spawnSync(cloneBinary, [source, destination],
+    { encoding: 'utf8', timeout: Math.max(1, timeoutMs), killSignal: 'SIGKILL' })
   if (result.error || result.status !== 0) {
     throw new Error(`SNAPSHOT_CLONE_FAILED:${path.basename(source)}:${result.status}:${result.error?.message ?? result.stderr.trim()}`)
   }
 }
 
-/** Removes only files this module created (clones and SQLite sidecars beside them) and their directories. */
-export function removeLockedSnapshot(stagingDirectory: string, labels: string[]): void {
-  if (!fs.existsSync(stagingDirectory)) return
-  for (const label of labels) {
-    const directory = path.join(stagingDirectory, label)
-    if (!fs.existsSync(directory)) continue
-    for (const name of fs.readdirSync(directory)) {
+function realDirectory(directory: string): boolean {
+  let stat: fs.Stats
+  try { stat = fs.lstatSync(directory) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`SNAPSHOT_STAGING_NOT_A_DIRECTORY:${directory}`)
+  return true
+}
+
+/**
+ * Removes only the names this module creates: each clone and the SQLite sidecars beside it, then the
+ * directories. Symlinked directories are refused, and anything else left makes rmdir fail rather than vanish.
+ */
+export function removeLockedSnapshot(stagingDirectory: string, sources: SnapshotSource[]): void {
+  if (!realDirectory(stagingDirectory)) return
+  for (const source of sources) {
+    const directory = path.join(stagingDirectory, source.label)
+    if (!realDirectory(directory)) continue
+    const base = path.basename(source.databasePath)
+    for (const name of [base, `${base}-wal`, `${base}-shm`, `${base}-journal`]) {
       const file = path.join(directory, name)
+      if (!fs.existsSync(file)) continue
       regularFile(file)
       fs.unlinkSync(file)
     }
@@ -128,14 +155,17 @@ export async function createLockedSqliteSnapshot(args: {
   try {
     for (const label of labels) fs.mkdirSync(path.join(args.stagingDirectory, label), { mode: 0o700 })
     // Every lock is taken before the first clone and held until the last one.
-    for (const source of args.sources) {
-      holders.push(await acquireLock(args.sqliteBinary, source, args.lockWaitMs))
-      lockedAt ||= Date.now()
-    }
     const remaining = () => {
       const left = lockedAt + args.maximumLockMs - Date.now()
       if (left <= 0) throw new Error('SNAPSHOT_LOCK_LIMIT_EXCEEDED')
       return left
+    }
+    for (const source of args.sources) {
+      // Once the first lock is held, later waits count against the lock limit.
+      const waitMs = lockedAt ? Math.min(args.lockWaitMs, Math.max(1, remaining() - 5_000)) : args.lockWaitMs
+      holders.push(await acquireLock(args.sqliteBinary, source, waitMs))
+      lockedAt ||= Date.now()
+      remaining()
     }
     args.sources.forEach((source, index) => {
       const walPath = `${source.databasePath}-wal`
@@ -163,20 +193,24 @@ export async function createLockedSqliteSnapshot(args: {
     })
     remaining()
     for (const holder of holders) {
-      if (holder.child.exitCode !== null || holder.child.signalCode !== null) throw new Error(`SNAPSHOT_LOCK_LOST:${holder.label}`)
+      if (settled(holder.child)) throw new Error(`SNAPSHOT_LOCK_LOST:${holder.label}`)
     }
-    lockHeldMs = Date.now() - lockedAt
   } catch (error) {
-    await Promise.all(holders.map(releaseLock))
-    try { removeLockedSnapshot(args.stagingDirectory, labels) } catch { /* the original error matters more */ }
+    await Promise.allSettled(holders.map((holder) => releaseLock(holder, { graceful: true })))
+    try { removeLockedSnapshot(args.stagingDirectory, args.sources) } catch { /* the original error matters more */ }
     throw error
   }
-  await Promise.all(holders.map(releaseLock))
-  for (const holder of holders) {
-    if (holder.child.exitCode !== 0) {
-      removeLockedSnapshot(args.stagingDirectory, labels)
-      throw new Error(`SNAPSHOT_LOCK_RELEASE_FAILED:${holder.label}:${holder.child.exitCode}:${holder.child.signalCode}`)
+  try {
+    await Promise.all(holders.map((holder) => releaseLock(holder, { graceful: true })))
+    lockHeldMs = Date.now() - lockedAt
+    for (const holder of holders) {
+      if (holder.child.exitCode !== 0) {
+        throw new Error(`SNAPSHOT_LOCK_RELEASE_FAILED:${holder.label}:${holder.child.exitCode}:${holder.child.signalCode}`)
+      }
     }
+  } catch (error) {
+    try { removeLockedSnapshot(args.stagingDirectory, args.sources) } catch { /* the original error matters more */ }
+    throw error
   }
   return { stagingDirectory: args.stagingDirectory, files, lockHeldMs }
 }

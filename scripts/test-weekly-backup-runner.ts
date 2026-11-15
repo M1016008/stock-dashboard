@@ -385,6 +385,67 @@ async function main(): Promise<void> {
     assert.equal(lifecycle.filter((event) => event.startsWith('bootstrap:')).length - bootstrapsBefore, 1)
     assert.equal(fs.existsSync(path.join(lockPlan.stagingRoot, lockPlan.runId)), false)
 
+    // A WAL captured above the approved cap (it grew after the pre-lock check) fails and removes the clones.
+    const walCapPlan = structuredClone(plan)
+    walCapPlan.runId = 'weekly-runner-fixture-captured-wal-cap'
+    await assert.rejects(() => baseRun(walCapPlan, { operations: { ...operations,
+      createLockedSqliteSnapshot: async (snapshotArgs) => {
+        const snapshot = await operations.createLockedSqliteSnapshot(snapshotArgs)
+        return { ...snapshot, files: [...snapshot.files, { label: 'JP', kind: 'wal' as const, sourcePath: 'x',
+          clonePath: 'x', bytes: walCapPlan.maximumCombinedWalBytes + 1 }] }
+      } } }), /SOURCE_WAL_LIMIT_EXCEEDED/)
+    assert.equal(fs.existsSync(path.join(walCapPlan.stagingRoot, walCapPlan.runId)), false)
+
+    // A clone helper replaced after the start check is caught right before it would run.
+    const helperPlan = structuredClone(plan)
+    helperPlan.runId = 'weekly-runner-fixture-helper-replaced'
+    let helperGateCalls = 0
+    await assert.rejects(() => baseRun(helperPlan, { observeDynamicGate: async () => {
+      helperGateCalls += 1
+      if (helperGateCalls === 2) fs.writeFileSync(cloneBinaryPath, 'replaced clone\n')
+      return dynamicObservation()
+    } }), /CLONE_BINARY_SHA256_MISMATCH/)
+    fs.writeFileSync(cloneBinaryPath, 'fixture clone\n')
+
+    // A candidate changed after its hashes were taken is never published.
+    const stalePublishPlan = structuredClone(plan)
+    stalePublishPlan.runId = 'weekly-runner-fixture-changed-after-verification'
+    await assert.rejects(() => baseRun(stalePublishPlan, { observePostflight: async () => {
+      fs.appendFileSync(path.join(destinationRoot, stalePublishPlan.runId, 'US', 'stockboard-us.db'), 'late\n')
+      return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
+    } }), /CANDIDATE_CHANGED_AFTER_VERIFICATION/)
+    assert.equal(fs.existsSync(path.join(destinationRoot, stalePublishPlan.runId, 'COMPLETE.manifest.json')), false)
+
+    // A JP candidate changed while US is being verified is caught (its identity was taken right after its hash).
+    const crossVerifyPlan = structuredClone(plan)
+    crossVerifyPlan.runId = 'weekly-runner-fixture-changed-during-other-verify'
+    await assert.rejects(() => baseRun(crossVerifyPlan, { operations: { ...operations,
+      verifyReplica: async (verifyArgs) => {
+        const result = await operations.verifyReplica(verifyArgs)
+        if (verifyArgs.candidateDatabasePath.endsWith(path.join('US', 'stockboard-us.db'))) {
+          fs.appendFileSync(path.join(destinationRoot, crossVerifyPlan.runId, 'JP', 'stockboard.db'), 'late\n')
+        }
+        return result
+      } } }), /CANDIDATE_CHANGED_AFTER_VERIFICATION/)
+
+    // A non-empty WAL beside a verified candidate (a commit that leaves the main file alone) is caught too.
+    const walAfterPlan = structuredClone(plan)
+    walAfterPlan.runId = 'weekly-runner-fixture-wal-after-verification'
+    await assert.rejects(() => baseRun(walAfterPlan, { observePostflight: async () => {
+      fs.writeFileSync(path.join(destinationRoot, walAfterPlan.runId, 'JP', 'stockboard.db-wal'), 'frame')
+      return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
+    } }), /CANDIDATE_CHANGED_AFTER_VERIFICATION/)
+
+    // The prior generation is rechecked after the postflight await, right before publishing.
+    const priorLatePlan = structuredClone(plan)
+    priorLatePlan.runId = 'weekly-runner-fixture-prior-changed-during-postflight'
+    const priorManifestBytes = fs.readFileSync(priorManifestPath)
+    await assert.rejects(() => baseRun(priorLatePlan, { observePostflight: async () => {
+      fs.appendFileSync(priorManifestPath, ' ')
+      return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
+    } }), /PRIOR_GENERATION_CHANGED/)
+    fs.writeFileSync(priorManifestPath, priorManifestBytes)
+
     // Not enough room on the source volume, or an existing staging directory, stops before writers are held.
     const lifecycleBeforeGates = lifecycle.length
     const headroomPlan = structuredClone(plan)

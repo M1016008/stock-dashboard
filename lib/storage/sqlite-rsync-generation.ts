@@ -312,6 +312,7 @@ export async function runMonitoredCommand(binary: string, args: string[],
       // Wait for the child to exit before reporting, so nothing keeps reading the file afterwards.
       stopError = error instanceof Error ? error : new Error(String(error))
       child.kill('SIGTERM')
+      setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, 5_000).unref()
     }
   }
 }

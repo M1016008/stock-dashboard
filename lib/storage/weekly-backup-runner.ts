@@ -202,6 +202,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   let holdDurationMs = -1
   let writerStatesRestored = false
   let verificationStarted = 0
+  const verifiedFiles = markets.flatMap((market) => [candidatePaths[market], restorePaths[market]])
+  const verifiedFileSnapshots: ImmutableFileSnapshot[] = []
+  let verifiedFileState = ''
   const refreshedBeforeHold = await args.observeDynamicGate()
   assertWeeklyBackupDynamicGate(args.plan, refreshedBeforeHold)
   assertCombinedWalLimit(args.plan)
@@ -219,6 +222,7 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   const assertSourceReserve = () => {
     if (readSourceFreeBytes() < args.plan.sourceReserveBytes) throw new Error('SOURCE_RESERVE_BREACHED')
   }
+  const snapshotSources = markets.map((market) => ({ label: market, databasePath: args.plan.sourceDatabasePaths[market] }))
   let snapshotLockHeldMs = -1
   try {
     const held = await withWeeklyWriterHold({
@@ -232,15 +236,21 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
         assertSourceReserve()
         await assertHoldValid()
         args.assertRuntimeIdentity()
+        // Recheck the helper right before it runs against production paths.
+        if (fileSha256(args.plan.cloneBinaryPath) !== args.plan.cloneBinarySha256) throw new Error('CLONE_BINARY_SHA256_MISMATCH')
         const snapshot = await operations.createLockedSqliteSnapshot({
           sqliteBinary: args.plan.sqliteBinaryPath,
           cloneBinary: args.plan.cloneBinaryPath,
-          sources: markets.map((market) => ({ label: market, databasePath: args.plan.sourceDatabasePaths[market] })),
+          sources: snapshotSources,
           stagingDirectory,
           lockWaitMs: Math.min(30_000, args.plan.maximumSnapshotLockMs),
           maximumLockMs: args.plan.maximumSnapshotLockMs,
         })
         snapshotLockHeldMs = snapshot.lockHeldMs
+        // The WAL cap and the reserve were last checked before the lock; apply them to what was captured.
+        const capturedWalBytes = snapshot.files.filter((file) => file.kind === 'wal').reduce((total, file) => total + file.bytes, 0)
+        if (capturedWalBytes > args.plan.maximumCombinedWalBytes) throw new Error('SOURCE_WAL_LIMIT_EXCEEDED')
+        assertSourceReserve()
         args.onPhase?.('SOURCE_SNAPSHOT_CREATED')
         await assertHoldValid()
       },
@@ -306,28 +316,37 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
         deadlineMs: verificationDeadlineMs,
         check: assertSourceReserve,
       })
+      // Taken right after this market's hashes, so a change during the other market's checks is caught.
+      verifiedFileSnapshots.push(immutableFileSnapshot(candidatePaths[market]), immutableFileSnapshot(restorePaths[market]))
       verified[market] = { market, generationId: args.plan.runId, syncStatus: 'PASS', ...result, ...acquired[market] }
     }
+    verifiedFileState = JSON.stringify(verifiedFileSnapshots)
     holdDurationMs = held.receipt.holdDurationMs
     writerStatesRestored = held.receipt.restored
     verificationStarted = verificationStartedAt
   } finally {
-    removeLockedSnapshot(stagingDirectory, [...markets])
+    removeLockedSnapshot(stagingDirectory, snapshotSources)
   }
   args.onPhase?.('VERIFICATION_PASSED')
 
+  const postflight = await args.observePostflight()
+  // Signals that arrived during synchronous verification are delivered while
+  // postflight awaits; recheck the abort flag before publishing.
   args.assertRuntimeIdentity()
+  if (Date.now() >= mustFinishBeforeMs) throw new Error('EXECUTION_DEADLINE_EXCEEDED')
+  // Last checks before publishing (after every await): the prior generation, and the candidate and
+  // restore files exactly as they were when their hashes were taken, with no WAL or journal beside them.
   for (const market of markets) {
     assertImmutableFileSnapshot(args.plan.priorDatabasePaths[market], priorSnapshots[market])
   }
   if (fileSha256(args.plan.priorManifestPath) !== args.plan.priorManifestSha256) {
     throw new Error('PRIOR_GENERATION_CHANGED')
   }
-  const postflight = await args.observePostflight()
-  // Signals that arrived during synchronous verification are delivered while
-  // postflight awaits; recheck the abort flag before publishing.
-  args.assertRuntimeIdentity()
-  if (Date.now() >= mustFinishBeforeMs) throw new Error('EXECUTION_DEADLINE_EXCEEDED')
+  if (JSON.stringify(verifiedFiles.map(immutableFileSnapshot)) !== verifiedFileState
+    || verifiedFiles.some((file) => ['-wal', '-journal'].some((suffix) => fs.existsSync(`${file}${suffix}`)
+      && fs.lstatSync(`${file}${suffix}`).size > 0))) {
+    throw new Error('CANDIDATE_CHANGED_AFTER_VERIFICATION')
+  }
   const manifest = buildWeeklyBackupCompleteManifest(args.plan, {
     generationId: args.plan.runId,
     priorGenerationId: args.plan.priorGenerationId,
