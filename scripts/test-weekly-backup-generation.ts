@@ -64,9 +64,14 @@ try {
       INSERT INTO fixture(value) VALUES('prior');
     `])
     fs.copyFileSync(origin, prior)
+    // 2026-11-15: the real JP prior is read-only (0400) and cp -c keeps the mode, so the replica could not be written.
+    if (market === 'JP') fs.chmodSync(prior, 0o400)
     command(SQLITE, [origin, `INSERT INTO fixture(value) VALUES('${market}-new');`])
+    const priorModeBefore = fs.statSync(prior).mode & 0o777
+    const priorBytesBefore = fs.readFileSync(prior)
     cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: prior,
       candidateRoot, candidateDatabasePath: candidate })
+    assert.equal(fs.statSync(candidate).mode & 0o777, 0o600)
     const walPath = `${origin}-wal`
     const walAtStart = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0
     const sourceStat = fs.statSync(origin)
@@ -91,6 +96,8 @@ try {
       },
     })
     assert.equal(command(SQLITE, ['-readonly', candidate, 'SELECT COUNT(*) FROM fixture;']), '2')
+    assert.equal(fs.statSync(prior).mode & 0o777, priorModeBefore)
+    assert.equal(fs.readFileSync(prior).equals(priorBytesBefore), true)
     verified[market] = marketVerification(market, generationId, verifyReplica({
       sqliteBinary: SQLITE,
       candidateRoot,

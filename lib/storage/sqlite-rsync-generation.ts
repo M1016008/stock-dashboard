@@ -97,6 +97,18 @@ export function cloneReplicaSeed(args: {
     : Math.min(30 * 60_000, remainingMs(args.deadlineMs))
   command('/bin/cp', ['-c', args.priorDatabasePath, args.candidateDatabasePath], timeoutMs)
   assertRegularFile(args.candidateDatabasePath)
+  // cp -c keeps the prior's mode; a read-only (0400) prior made the replica unwritable on 2026-11-15.
+  // Change only the candidate (no symlink following), then prove it opens for writing before any long sync.
+  const fd = fs.openSync(args.candidateDatabasePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error('CANDIDATE_DATABASE_NOT_REGULAR_FILE')
+    fs.fchmodSync(fd, 0o600)
+  } finally { fs.closeSync(fd) }
+  try {
+    fs.closeSync(fs.openSync(args.candidateDatabasePath, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW))
+  } catch (error) {
+    throw new Error(`CANDIDATE_DATABASE_NOT_WRITABLE:${(error as NodeJS.ErrnoException).code ?? 'UNKNOWN'}`)
+  }
 }
 
 function walBytes(filePath: string): number {
