@@ -89,7 +89,13 @@ data-freshness-guard (15 分)・trigger-historical-scan (5 分)・kabutan-materi
 
 ## 4. DB の控え (P1 の直前)
 
-APFS の複製 (`cp -c`。同じ OWC の上に一瞬で複製を作り、書き換わった分だけ容量が増える)。
+APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わった分だけ容量が増える)。12/6 の Backup と同じ部品
+(`scripts/run-locked-sqlite-snapshot.ts`、使い方は `docs/production-weekly-backup-runbook.md` の最後の節) で作る
+(2026-11-15 オーナー指示)。`cp -c` は、複製できないと黙って普通のコピーにするので使わない。
+- 全部の DB の書き込みの鍵 (`BEGIN IMMEDIATE`、何も書かない) を取ってから複製し、複製の後に外す。止め忘れたものがあっても、
+  複製は鍵を取った時点の確定した状態になる。鍵の接続は閉じるときに WAL を書き戻さない (`no_ckpt_on_close`)。
+  `-wal` が無い DB には、鍵の接続が空の `-wal` を作る (中身は無く、SQLite は読み飛ばす)。
+- 出力の `lockHeldMs` (鍵を持っていた時間) と、前後の OWC の空きを記録に残す。
 
 - 対象: 日本株の DB (514 GiB)、米国株の DB (514 GiB)、表示用のキャッシュの DB (60 MB)、類似の索引 2 つ (1.3 GB・5.2 GB)。
 - DB を開くものをすべて止めてから複製する (定期処理 15 本に加え、Web・類似の検索・friend-readonly-gateway)。`-wal` が残っていれば

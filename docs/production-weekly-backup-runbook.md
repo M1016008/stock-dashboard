@@ -5,46 +5,66 @@ weekly scheduling are not authorized by this document.
 
 ## Fixed method
 
+Clone first, then sync (schema 2, owner decision 2026-11-15 after the v2 run failed because
+Web/Analog, which stay online, wrote dashboard caches into the JP database during a 97-minute hold).
+
 1. Re-identify the OWC source and encrypted SanDisk destination by physical
    serial, APFS volume UUID, mount, and canonical path.
 2. Require a one-shot plan whose SHA-256, run ID, start window, source paths,
-   prior generation, tool identity, limits, and operator approval all match.
-   The preflight command requires the approved digest as
-   `--expected-plan-sha256`; calculating and printing a new digest is not an
-   approval substitute.
+   prior generation, tool identity (sqlite3, sqlite3_rsync, the clonefile helper),
+   limits, and operator approval all match. The preflight command requires the
+   approved digest as `--expected-plan-sha256`; calculating and printing a new
+   digest is not an approval substitute.
 3. Keep Web, Analog Search, Friend Gateway, and Web Health online. Temporarily
    boot out only the complete approved writer/coordinator allowlist. Preserve
    each label's prior loaded/disabled state.
 4. Reject an active writer lock, unknown writer, daily-update overlap, source
-   WAL over the approved cap, destination collision, or unhealthy read service.
-5. Capture one JP/US generation while writers are held. APFS-clone the prior
-   generation into a unique candidate and run the pinned official
-   `sqlite3_rsync --wal-only` against JP and US. Both markets must finish under
-   the same hold and generation ID.
-6. Abort if the source WAL grows, the 150 GB destination reserve is crossed,
-   the approved candidate-growth budget is crossed, a mount/identity changes,
-   or the writer hold reaches the plan's maximum (at most eight hours). Restore only labels that were loaded
-   before the hold; never enable an intentionally disabled label.
-7. After both syncs, restore the prior writer state and verify that daily
-   schedules are unchanged. Destination-only verification may continue while
-   Production runs.
-8. For both markets require SHA-256, `quick_check`, full `integrity_check`, and
-   a read-only reopen of the candidate. Then create an isolated APFS restore
-   clone and require that its SHA-256 equals the candidate's and that it reopens
-   read-only. The restore clone shares the candidate's blocks, so
-   `integrity_check` runs once per market, on the candidate only (owner
-   decision 2026-11-09, design B). Verification has one shared approval-plan
-   deadline of at most 96 hours, including checks, restore clone creation, and
-   hashing. It runs only against the candidate/restore files on the backup
-   volume and must fit inside the overall execution window.
-9. Recheck both market generation IDs and all checkpoint hashes. Publish a new
+   WAL over the approved cap, destination collision, staging collision, source
+   volume free space below `sourceReserveBytes`, or unhealthy read service.
+5. APFS-clone the prior generation into a unique candidate on SanDisk (before
+   the hold).
+6. Under the writer hold, take one point-in-time snapshot of JP and US on the
+   source volume (`lib/storage/locked-sqlite-snapshot.ts`):
+   - open one pinned `sqlite3` connection per database with
+     `.dbconfig no_ckpt_on_close on`, then `BEGIN IMMEDIATE`; both locks are
+     taken before the first clone and held until the last one;
+   - per market, clone the main file and then the WAL with the native
+     `clonefile(2)` helper (`scripts/native/apfs-clone-file.c`: refuses an
+     existing destination, never falls back to a full copy, then `F_FULLFSYNC`
+     and a directory fsync) into `<stagingRoot>/<runId>/<market>/`; `-shm` is
+     never cloned;
+   - fail if a WAL's inode, size or header changed under the lock, a WAL
+     appeared, a source path was replaced, or `maximumSnapshotLockMs` passed;
+   - roll back and close. Nothing is written to Production. A source without a
+     WAL gets an empty one from the lock connection (SQLite ignores an empty WAL).
+   Web/Analog writes wait for the lock (busy timeout 5 s, 3 retries); a lock held
+   longer than that fails those requests, which is why the lock limit is short.
+7. Restore the writers. The hold is normally seconds plus writer stop/start.
+   From here only the private clones and SanDisk are read; Production is not
+   touched again, and later Production writes neither fail the run nor reach the
+   generation.
+8. Per market: checkpoint the clone's WAL into the clone (`PRAGMA
+   wal_checkpoint(TRUNCATE)`, clone only), then `sqlite3_rsync --wal-only` from
+   the clone to the candidate. The clone's WAL is not monitored (sqlite3_rsync,
+   its only user, creates and removes it); the clone's size/mtime, the 150 GB
+   destination reserve, the candidate-growth budget, volume identity and the
+   source reserve are.
+9. Verify per market: `quick_check` and full `integrity_check` on the **clone**
+   (OWC, faster than the USB disk), a read-only reopen of the candidate, and
+   equality of the candidate's and the clone's SQLite content digests (SHA-256
+   with only the file change counter, bytes 24-27, and version-valid-for, bytes
+   92-95, zeroed; sqlite3_rsync's commit on the replica bumps exactly those).
+   Then the isolated APFS restore clone on SanDisk must equal the candidate's
+   full SHA-256 and reopen read-only. One shared deadline of at most 96 hours
+   covers the syncs and all checks.
+10. Recheck the prior generation, generation IDs and hashes. Publish a new
    `COMPLETE.manifest.json` atomically only after every check passes.
+11. Remove the staging clones in every case (success or failure). The
+   source-volume reserve is checked about every second during syncs and checks,
+   and every 1 GiB while hashing, until then.
 
-`runWeeklyBackupGeneration` is the only acquisition/promotion orchestrator. It
-enforces the approved plan digest before writing, verifies the frozen runbook,
-prior manifest, and SQLite tool binaries, applies one Writer Hold around the JP
-then US syncs, restores writers, and only then starts the shared destination-only
-verification deadline. A failure leaves the candidate unpublished.
+`runWeeklyBackupGeneration` is the only acquisition/promotion orchestrator. A
+failure leaves the candidate unpublished.
 
 ## Existing generation
 
@@ -71,80 +91,61 @@ plan must use current measured free space, WAL size, and a candidate-growth cap
 no larger than the computed budget. A crossed reserve is a hard failure, not a
 reason to remove the prior generation.
 
+## Source volume (OWC) capacity contract
+
+The clones share every block with Production when they are made. Each block
+Production (or the clone's own checkpoint) rewrites afterwards is then stored
+twice. `db-maintenance` never VACUUMs (`scripts/maintenance-db.ts`), so a day
+is expected to cost a few GB, but that is not a bound. OWC holds Production, so:
+- the plan's `sourceReserveBytes` (at least 300 GB) must be free before the hold
+  and stays a hard floor until the clones are removed;
+- a crossed floor stops the sync/check and removes the clones;
+- after a crash, remove a leftover `<stagingRoot>/<runId>` by hand (see below)
+  before anything else.
+
 ## Hold and runtime identity contract
 
 Eight hours is an abnormal-stop ceiling, not an expected hold duration. The
-normal hold covers only writer shutdown, JP sync, and US sync. Once both
-candidate snapshots exist and runtime identity is rechecked, the exact prior
-loaded/disabled states are restored before any destination integrity or restore
-verification begins.
+hold covers writer shutdown, the post-stop gate, and the snapshot only. The
+snapshot lock limit (`maximumSnapshotLockMs`, at most 5 minutes) is separate
+and much shorter.
 
-The sync monitor rechecks OWC/SanDisk identity throughout acquisition. It also
-requires zero source WAL growth, unchanged source DB size/mtime, the approved
-destination reserve, and the candidate-growth budget. A daily-update window
+The sync monitor rechecks OWC/SanDisk identity throughout. A daily-update window
 overlap, active writer lock, unknown writer, changed mount, UUID, physical
 serial, or tool hash fails closed; the run is postponed rather than overlapped.
 
 Pinned SQLite 3.54.1 tooling is stored outside Production under
 `/Volumes/OWC Express 1M2 80G/StockBoard Development/tools/sqlite-3.54.1`.
-Each one-shot plan fixes the sqlite3 and sqlite3_rsync SHA-256 values plus the
-upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
+Each one-shot plan fixes the sqlite3, sqlite3_rsync and clonefile helper
+SHA-256 values plus the upstream archive SHA3-256. No binary is discovered from
+`PATH` at execution. The helper is built once with
+`cc -O2 -Wall -Werror -o <tools dir>/apfs-clone-file scripts/native/apfs-clone-file.c`
+(placing it there needs approval) and its hash goes into the plan.
 
-### Guarantee and accepted risks (owner-approved 2026-11-09)
+### Guarantee and accepted risks (schema 2, 2026-11-15)
 
-Guarantee: each market's database in a published generation is a
-transaction-consistent SQLite snapshot of that database alone. It is not
-guaranteed that a multi-transaction job, or one spanning JP and US, is either
-wholly in or wholly out of the generation (accepted risks 3 and 4).
-
-Detection, with its conditions: for each of the four source files (JP and US
-database and WAL), the runner records device, inode, size, mtime and ctime as
-the first step of the copy operation (which starts once every writer process
-group has exited and one `launchctl print` check per writer has passed) and
-records them again after the last copy. If any of those values differs between
-a file's two records (a WAL reused at the same length still changes its mtime),
-the run fails without publishing. Writes outside those two records, or that
-leave no trace in those values, are not detected (accepted risks 3 to 7). While
-a market is being copied, its monitor repeats the database and WAL checks after
-each round of runtime-identity probes, so the interval is about one second plus
-the probe time, and longer when probes are slow.
+Guarantee: JP and US in a published generation are the committed state of both
+databases at the moment both write locks were held (one instant for both). It is
+not guaranteed that a multi-transaction job, or one spanning JP and US, is
+either wholly in or wholly out (accepted risks 1 and 2).
 
 Operating rule: while writers are stopped, do not run manual `sqlite3`/Node
 tools against Production, and do not operate on the StockBoard repository or
 databases from the Codex app or from another Claude Code session.
 
 Accepted risks (recorded, not coded):
-1. Only `com.stockboard.*` LaunchAgents and update locks are checked for
-   writers; other writers are covered by the operating rule and the detection
-   above.
-2. Observe mode calls `/api/health`, which writes the same storage-probe
-   telemetry as the existing `com.stockboard.web-health` job; it does not write
-   to the databases.
-3. A manual job that commits part of its work just before the baseline and the
-   rest after the final record can leave JP and US (or one database) at
-   different points of that job; the operating rule is the only protection.
-4. The update-lock and daily-window checks only observe one moment; they do not
-   exclude other work. An approved writer (for example the resident
-   trigger-historical-scan worker, or an update job started by hand) that
-   starts a multi-transaction job after the pre-hold observation and is stopped
-   by the hold partway through leaves that partial state in the generation.
-   The post-stop check skips a lock whose owner process has exited, so it does
-   not catch this either. Mitigation: the pre-start check under "Abort and
-   writer restoration". It only shows that no writer was mid-job when it ran;
-   a job that starts between that check and the hold (which can take minutes:
-   the CLI observes again, probes identity and clones seeds first) is not
-   covered.
-5. The four files are recorded one after another, so a write between two of
-   those records may be absorbed into a baseline or fall after a final record.
-   Such a write happens before the copies start or after they finish.
-6. A write after a file's final record (before writers are restarted) is not
-   detected; both copies are already complete.
-7. A WAL that is created, written and removed entirely between samples while
-   absent at both records is not seen; a committed transaction would still
-   change the main file.
-8. Each runtime identity check runs `system_profiler` once per volume; the
-   resulting stop latency is the worst case given under "Abort and writer
-   restoration".
+1. A job (manual or an approved writer such as the resident
+   trigger-historical-scan worker) that commits part of its work before the
+   snapshot and the rest after leaves its partial state in the generation. The
+   pre-start check below only shows that no writer was mid-job when it ran.
+2. The update-lock and daily-window checks only observe one moment.
+3. Only `com.stockboard.*` LaunchAgents and update locks are checked for
+   writers; other writers are covered by the operating rule. A writer that
+   ignores SQLite locks (direct file writes) is not excluded by the lock.
+4. Observe mode calls `/api/health`, which writes the same storage-probe
+   telemetry as `com.stockboard.web-health`; it does not write the databases.
+5. Each runtime identity check runs `system_profiler` once per volume; see
+   "Abort and writer restoration" for the stop latency.
 
 ## Abort and writer restoration
 
@@ -197,25 +198,24 @@ If any check fails, wait and repeat; do not start until all pass. A `RUNNING` or
 `CANCEL_REQUESTED` row that does not clear (for example after a worker crash) is reported to the
 owner instead of being changed.
 
-1. **Automatic stop at the hold limit.** The sync monitor stops `sqlite3_rsync`
-   (SIGTERM, then SIGKILL after 5 seconds) when the hold deadline passes. The
-   error propagates to the Writer Hold, which restores every label that was
-   loaded before the hold, then the CLI exits non-zero. The candidate stays
-   unpublished. The log shows `SQLITE_RSYNC_DEADLINE_EXCEEDED` (or
-   `WRITER_HOLD_LIMIT_EXCEEDED` if the limit passes while writers are stopping
-   or between markets) and no
-   `WRITERS_RESTORED` phase line, followed by `FAILED`.
-2. **Operator abort during the hold.** Send `kill -INT <CLI node pid>`. The CLI
-   does not exit on SIGINT/SIGTERM/SIGHUP; it fails the next runtime-identity
-   check with `OPERATOR_ABORT_REQUESTED`, stops
-   `sqlite3_rsync`, restores the writers, and exits non-zero. Do not use
-   `kill -9` on the CLI while writers are held.
-   The monitor checks the hold deadline, then the abort flag and volume
-   identity, about once a second. The identity probes normally take about one
-   second together. Each of the up to four probes per volume (diskutil, plutil,
+0. **Snapshot failures.** If a lock cannot be taken within its wait, the lock
+   limit passes, or a WAL changes under the lock, the snapshot releases its
+   locks, removes what it created, and the hold restores the writers. The log
+   shows `SNAPSHOT_...` inside `WRITER_HOLD_FAILED` and no `WRITERS_RESTORED`.
+1. **Hold limit.** The hold now covers only writer stop, the post-stop gate and
+   the snapshot. A hold that ends past `maximumWriterHoldMs` fails with
+   `WRITER_HOLD_LIMIT_EXCEEDED` after `WRITERS_RESTORED`; the candidate stays
+   unpublished. A sync that passes the shared 96-hour deadline is stopped
+   (SIGTERM, then SIGKILL after 5 seconds) with `SQLITE_RSYNC_DEADLINE_EXCEEDED`.
+2. **Operator abort.** Send `kill -INT <CLI node pid>`. The CLI does not exit on
+   SIGINT/SIGTERM/SIGHUP; it fails its next runtime-identity check with
+   `OPERATOR_ABORT_REQUESTED` (during the hold: before or after the snapshot;
+   during a sync: within about a second, after which `sqlite3_rsync` is stopped),
+   restores the writers if they are held, removes the clones and exits non-zero.
+   Do not use `kill -9` on the CLI while writers are held.
+   Each of the up to four identity probes per volume (diskutil, plutil,
    system_profiler, ioreg) times out after 15 seconds and a timeout fails the
-   run, so in the worst case a stop can lag the hold limit or the signal by
-   about two minutes.
+   run, so in the worst case a stop can lag the signal by about two minutes.
 3. **After any non-zero exit,** confirm:
    - no `sqlite3_rsync` process remains (`pgrep -fl sqlite3_rsync` prints nothing);
    - every label that was loaded before the run is loaded again
@@ -235,13 +235,19 @@ owner instead of being changed.
       `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
    Then confirm Web/Analog health and the active writer locks. Leave the
    candidate directory in place; it is never published without a new run.
+5. **Leftover snapshot (only after a crash).** A lock connection whose parent
+   died reads end-of-input, rolls back and exits without checkpointing
+   (`no_ckpt_on_close`); confirm `pgrep -fl 'sqlite-3.54.1/sqlite3'` prints
+   nothing. Then list `<stagingRoot>/<runId>/{JP,US}/` and delete only the
+   files there (the clones and their `-wal`/`-shm`) and those two directories,
+   never anything outside `<stagingRoot>/<runId>`.
 
-Verification starts only after the writers are restored, so aborting during
-verification needs no writer action. Send the signal to the CLI and to the
-running `sqlite3` child (`pkill -INT -f '<generation root>'`, or Ctrl-C if the
-CLI was started in the foreground): a check that is already running finishes
-only when its process ends. The CLI rechecks the abort flag after postflight,
-immediately before publishing, so the candidate stays unpublished.
+Syncs and checks run after the writers are restored, so aborting then needs no
+writer action. A running `quick_check`/`integrity_check` reads the clone, so stop
+it with `pkill -INT -f '<stagingRoot>/<runId>'` (and signal the CLI): the check
+fails, the CLI removes the clones and exits non-zero. Hashing runs inside the
+CLI and stops at its next check. The CLI rechecks the abort flag after
+postflight, immediately before publishing, so the candidate stays unpublished.
 
 ## First Production approval must name
 
@@ -251,8 +257,12 @@ immediately before publishing, so the candidate stays unpublished.
 - pinned SQLite/sqlite3_rsync version and tool archive digest;
 - one run ID, start deadline, finish deadline, writer-hold maximum, candidate
   growth cap, absolute WAL cap, and zero WAL-growth cap;
-- approval for the backup-only Production SQLite read connections, temporary
-  writer/coordinator hold, and new candidate writes on SanDisk;
+- approval for the backup-only Production SQLite connections (read, plus the
+  two `BEGIN IMMEDIATE` lock connections that write nothing), the temporary
+  writer/coordinator hold, the temporary clones under `stagingRoot` on OWC, and
+  new candidate writes on SanDisk;
+- the staging root, clonefile helper path and hash, `sourceReserveBytes` and
+  `maximumSnapshotLockMs`;
 - the approved plan SHA-256 supplied unchanged to both preflight and execution,
   plus the canonical LaunchAgent definition hashes and executable paths used by
   the Writer Hold driver;
@@ -268,3 +278,24 @@ The two optional SanDisk hardware-fixture scripts are separately gated by
 `STOCKBOARD_WEEKLY_BACKUP_HARDWARE_QA` having the exact value
 `WRITE_ISOLATED_WEEKLY_BACKUP_FIXTURE_TO_APPROVED_SANDISK`. Normal CI and
 ordinary npm invocation cannot write those fixtures.
+
+## Point-in-time copy on OWC without a backup (P1 pre-deploy copy, rehearsal)
+
+`scripts/run-locked-sqlite-snapshot.ts` uses the same snapshot module. Without
+`--confirm=WRITE_APPROVED_LOCKED_SNAPSHOT` it only prints sizes and free space.
+
+```
+node --import tsx scripts/run-locked-sqlite-snapshot.ts --staging=<new dir on OWC> \
+  --db=JP=<JP db> --db=US=<US db> [--db=<LABEL>=<other db> ...] \
+  --sqlite3=<pinned sqlite3> --clone-binary=<helper> --clone-binary-sha256=<hex> \
+  --min-free-bytes=<n> [--max-lock-ms=60000] [--remove-after] [--confirm=...]
+```
+
+- Rehearsal: add `--remove-after`; the output gives `lockHeldMs`, elapsed time
+  and free space before, after, and after removal.
+- P1 copy: no `--remove-after`; the copy stays until its cleanup date in
+  `docs/operations/P1-RUNBOOK.md`, and `dev-capacity-monitor` watches OWC free
+  space hourly meanwhile.
+- Every run is a Production operation (locks on Production, files on OWC) and
+  needs the owner's approval first.
+
