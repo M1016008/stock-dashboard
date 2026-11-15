@@ -96,8 +96,7 @@ async function main() {
   const scenarioProjection = client.indexOf('<ScenarioProjectionChart')
   const movePeriods = client.indexOf('<StockMovePeriods')
   const notebook = client.indexOf('<TradeScenarioNotebook')
-  const scenarioAi = client.indexOf('<StockScenarioAiPanel')
-  assert.ok(scenarioProjection < movePeriods && movePeriods < notebook && notebook < scenarioAi, 'scenario blocks must follow the editorial order')
+  assert.ok(scenarioProjection < movePeriods && movePeriods < notebook, 'scenario blocks must follow the editorial order')
 
   const mlInsights = client.indexOf('<StockMlInsights')
   const analogs = client.indexOf('<HistoricalAnalogExplorer')

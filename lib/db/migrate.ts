@@ -911,6 +911,17 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_shikiho_profiles_issue
     ON stock_shikiho_profiles(issue_label)`,
+  // 会社四季報の比較会社 (分類 CSV の「比較会社」列。コードが無い会社は rival_code が NULL)
+  `CREATE TABLE IF NOT EXISTS stock_shikiho_rivals (
+    ticker TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    rival_code TEXT,
+    rival_name TEXT NOT NULL,
+    issue_label TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, position)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_shikiho_rivals_rival ON stock_shikiho_rivals(rival_code)`,
   // ─── Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest) ───
   `CREATE TABLE IF NOT EXISTS weekly_margin_interest (
     ticker TEXT NOT NULL,
@@ -2790,31 +2801,6 @@ const STATEMENTS = [
     PRIMARY KEY (mode, table_name, partition_key)
   )`,
   `CREATE INDEX IF NOT EXISTS turso_sync_partitions_status_idx ON turso_sync_partitions(mode, status, table_name)`,
-  `CREATE TABLE IF NOT EXISTS fx_rates_daily (
-    pair TEXT NOT NULL,
-    date TEXT NOT NULL,
-    rate REAL NOT NULL,
-    source TEXT NOT NULL DEFAULT 'csv',
-    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    PRIMARY KEY (pair, date)
-  )`,
-  `CREATE INDEX IF NOT EXISTS fx_rates_daily_date_idx ON fx_rates_daily(date)`,
-  `CREATE TABLE IF NOT EXISTS custom_charts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    formula TEXT NOT NULL,
-    formula_ast_json TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'valuation',
-    base_date TEXT,
-    display_currency TEXT NOT NULL DEFAULT 'LOCAL',
-    missing_policy TEXT NOT NULL DEFAULT 'intersection',
-    indicator_config_json TEXT NOT NULL,
-    favorite INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-  )`,
-  `CREATE INDEX IF NOT EXISTS custom_charts_sort_idx ON custom_charts(favorite DESC, sort_order ASC, updated_at DESC)`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */

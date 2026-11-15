@@ -1767,7 +1767,6 @@ function ModelCard({ model }: { model: ModelRow }) {
         </div>
         <div className="text-right text-[11px] font-bold text-[var(--color-text-secondary)]">
           <div>サンプル {fmtCount(Number(metrics.samples ?? 0))}</div>
-          <div>正解率 {fmtRatio(Number(metrics.accuracy ?? 0))}</div>
         </div>
       </div>
       <div className="mt-3 grid gap-2">

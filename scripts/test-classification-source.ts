@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   classificationValidationOptionsFromEnv,
+  parseRivals,
   readClassificationSource,
   validateClassificationSource,
 } from '../lib/classification-source'
@@ -59,6 +60,17 @@ async function main(): Promise<void> {
     consolidatedBusiness: '電子部品100',
   })
   assert.equal(source.profiles[1]?.forecastPer, null)
+  // 「比較会社」列の無い CSV は、比較会社の表に触れない。
+  assert.equal(source.hasRivalsColumn, false)
+  assert.deepEqual(source.rivals, [])
+  const invalid: string[] = []
+  assert.deepEqual(parseRivals('6629', '6927:ヘリオスH; 7717:Vテクノ;:未上場社;12345:不正;130a:英字コード;', '2026年4集秋号', invalid), [
+    { ticker: '6629', position: 1, rivalCode: '6927', rivalName: 'ヘリオスH', issueLabel: '2026年4集秋号' },
+    { ticker: '6629', position: 2, rivalCode: '7717', rivalName: 'Vテクノ', issueLabel: '2026年4集秋号' },
+    { ticker: '6629', position: 3, rivalCode: null, rivalName: '未上場社', issueLabel: '2026年4集秋号' },
+    { ticker: '6629', position: 4, rivalCode: '130A', rivalName: '英字コード', issueLabel: '2026年4集秋号' },
+  ])
+  assert.deepEqual(invalid, ['6629:12345:不正'])
   assert.throws(
     () => validateClassificationSource(source, {
       minRecords: 4,
@@ -67,6 +79,7 @@ async function main(): Promise<void> {
       maxSkippedRows: 0,
       maxRecoveredMissingSubIndustries: 1,
       maxDuplicateTickers: 0,
+      maxInvalidRivalEntries: 20,
     }),
     /invalidSubIndustries=1/,
   )
@@ -78,6 +91,7 @@ async function main(): Promise<void> {
       maxSkippedRows: 0,
       maxRecoveredMissingSubIndustries: 0,
       maxDuplicateTickers: 0,
+      maxInvalidRivalEntries: 20,
     }),
     /recoveredMissingSubIndustries=1\/0/,
   )

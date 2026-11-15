@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Activity, CheckCircle2, ChevronDown, CircleHelp, Columns3, Filter, GitCompareArrows, History, LoaderCircle, Plus, RefreshCw, RotateCcw, Save, ScanLine, Search, SlidersHorizontal, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Activity, CheckCircle2, ChevronDown, CircleHelp, Columns3, Filter, History, LoaderCircle, Plus, RefreshCw, RotateCcw, Save, ScanLine, Search, SlidersHorizontal, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react'
 import {
   DEFAULT_SCREENING_COLUMNS,
   SCREENING_CATEGORY_LABELS,
@@ -27,13 +27,11 @@ import {
   isCompleteScreeningCondition,
   type ScreenerNaturalLanguageProposal,
 } from '@/lib/screener-natural-language'
-import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 const STATE_KEY = 'stockboard_integrated_screener_state_v1'
 const SAVED_KEY = 'stockboard_integrated_screener_saved_v1'
 const SCROLL_KEY = 'stockboard_integrated_screener_scroll_v1'
-const MAX_COMPARE = 8
 
 interface ScreenState {
   asOf: string
@@ -329,7 +327,6 @@ export function IntegratedScreener() {
   const [changeReasonLoadingKey, setChangeReasonLoadingKey] = useState<string | null>(null)
   const [changeReasonErrorByKey, setChangeReasonErrorByKey] = useState<Record<string, string>>({})
   const [saveName, setSaveName] = useState('')
-  const [compared, setCompared] = useState<Set<string>>(new Set())
   const [openReasonKey, setOpenReasonKey] = useState<string | null>(null)
   const [reasonByKey, setReasonByKey] = useState<Record<string, ScreenerReasonContract>>({})
   const [reasonLoadingKey, setReasonLoadingKey] = useState<string | null>(null)
@@ -345,7 +342,6 @@ export function IntegratedScreener() {
     const fromUrl = parseState(searchParams.get('screen'))
     const fromStorage = parseState(window.localStorage.getItem(STATE_KEY))
     setState(fromUrl ?? fromStorage ?? defaultState)
-    setCompared(new Set(getCompareSymbols().filter((item) => item.market === 'JP').map((item) => item.ticker)))
     initialised.current = true
     setReady(true)
     const restore = Number(window.sessionStorage.getItem(SCROLL_KEY) ?? 0)
@@ -598,17 +594,6 @@ export function IntegratedScreener() {
     }
   }
 
-  const toggleCompare = (row: IntegratedScreeningRow) => {
-    if (!compared.has(row.ticker) && compared.size >= MAX_COMPARE) return
-    toggleComparedSymbol({ market: 'JP', ticker: row.ticker, name: row.name })
-    setCompared((current) => {
-      const next = new Set(current)
-      if (next.has(row.ticker)) next.delete(row.ticker)
-      else next.add(row.ticker)
-      return next
-    })
-  }
-
   const reasonKeyFor = (ticker: string) => JSON.stringify({ ticker, asOf: response?.asOf ?? state.asOf, conditions: state.conditions })
 
   const toggleReason = async (row: IntegratedScreeningRow) => {
@@ -637,7 +622,6 @@ export function IntegratedScreener() {
   }
 
   const visibleColumns = state.columns.filter((column) => SCREENING_METRIC_MAP.has(column))
-  const selectedCompareTicker = [...compared][0] ?? response?.rows[0]?.ticker ?? null
   const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1
 
   return <div className="flex min-w-0 flex-col">
@@ -856,7 +840,6 @@ export function IntegratedScreener() {
           </div>
           <div className="flex items-center gap-1.5">
             <span className="hidden text-[10px] text-[var(--color-text-muted)] sm:inline">基準 {response?.asOf ?? '—'} / 構造 {response?.snapshotDate ?? '—'}</span>
-            {selectedCompareTicker && compared.size > 0 && <Link href={`/stock/${selectedCompareTicker}#ml`} className="btn"><GitCompareArrows size={13} />比較 {compared.size}</Link>}
             <button type="button" onClick={() => setColumnsOpen((current) => !current)} aria-expanded={columnsOpen} className="btn" data-variant={columnsOpen ? 'primary' : undefined}><Columns3 size={13} />表示列</button>
           </div>
         </div>
@@ -873,8 +856,7 @@ export function IntegratedScreener() {
           <table className="w-full min-w-[980px] border-collapse text-[11px]">
             <thead className="sticky top-0 z-10 text-[11px] text-[var(--color-text-secondary)]">
               <tr>
-                <th className="sticky left-0 z-20 w-9 border-b border-r border-[var(--color-border-default)] p-2">比較</th>
-                <th className="sticky left-9 z-20 min-w-[180px] border-b border-r border-[var(--color-border-default)] p-2 text-left">銘柄</th>
+                <th className="sticky left-0 z-20 min-w-[180px] border-b border-r border-[var(--color-border-default)] p-2 text-left">銘柄</th>
                 <th className="border-b border-[var(--color-border-default)] p-2 text-right">株価</th>
                 {visibleColumns.map((key) => <th key={key} className="whitespace-nowrap border-b border-[var(--color-border-default)] p-2 text-right">
                   <button type="button" onClick={() => setState((current) => ({ ...current, page: 0, sort: key, direction: current.sort === key && current.direction === 'desc' ? 'asc' : 'desc' }))} className="font-bold hover:text-[var(--color-brand-700)]">
@@ -884,14 +866,13 @@ export function IntegratedScreener() {
               </tr>
             </thead>
             <tbody>
-              {loading && !response && <tr><td colSpan={visibleColumns.length + 3} className="h-28 text-center text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1.5"><LoaderCircle size={14} className="animate-spin" />検索しています…</span></td></tr>}
+              {loading && !response && <tr><td colSpan={visibleColumns.length + 2} className="h-28 text-center text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1.5"><LoaderCircle size={14} className="animate-spin" />検索しています…</span></td></tr>}
               {response?.rows.map((row) => {
                 const reasonKey = reasonKeyFor(row.ticker)
                 const reasonOpen = openReasonKey === reasonKey
                 return <Fragment key={row.ticker}>
                   <tr className={`border-b border-[var(--color-border-subtle)] hover:bg-[#fff8e6] ${reasonOpen ? 'bg-[var(--color-brand-50)]' : ''}`}>
-                    <td className="sticky left-0 z-[2] border-r border-[var(--color-border-default)] bg-white p-2 text-center"><input type="checkbox" checked={compared.has(row.ticker)} onChange={() => toggleCompare(row)} disabled={!compared.has(row.ticker) && compared.size >= MAX_COMPARE} aria-label={`${row.ticker}を比較`} /></td>
-                    <td className="sticky left-9 z-[2] border-r border-[var(--color-border-default)] bg-white p-2">
+                    <td className="sticky left-0 z-[2] border-r border-[var(--color-border-default)] bg-white p-2">
                       <div className="flex min-w-0 items-center gap-1">
                         <Link href={`/stock/${row.ticker}#overview`} onClick={() => window.sessionStorage.setItem(SCROLL_KEY, String(window.scrollY))} className="min-w-0 truncate font-bold text-[var(--color-brand-700)] hover:underline"><span className="font-mono">{row.ticker}</span> <span className="text-[var(--color-text-primary)]">{row.name}</span></Link>
                         <StockPreviewTrigger ticker={row.ticker} analysisDate={response.asOf} context="screener" />
@@ -905,10 +886,10 @@ export function IntegratedScreener() {
                     <td className="whitespace-nowrap p-2 text-right font-mono font-bold">{row.price == null ? '—' : `¥${fmtNumber(row.price, 0)}`}</td>
                     {visibleColumns.map((key) => <td key={key} className="whitespace-nowrap p-2 text-right font-mono">{key === 'stageCode' ? <StageCode value={row.stageCode} /> : formatValue(row, key)}</td>)}
                   </tr>
-                  {reasonOpen && <tr className="max-[640px]:hidden"><td colSpan={visibleColumns.length + 3} className="border-b border-[var(--color-brand-200)] p-0"><ReasonPanel reason={reasonByKey[reasonKey] ?? null} loading={reasonLoadingKey === reasonKey} error={reasonErrorByKey[reasonKey] || null} /></td></tr>}
+                  {reasonOpen && <tr className="max-[640px]:hidden"><td colSpan={visibleColumns.length + 2} className="border-b border-[var(--color-brand-200)] p-0"><ReasonPanel reason={reasonByKey[reasonKey] ?? null} loading={reasonLoadingKey === reasonKey} error={reasonErrorByKey[reasonKey] || null} /></td></tr>}
                 </Fragment>
               })}
-              {!loading && response?.rows.length === 0 && <tr><td colSpan={visibleColumns.length + 3} className="h-28 text-center text-[var(--color-text-muted)]">条件に一致する銘柄はありません。</td></tr>}
+              {!loading && response?.rows.length === 0 && <tr><td colSpan={visibleColumns.length + 2} className="h-28 text-center text-[var(--color-text-muted)]">条件に一致する銘柄はありません。</td></tr>}
             </tbody>
           </table>
         </div>

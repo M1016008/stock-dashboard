@@ -4,14 +4,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
+import { Columns3, Filter, RotateCcw } from 'lucide-react'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
-import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { IntegratedScreener } from '@/components/screener/IntegratedScreener'
 import { TwoYearLineFilterControl, TwoYearLineResultBadge } from '@/components/screener/TwoYearLineFilter'
 import { PageTitle } from '@/components/layout/PageTitle'
@@ -511,7 +510,6 @@ function LegacyScreenerPage() {
   const [twoYearAngleMax, setTwoYearAngleMax] = useState(() => searchParams.get('twoYearAngleMax') ?? '')
   const [filtersExpanded, setFiltersExpanded] = useState(true)
   const [tableView, setTableView] = useState<TableView>('core')
-  const [selectedForComparison, setSelectedForComparison] = useState<Set<string>>(new Set())
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -607,30 +605,6 @@ function LegacyScreenerPage() {
   const updateTableView = (next: TableView) => {
     setTableView(next)
     window.localStorage.setItem(TABLE_VIEW_KEY, next)
-  }
-
-  const toggleComparisonSelection = (ticker: string) => {
-    setSelectedForComparison((current) => {
-      const next = new Set(current)
-      if (next.has(ticker)) next.delete(ticker)
-      else if (next.size < 4) next.add(ticker)
-      return next
-    })
-  }
-
-  const addSelectedToComparison = () => {
-    const current = getCompareSymbols()
-    const compared = new Set(current.map((symbol) => `${symbol.market}:${symbol.ticker}`))
-    let slots = Math.max(0, 4 - current.length)
-    for (const row of results.filter((item) => selectedForComparison.has(item.ticker))) {
-      const ticker = row.ticker.replace(/\.T$/i, '')
-      if (!compared.has(`JP:${ticker}`) && slots > 0) {
-        toggleComparedSymbol({ market: 'JP', ticker, name: row.name })
-        compared.add(`JP:${ticker}`)
-        slots -= 1
-      }
-    }
-    setSelectedForComparison(new Set())
   }
 
   useEffect(() => {
@@ -1868,28 +1842,6 @@ function LegacyScreenerPage() {
               {cached && <span style={{ color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {selectedForComparison.size > 0 && (
-                <button
-                  type="button"
-                  onClick={addSelectedToComparison}
-                  style={{
-                    display: 'inline-flex',
-                    height: 32,
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '0 10px',
-                    border: '1px solid var(--accent-primary)',
-                    background: 'var(--accent-primary)',
-                    color: '#fff',
-                    fontSize: 11,
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <GitCompareArrows size={14} />
-                  {selectedForComparison.size}銘柄を比較
-                </button>
-              )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
                 並び替え
                 <select
@@ -2065,13 +2017,6 @@ function LegacyScreenerPage() {
                       <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                         <td style={{ ...td, width: '56px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <input
-                              type="checkbox"
-                              checked={selectedForComparison.has(r.ticker)}
-                              onChange={() => toggleComparisonSelection(r.ticker)}
-                              aria-label={`${r.ticker.replace('.T', '')}を比較対象にする`}
-                              style={{ width: 14, height: 14, accentColor: 'var(--accent-primary)' }}
-                            />
                           <WatchlistButton ticker={r.ticker} size="sm" />
                           </div>
                         </td>

@@ -4,7 +4,7 @@
 // the two large SQLite databases never compete for memory or write bandwidth.
 
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -61,9 +61,11 @@ const lockPath = path.join(supportDir, 'weekly-optimization.lock')
 const statePath = path.join(supportDir, 'weekly-optimization-state.json')
 const dryRun = process.argv.includes('--dry-run') || process.env.WEEKLY_OPTIMIZATION_DRY_RUN === '1'
 const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
-let activeChild: ChildProcess | null = null
 let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null
+const signalledPids = new Set<number>()
+let resignalTimer: NodeJS.Timeout | null = null
+let rollbackInProgress = false
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -379,23 +381,21 @@ async function restoreValidatedModels(dbPath: string, snapshot: ModelSnapshotRow
   }
 }
 
-async function runStep(step: Step): Promise<{
+async function runStep(step: Step, rollbackPublication = false): Promise<{
   exitCode: number | null
   signal: NodeJS.Signals | null
 }> {
   await waitForMemoryHeadroom({ label: step.label })
+  if (shutdownSignal && !rollbackPublication) return { exitCode: null, signal: shutdownSignal }
   console.log(`\n[weekly-optimization] START ${step.id}: npm run ${step.npmScript}`)
   return new Promise((resolve, reject) => {
-    activeChild = spawn('npm', ['run', step.npmScript], {
+    const child = spawn('npm', ['run', step.npmScript], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...process.env, ...step.env }),
       stdio: 'inherit',
     })
-    activeChild.once('error', reject)
-    activeChild.once('close', (exitCode, signal) => {
-      activeChild = null
-      resolve({ exitCode, signal })
-    })
+    child.once('error', reject)
+    child.once('close', (exitCode, signal) => resolve({ exitCode, signal }))
   })
 }
 
@@ -407,7 +407,7 @@ async function republishValidatedModels(step: Step): Promise<void> {
       npmScript,
       env: step.env,
     }
-    const result = await runStep(recoveryStep)
+    const result = await runStep(recoveryStep, true)
     if (result.exitCode !== 0) {
       throw new Error(
         `rollback publication failed: npm run ${npmScript}, exit=${result.exitCode}, signal=${result.signal ?? 'none'}`,
@@ -416,16 +416,103 @@ async function republishValidatedModels(step: Step): Promise<void> {
   }
 }
 
-function installSignalHandlers(): void {
-  const handler = (signal: NodeJS.Signals) => {
-    shutdownSignal = signal
-    console.error(`[weekly-optimization] received ${signal}`)
-    if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
-      activeChild.kill('SIGTERM')
+// Every live descendant of this runner (children, grandchildren, ...), excluding the ps this runs.
+// When launchd started the job (the group leader is an ancestor whose parent is launchd), the
+// process group belongs to this job alone, so non-ancestor members of it are included as well:
+// that catches a grandchild re-parented to launchd before it was seen. Started any other way,
+// only descendants are selected, so other processes sharing the group are never signalled.
+function stepProcesses(): number[] | null {
+  let table = ''
+  try {
+    table = execFileSync('/bin/ps', ['-A', '-o', 'pid=,ppid=,pgid=,comm='], { encoding: 'utf8' })
+  } catch {
+    return null
+  }
+  const rows = table.trim().split('\n').map((line) => line.trim().split(/\s+/))
+    .map(([pid, ppid, pgid, comm]) => ({ pid: Number(pid), ppid: Number(ppid), pgid: Number(pgid), comm }))
+  const parentOf = new Map(rows.map((row) => [row.pid, row.ppid]))
+  const ancestors = new Set<number>()
+  for (let pid = process.pid; pid > 1 && !ancestors.has(pid); pid = parentOf.get(pid) ?? 0) ancestors.add(pid)
+  const group = rows.find((row) => row.pid === process.pid)?.pgid ?? -1
+  const launchdOwnsGroup = ancestors.has(group) && parentOf.get(group) === 1
+  // Roots: this runner and every signalled process still alive (its subtree may have been re-parented).
+  const roots = new Set([process.pid, ...[...signalledPids].filter((pid) => parentOf.has(pid))])
+  const descendants = new Set<number>()
+  for (let grew = true; grew;) {
+    grew = false
+    for (const row of rows) {
+      if (descendants.has(row.pid) || row.pid === process.pid) continue
+      if (!roots.has(row.ppid) && !descendants.has(row.ppid)) continue
+      descendants.add(row.pid)
+      grew = true
     }
   }
-  process.once('SIGINT', handler)
-  process.once('SIGTERM', handler)
+  return rows
+    .filter((row) => descendants.has(row.pid) || (launchdOwnsGroup && row.pgid === group && !ancestors.has(row.pid)))
+    .filter((row) => !(row.ppid === process.pid && /(^|\/)ps$/.test(row.comm ?? '')))
+    .map((row) => row.pid)
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Wait for the current descendants and for every PID signalled at shutdown (a grandchild whose
+// parent exits first is re-parented and stops being a descendant, but must still be waited for).
+function signalStepProcesses(): number[] | null {
+  const current = stepProcesses()
+  for (const pid of current ?? []) {
+    if (signalledPids.has(pid)) continue
+    signalledPids.add(pid)
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // Already gone.
+    }
+  }
+  return current
+}
+
+async function waitForStepProcessesExit(): Promise<void> {
+  for (let waitedSeconds = 0; ; waitedSeconds += 5) {
+    // Descendants that appear after the signal are signalled too; a failed ps keeps waiting.
+    const current = signalStepProcesses()
+    const remaining = [...new Set([...(current ?? []), ...[...signalledPids].filter(pidAlive)])]
+    if (current && remaining.length === 0) {
+      // Stop re-signalling before rollback publication starts its own child processes.
+      if (resignalTimer) clearInterval(resignalTimer)
+      resignalTimer = null
+      return
+    }
+    if (waitedSeconds % 60 === 0) {
+      console.error(`[weekly-optimization] waiting for step processes to exit: ${remaining.join(',')}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+  }
+}
+
+function installSignalHandlers(): void {
+  const handler = (signal: NodeJS.Signals) => {
+    if (shutdownSignal) return
+    shutdownSignal = signal
+    if (rollbackInProgress) {
+      // Never interrupt a rollback: let it finish, then the run stops as failed.
+      console.error(`[weekly-optimization] received ${signal} during rollback; finishing the rollback first`)
+      return
+    }
+    console.error(`[weekly-optimization] received ${signal}; stopping every step process`)
+    signalStepProcesses()
+    // Keep re-signalling (new descendants, a failed ps) even while the step's npm is still open.
+    // unref: the timer never keeps the runner alive on its own.
+    resignalTimer = setInterval(signalStepProcesses, 5_000).unref()
+  }
+  process.on('SIGINT', handler)
+  process.on('SIGTERM', handler)
   process.once('exit', releaseProcessLock)
 }
 
@@ -478,6 +565,7 @@ async function main(): Promise<void> {
   writeState(state)
 
   for (const [index, step] of configuredSteps.entries()) {
+    if (shutdownSignal) break
     const result = state.steps[index]
     if (result.status === 'completed') {
       console.log(`[weekly-optimization] RESUME ${step.id}: same week, data dates, and implementation`)
@@ -511,13 +599,15 @@ async function main(): Promise<void> {
       writeState(state)
     }
     if (shutdownSignal) {
+      // Roll back and release the lock only after every step process has exited.
+      await waitForStepProcessesExit()
       result.status = 'failed'
       result.error = `interrupted by ${shutdownSignal}`
       writeState(state)
-      break
     }
     if (result.status === 'failed') {
       if (step.modelDbPath && modelSnapshot && modelSnapshot.length > 0) {
+        rollbackInProgress = true
         try {
           const demoted = await restoreValidatedModels(step.modelDbPath, modelSnapshot)
           console.warn(
@@ -529,6 +619,8 @@ async function main(): Promise<void> {
           result.error = `${result.error ?? 'step failed'}; rollback failed: ${rollbackError}`
           writeState(state)
           console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
+        } finally {
+          rollbackInProgress = false
         }
       }
       console.error(`[weekly-optimization] STOP ${step.id}: downstream publication was not started`)
@@ -539,7 +631,7 @@ async function main(): Promise<void> {
   const failed = state.steps.filter((step) => step.status === 'failed')
   state.heartbeatAt = isoNow()
   state.finishedAt = isoNow()
-  state.status = failed.length === 0 ? 'completed' : 'failed'
+  state.status = failed.length === 0 && !shutdownSignal ? 'completed' : 'failed'
   writeState(state)
   releaseProcessLock()
 
@@ -550,7 +642,7 @@ async function main(): Promise<void> {
     finishedAt: state.finishedAt,
     steps: state.steps,
   }, null, 2))
-  if (failed.length > 0) process.exitCode = 1
+  if (failed.length > 0 || shutdownSignal) process.exitCode = 1
 }
 
 main().catch((error) => {

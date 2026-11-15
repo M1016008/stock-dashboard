@@ -39,7 +39,6 @@ export const MARKET_COUNTERPARTS = [
   { jp: 'transitions', us: 'usTransitions' },
   { jp: 'backtest', us: 'usBacktest' },
   { jp: 'tradeWorkbench', us: 'usTradeWorkbench' },
-  { jp: 'chartDrill', us: 'usChartDrill' },
   { jp: 'ma25mMonitor', us: 'usMa25mMonitor' },
 ] as const satisfies readonly MarketCounterpart[]
 
@@ -59,7 +58,7 @@ export const MARKET_SPECIFIC_PAGE_IDS = {
  * Market-agnostic pages listed under several markets. They have no market
  * query, so a market switch from them goes home instead of appending one.
  */
-export const SHARED_PAGE_IDS = ['watchlist', 'customCharts'] as const satisfies readonly PageId[]
+export const SHARED_PAGE_IDS = ['watchlist'] as const satisfies readonly PageId[]
 
 export function hrefPath(href: string): string {
   return href.split(/[?#]/)[0] || '/'
@@ -71,7 +70,7 @@ function isUnder(pathname: string, root: string): boolean {
 
 /**
  * Which market a URL belongs to. `market` is only honoured on the shared
- * routes whose pages read it (/ai/*, /chart-drill); elsewhere it is a page
+ * routes whose pages read it (/ai/*); elsewhere it is a page
  * filter (e.g. JP market segment on /period-explorer) and must be ignored.
  */
 export function resolveHeaderArea(pathname: string, marketParam: string | null | undefined): HeaderArea {
@@ -81,7 +80,6 @@ export function resolveHeaderArea(pathname: string, marketParam: string | null |
   if (
     isUnder(pathname, '/us')
     || (pathname.startsWith('/ai/') && marketParam === 'US')
-    || (pathname === '/chart-drill' && marketParam?.toUpperCase() === 'US')
   ) {
     return 'us'
   }

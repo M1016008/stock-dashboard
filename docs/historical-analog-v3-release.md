@@ -1,5 +1,7 @@
 # Historical Analog v3 release gate
 
+> 保留 (2026-11-10): main は版 2 に戻した。版 3 への移行は P1 の後、作成時間を測ってから行う (`docs/operations/STATUS.md`)。
+
 `MA_SEQUENCE_VERSION=3` changes the on-disk index contract. The v3 index must
 be built and verified before a Web build containing this version is promoted.
 This procedure does not authorize a Production build, database write, service

@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import {
   describeSmaLabIssueKind,
@@ -234,7 +235,7 @@ export function SummaryTable({
   result: SmaLabAvailable
   periods: readonly SmaLabPeriod[]
   fmt: PriceFormat
-  statusText: (period: SmaLabPeriod) => string
+  statusText: (period: SmaLabPeriod) => ReactNode
 }) {
   const end = result.projection.bars.at(-1)
   const endLabel = end ? `T+${end.k}` : 'T+0'

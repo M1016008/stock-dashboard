@@ -714,7 +714,6 @@ function NextAnalysisAgenda() {
   const links = [
     { href: '/us/analysis/ml-lens', label: 'US AI Lens' },
     { href: '/ai/research?market=US', label: 'AI銘柄リサーチ' },
-    { href: '/chart-drill?market=US', label: 'チャートドリル' },
     { href: '/us/stage-screener', label: 'ステージスクリーナー' },
   ]
   return (

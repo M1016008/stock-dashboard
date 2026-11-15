@@ -91,3 +91,7 @@ logs/
 
 # Claude Code (local-only settings)
 /.claude/settings.local.json
+# release tooling fixtures and runtimes (scripts/deploy-web-analog-only.ts, tests)
+/.release-fixture/
+/.release-runtime/
+/.release-dev-runtime/

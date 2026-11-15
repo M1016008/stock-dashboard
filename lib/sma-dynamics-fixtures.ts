@@ -137,6 +137,12 @@ export function buildSmaDynamicsFixtures(): SmaDynamicsFixture[] {
     { seed: 53, decimals: 1, spread: 0.02, volume: 3_200_000 },
   )
 
+  // Mirrors the production 7003 symptom without copying production prices: one expected
+  // TSE session is absent, so strict calendar-window SMAs stay empty until it rolls out.
+  const productionGapRows = buildRows('JP', '2026-10-28', syntheticCloses({
+    start: 3600, segments: [{ sessions: 180, drift: 0.0002 }], noise: 0.008, seed: 67, decimals: 1,
+  }), 67).filter((row) => row.date !== '2026-07-17')
+
   // 2000-01-04 .. 2026-10-16: enough monthly bars for 1M SMA300, not for 3M SMA300.
   const longDates = sessionsBetween(smaLabCalendar('JP'), '2000-01-04', '2026-10-16')
   const longCloses = syntheticCloses({
@@ -263,6 +269,16 @@ export function buildSmaDynamicsFixtures(): SmaDynamicsFixture[] {
       name: '合成 新規上場',
       analysisDate: null,
       rows: listingRows,
+    },
+    {
+      id: 'jp-7003-gap',
+      label: 'JP 7003型・営業日欠損',
+      description: '本番7003で検出した日付構造の合成再現。期待営業日 2026-07-17 の行がなく、SMA75は厳格に計算不可となる。',
+      market: 'JP',
+      ticker: 'FXJ9',
+      name: '合成 7003型欠損',
+      analysisDate: null,
+      rows: productionGapRows,
     },
     {
       id: 'jp-long-history',

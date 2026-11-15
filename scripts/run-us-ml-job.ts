@@ -5,7 +5,7 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -121,16 +121,45 @@ async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: Env
   })
 }
 
-function sqliteInt(dbPath: string, sql: string): number {
+// On failure, record the DB/-wal/-shm state and open handles before rethrowing, so an
+// intermittent "unable to open database file" can be diagnosed from the log alone.
+function sqliteReadonly(dbPath: string, sql: string): string {
   if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
-  const output = execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
-  const value = Number(output)
+  try {
+    return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  } catch (error) {
+    // Diagnostics must never replace the original sqlite3 error.
+    const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+    console.error(`US ML sqlite read failed: ${dbPath}`)
+    for (const file of files) {
+      try {
+        const stat = fs.statSync(file, { throwIfNoEntry: false })
+        console.error(stat ? `  ${file}: size=${stat.size} mtime=${stat.mtime.toISOString()} ino=${stat.ino}` : `  ${file}: missing`)
+      } catch (statError) {
+        console.error(`  ${file}: stat failed: ${statError instanceof Error ? statError.message : String(statError)}`)
+      }
+    }
+    // Same lsof contract as lib/storage/storage-recovery.ts: status 1 with no output means no open handles.
+    const present = files.filter(fs.existsSync)
+    if (present.length === 0) {
+      console.error('  lsof: skipped (no files present)')
+    } else {
+      const lsof = spawnSync('/usr/sbin/lsof', ['-n', '--', ...present], { encoding: 'utf8', timeout: 10_000 })
+      console.error(lsof.status === 1 && !lsof.stdout?.trim() && !lsof.stderr?.trim()
+        ? '  lsof: no open handles'
+        : `  lsof: status=${lsof.status} signal=${lsof.signal ?? '-'} error=${lsof.error?.message ?? '-'}\n${lsof.stdout ?? ''}${lsof.stderr ?? ''}`.trimEnd())
+    }
+    throw error
+  }
+}
+
+function sqliteInt(dbPath: string, sql: string): number {
+  const value = Number(sqliteReadonly(dbPath, sql))
   return Number.isFinite(value) ? value : 0
 }
 
 function sqliteText(dbPath: string, sql: string): string {
-  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
-  return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  return sqliteReadonly(dbPath, sql)
 }
 
 function checkpointDirectory(env: NodeJS.ProcessEnv): string {

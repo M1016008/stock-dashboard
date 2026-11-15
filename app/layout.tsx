@@ -3,7 +3,6 @@ import { headers } from 'next/headers'
 import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
 import { DataStatusBar } from '@/components/layout/DataStatusBar'
-import { StockWorkspaceDock } from '@/components/layout/StockWorkspaceDock'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
 import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import { FriendReadonlyAccessBoundary } from '@/components/layout/FriendReadonlyAccessBoundary'
@@ -49,7 +48,6 @@ export default async function RootLayout({
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
         {!friendReadonly && <AssistantDrawer />}
-        <StockWorkspaceDock />
       </body>
     </html>
   )

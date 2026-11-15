@@ -244,6 +244,20 @@ type ModelRow = {
   trained_at: number | string | null
 }
 
+// ml_models の accuracy は学習に使った行そのもので測った値で、予測精度ではない。
+// 未来のデータで測った精度に置き換えるまで、API では返さない。
+function withoutInSampleAccuracy(metrics: Record<string, unknown>): Record<string, unknown> {
+  const { accuracy: _inSampleAccuracy, ...rest } = metrics
+  return rest
+}
+
+function withoutPayloadInSampleAccuracy(payload: Record<string, unknown>): Record<string, unknown> {
+  const metrics = payload.metrics
+  return metrics && typeof metrics === 'object' && !Array.isArray(metrics)
+    ? { ...payload, metrics: withoutInSampleAccuracy(metrics as Record<string, unknown>) }
+    : payload
+}
+
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   try {
     return value ? JSON.parse(value) as T : fallback
@@ -634,7 +648,7 @@ export async function getMlPerformance(params: {
       downRate: row.down_rate == null ? null : Number(row.down_rate),
       medianReturnPct: row.median_return_pct == null ? null : Number(row.median_return_pct),
       avgReturnPct: row.avg_return_pct == null ? null : Number(row.avg_return_pct),
-      payload: parseJson(row.payload_json, {}),
+      payload: withoutPayloadInSampleAccuracy(parseJson<Record<string, unknown>>(row.payload_json, {})),
     })),
   }
 }
@@ -845,7 +859,7 @@ export async function getMlModelStatus(): Promise<MlModelStatus> {
       modelType: row.model_type,
       direction: row.direction === 'down' ? 'down' : row.direction === 'wait' ? 'wait' : 'up',
       horizonDays: Number(row.horizon_days),
-      metrics: parseJson(row.metrics_json, {}),
+      metrics: withoutInSampleAccuracy(parseJson<Record<string, unknown>>(row.metrics_json, {})),
       trainedAt: row.trained_at,
     })),
     rlPolicyEvaluations: rlPolicyRows.map((row) => ({

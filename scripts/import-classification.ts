@@ -12,6 +12,7 @@
 
 import { db, client } from '@/lib/db/client'
 import { stockClassification, stockShikihoProfiles } from '@/lib/db/schema'
+import { importClassificationSource } from '@/lib/classification-import'
 import { sql } from 'drizzle-orm'
 import fs from 'node:fs'
 import { ensureSchema } from '@/lib/db/migrate'
@@ -37,84 +38,26 @@ async function main() {
   const source = await readClassificationSource(SOURCE_PATH)
   validateClassificationSource(source, classificationValidationOptionsFromEnv())
   const records = source.records
-  const profiles = source.profiles
   console.log(
     `Sheet "${source.sheetName}": ${source.rawRowCount} rows, `
     + `${source.majorCategoryCount} major categories, ${source.subIndustryCount} sub-industries, `
     + `${source.recoveredMissingSubIndustries.length} missing sub-industries recovered`,
   )
-  console.log(`Importing ${records.length} unique valid records`)
-
-  const CHUNK = 200
-  await client.execute(`
-    CREATE TEMP TABLE IF NOT EXISTS classification_import_tickers (
-      ticker TEXT PRIMARY KEY
-    )
-  `)
-  await client.execute('DELETE FROM classification_import_tickers')
-  for (let i = 0; i < records.length; i += CHUNK) {
-    await client.batch(
-      records.slice(i, i + CHUNK).map((record) => ({
-        sql: 'INSERT OR IGNORE INTO classification_import_tickers (ticker) VALUES (?)',
-        args: [record.ticker],
-      })),
-      'write',
-    )
-  }
-
-  let inserted = 0
-  for (let i = 0; i < records.length; i += CHUNK) {
-    const chunk = records.slice(i, i + CHUNK)
-    await db
-      .insert(stockClassification)
-      .values(chunk)
-      .onConflictDoUpdate({
-        target: stockClassification.ticker,
-        set: {
-          majorCategory: sql`excluded.major_category`,
-          subIndustry:   sql`excluded.sub_industry`,
-          updatedAt:     new Date(),
-        },
-      })
-    inserted += chunk.length
-  }
-
-  let profileInserted = 0
-  for (let i = 0; i < profiles.length; i += CHUNK) {
-    const chunk = profiles.slice(i, i + CHUNK)
-    await db
-      .insert(stockShikihoProfiles)
-      .values(chunk)
-      .onConflictDoUpdate({
-        target: stockShikihoProfiles.ticker,
-        set: {
-          forecastPer: sql`excluded.forecast_per`,
-          actualPbr: sql`excluded.actual_pbr`,
-          forecastRoe: sql`excluded.forecast_roe`,
-          dividendYield: sql`excluded.dividend_yield`,
-          headline1: sql`excluded.headline_1`,
-          description1: sql`excluded.description_1`,
-          headline2: sql`excluded.headline_2`,
-          description2: sql`excluded.description_2`,
-          issueLabel: sql`excluded.issue_label`,
-          releaseDate: sql`excluded.release_date`,
-          companyFeature: sql`excluded.company_feature`,
-          consolidatedBusiness: sql`excluded.consolidated_business`,
-          updatedAt: new Date(),
-        },
-      })
-    profileInserted += chunk.length
-  }
-
-  const pruneResult = await client.execute(`
-    DELETE FROM stock_classification
-    WHERE ticker NOT IN (SELECT ticker FROM classification_import_tickers)
-  `)
-  const profilePruneResult = await client.execute(`
-    DELETE FROM stock_shikiho_profiles
-    WHERE ticker NOT IN (SELECT ticker FROM classification_import_tickers)
-  `)
-  await client.execute('DELETE FROM classification_import_tickers')
+  console.log(
+    `Importing ${records.length} unique valid records`
+    + (source.hasRivalsColumn
+      ? `, ${source.rivals.length} rivals (${source.invalidRivalEntries.length} invalid entries skipped)`
+      : ', no rivals column (rivals table untouched)'),
+  )
+  // 削除の件数がオーナーの確認済みのときだけ、その件数ちょうどを渡す (既定は 30 件または 1% で止める)。
+  const expectedPruneRows = process.env.CLASSIFICATION_EXPECTED_PRUNE_ROWS
+  const result = await importClassificationSource(client, source, {
+    expectedPruneRows: expectedPruneRows ? Number(expectedPruneRows) : null,
+  })
+  const inserted = result.classifications
+  const profileInserted = result.profiles
+  const pruneResult = { rowsAffected: result.prunedClassifications }
+  const profilePruneResult = { rowsAffected: result.prunedProfiles }
 
   // 集計表示
   const majorCount = await db
@@ -135,7 +78,8 @@ async function main() {
     + `大分類 ${majorCount[0]?.n ?? 0} 種 / 業種細分類 ${subCount[0]?.n ?? 0} 種 / `
     + `四季報プロフィール ${profileInserted}/${profileCount[0]?.n ?? 0} 件 / `
     + `旧分類削除 ${pruneResult.rowsAffected} 件 / `
-    + `旧プロフィール削除 ${profilePruneResult.rowsAffected} 件`,
+    + `旧プロフィール削除 ${profilePruneResult.rowsAffected} 件 / `
+    + `比較会社 ${result.rivals ?? '(列なし)'} 件`,
   )
 }
 

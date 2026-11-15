@@ -3,14 +3,13 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, CalendarDays, CircleHelp, Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, CalendarDays, CircleHelp, Columns3, Filter, RotateCcw } from 'lucide-react'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { TwoYearLineFilterControl, TwoYearLineResultBadge } from '@/components/screener/TwoYearLineFilter'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
-import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { formatShortTermStrength } from '@/lib/short-term-check'
 import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, type TwoYearLineFilter, type TwoYearLinePatternFilter } from '@/lib/two-year-line-registry'
@@ -411,7 +410,6 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const [retryVersion, setRetryVersion] = useState(0)
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [columnMode, setColumnMode] = useState<ColumnMode>('core')
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   // 基準日。null は最新。API の date 契約 (YYYY-MM-DD、休場日は直前の取引日へ解決) をそのまま使う
   const [requestedDate, setRequestedDate] = useState<string | null>(() => (
     initialAsOf.availability === 'invalid' ? null : parseUrlDate(searchParams.get('date'))
@@ -554,7 +552,6 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     setClearedForHistorical([])
     setClearedForEarnings([])
     setEarningsMeta(null)
-    setSelected(new Set())
     setUnavailableDateReason(
       next && initialAsOf.earliestDate && next < initialAsOf.earliestDate
         ? 'before_coverage'
@@ -675,29 +672,6 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const updateColumnMode = (next: ColumnMode) => {
     setColumnMode(next)
     window.localStorage.setItem(COLUMN_MODE_KEY, next)
-  }
-
-  const toggleSelected = (ticker: string) => {
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(ticker)) next.delete(ticker)
-      else if (next.size < 4) next.add(ticker)
-      return next
-    })
-  }
-
-  const addSelectedToComparison = () => {
-    const current = getCompareSymbols()
-    const compared = new Set(current.map((symbol) => `${symbol.market}:${symbol.ticker}`))
-    let slots = Math.max(0, 4 - current.length)
-    for (const row of rows.filter((item) => selected.has(item.ticker))) {
-      if (!compared.has(`US:${row.ticker}`) && slots > 0) {
-        toggleComparedSymbol({ market: 'US', ticker: row.ticker, name: row.name })
-        compared.add(`US:${row.ticker}`)
-        slots -= 1
-      }
-    }
-    setSelected(new Set())
   }
 
   const view = useMemo<UsScreenerView>(() => ({
@@ -1010,12 +984,6 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           </div>
         </div>
         <div className="toolbar">
-          {selected.size > 0 && (
-            <button type="button" onClick={addSelectedToComparison} className="btn" data-variant="primary">
-              <GitCompareArrows size={14} aria-hidden />
-              {selected.size}銘柄を比較
-            </button>
-          )}
           <div className="view-tabs" role="group" aria-label="表示列">
             <button
               type="button"
@@ -1435,13 +1403,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       )}
 
       <div className="max-h-[70vh] overflow-auto">
-        <table className={`data-table w-full table-fixed border-collapse text-left text-[12px] ${columnMode === 'all' ? 'min-w-[1870px]' : 'min-w-[1530px]'}`}>
+        <table className={`data-table w-full table-fixed border-collapse text-left text-[12px] ${columnMode === 'all' ? 'min-w-[1834px]' : 'min-w-[1494px]'}`}>
           <thead>
             <tr className="border-b border-[var(--color-border-default)] bg-white text-[11px] font-bold text-[var(--color-text-secondary)]">
-              <th className="sticky left-0 top-0 z-[7] w-9 bg-white px-2 py-2">
-                <span className="sr-only">比較選択</span>
-              </th>
-              <th className="sticky left-9 top-0 z-[6] w-[220px] min-w-[220px] bg-white px-3 py-2">銘柄・市場</th>
+              <th className="sticky left-0 top-0 z-[6] w-[220px] min-w-[220px] bg-white px-3 py-2">銘柄・市場</th>
               <th className="sticky top-0 z-[3] w-[210px] bg-white px-3 py-2">業種</th>
               <th className="sticky top-0 z-[3] w-[150px] bg-white px-3 py-2">ステージ構造</th>
               <th className="sticky top-0 z-[3] w-[220px] bg-white px-3 py-2">総合判断</th>
@@ -1465,18 +1430,9 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               return (
                 <tr
                   key={row.ticker}
-                  className={`group border-b border-[var(--color-border-subtle)] align-top transition-colors hover:bg-blue-50/40 ${selected.has(row.ticker) ? 'bg-blue-50/60' : ''}`}
+                  className="group border-b border-[var(--color-border-subtle)] align-top transition-colors hover:bg-blue-50/40"
                 >
-                  <td className={`sticky left-0 z-[5] px-2 py-3 ${selected.has(row.ticker) ? 'bg-blue-50' : 'bg-white group-hover:bg-blue-50'}`}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(row.ticker)}
-                      onChange={() => toggleSelected(row.ticker)}
-                      aria-label={`${row.ticker}を比較対象にする`}
-                      className="h-4 w-4 accent-[var(--color-brand-700)]"
-                    />
-                  </td>
-                  <td className={`sticky left-9 z-[4] w-[220px] min-w-[220px] px-3 py-3 ${selected.has(row.ticker) ? 'bg-blue-50' : 'bg-white group-hover:bg-blue-50'}`}>
+                  <td className="sticky left-0 z-[4] w-[220px] min-w-[220px] bg-white px-3 py-3 group-hover:bg-blue-50">
                     <div className="flex items-center gap-1.5">
                       <Link
                         href={usStockHref(row.ticker, linkDate)}

@@ -13,7 +13,7 @@ assert.equal(isFriendReadonlyRequestAllowed('POST', '/api/us/trigger-discovery/m
 assert.equal(isFriendReadonlyRequestAllowed('POST', '/api/us/trigger-discovery/saved'), false)
 assert.equal(isFriendReadonlyRequestAllowed('POST', '/api/assistant/chat'), false)
 assert.equal(isFriendReadonlyRequestAllowed('POST', '/api/trade/scenarios'), false)
-assert.equal(isFriendReadonlyRequestAllowed('PATCH', '/api/custom-charts/example'), false)
+assert.equal(isFriendReadonlyRequestAllowed('PATCH', '/api/integrated-screener/saved/example'), false)
 assert.equal(isFriendReadonlyRequestAllowed('GET', '/admin/db'), false)
 assert.equal(isFriendReadonlyRequestAllowed('GET', '/large-holders/admin/entities'), false)
 assert.equal(isFriendReadonlyJsonPostPath('/api/integrated-screener/interpret'), false)

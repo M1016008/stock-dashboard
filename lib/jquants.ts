@@ -280,7 +280,7 @@ interface JListedInfoResponse {
  * 上場銘柄一覧。code を指定すれば 1 銘柄、省略すれば全銘柄。
  * 全件取得時はページネーションで自動連結。
  */
-export async function fetchJQuantsListedInfo(ticker?: string): Promise<JListedInfoRow[]> {
+export async function fetchJQuantsListedInfo(ticker?: string, date?: string): Promise<JListedInfoRow[]> {
   const apiKey = getApiKey()
 
   const all: JListedInfoRow[] = []
@@ -289,6 +289,7 @@ export async function fetchJQuantsListedInfo(ticker?: string): Promise<JListedIn
   do {
     const params = new URLSearchParams()
     if (ticker) params.set('code', toJQuantsCode(ticker))
+    if (date) params.set('date', date)  // その日時点の一覧 (契約の範囲の日付だけ)
     if (paginationKey) params.set('pagination_key', paginationKey)
     const url = `${BASE_URL}/equities/master${params.size > 0 ? `?${params}` : ''}`
 
