@@ -407,6 +407,18 @@ async function main(): Promise<void> {
     } }), /CLONE_BINARY_SHA256_MISMATCH/)
     fs.writeFileSync(cloneBinaryPath, 'fixture clone\n')
 
+    // Growth from the restore clones (made after the per-market figures) still counts against the limit.
+    const restoreGrowthPlan = structuredClone(plan)
+    restoreGrowthPlan.runId = 'weekly-runner-fixture-restore-growth'
+    let destinationFree = 900_000_000_000
+    await assert.rejects(() => baseRun(restoreGrowthPlan, {
+      readDestinationFreeBytes: () => destinationFree,
+      observePostflight: async () => {
+        destinationFree = 900_000_000_000 - restoreGrowthPlan.maximumCandidateGrowthBytes - 1
+        return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
+      },
+    }), /CANDIDATE_GROWTH_LIMIT_EXCEEDED/)
+
     // A candidate changed after its hashes were taken is never published.
     const stalePublishPlan = structuredClone(plan)
     stalePublishPlan.runId = 'weekly-runner-fixture-changed-after-verification'

@@ -248,7 +248,8 @@ Syncs and checks run after the writers are restored, so aborting then needs no
 writer action. A running `quick_check`/`integrity_check` reads the clone, so stop
 it with `pkill -INT -f '<stagingRoot>/<runId>'` (and signal the CLI): the check
 fails, the CLI removes the clones and exits non-zero. Hashing runs inside the
-CLI and stops at its next check. The CLI rechecks the abort flag after
+CLI synchronously, so a signal takes effect only after the current file's hash
+finishes (minutes on OWC, up to about 40 minutes per database on SanDisk). The CLI rechecks the abort flag after
 postflight, immediately before publishing, so the candidate stays unpublished.
 
 ## First Production approval must name

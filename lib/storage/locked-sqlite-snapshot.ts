@@ -196,8 +196,13 @@ export async function createLockedSqliteSnapshot(args: {
       if (settled(holder.child)) throw new Error(`SNAPSHOT_LOCK_LOST:${holder.label}`)
     }
   } catch (error) {
-    await Promise.allSettled(holders.map((holder) => releaseLock(holder, { graceful: true })))
+    const released = await Promise.allSettled(holders.map((holder) => releaseLock(holder, { graceful: true })))
     try { removeLockedSnapshot(args.stagingDirectory, args.sources) } catch { /* the original error matters more */ }
+    // A lock process that would not exit must be visible: writers restored next would wait on it.
+    const stuck = released.flatMap((result) => (result.status === 'rejected' ? [String(result.reason?.message ?? result.reason)] : []))
+    if (stuck.length) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)};${stuck.join(';')}`)
+    }
     throw error
   }
   try {

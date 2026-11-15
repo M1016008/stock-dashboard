@@ -342,6 +342,10 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   if (fileSha256(args.plan.priorManifestPath) !== args.plan.priorManifestSha256) {
     throw new Error('PRIOR_GENERATION_CHANGED')
   }
+  // The restore clones are made after the per-market growth figures, so check the total once more.
+  if (Math.max(0, initialDestinationFreeBytes - readDestinationFreeBytes()) > args.plan.maximumCandidateGrowthBytes) {
+    throw new Error('CANDIDATE_GROWTH_LIMIT_EXCEEDED')
+  }
   if (JSON.stringify(verifiedFiles.map(immutableFileSnapshot)) !== verifiedFileState
     || verifiedFiles.some((file) => ['-wal', '-journal'].some((suffix) => fs.existsSync(`${file}${suffix}`)
       && fs.lstatSync(`${file}${suffix}`).size > 0))) {
