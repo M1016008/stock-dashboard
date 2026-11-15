@@ -79,6 +79,17 @@ function immutableFileSnapshot(filePath: string): ImmutableFileSnapshot {
   return { dev, ino, size, mtimeMs, ctimeMs }
 }
 
+// Names each changed file and field so a failed hold can be diagnosed afterwards (2026-11-15 v2 failed without it).
+function sourceStateChanges(labels: string[], before: (ImmutableFileSnapshot | null)[],
+  after: (ImmutableFileSnapshot | null)[]): string[] {
+  return labels.flatMap((label, i) => {
+    const [a, b] = [before[i], after[i]]
+    if (!a || !b) return a === b ? [] : [`${label}:${a ? 'present' : 'missing'}->${b ? 'present' : 'missing'}`]
+    return (Object.keys(a) as (keyof ImmutableFileSnapshot)[])
+      .filter((key) => a[key] !== b[key]).map((key) => `${label}.${key}:${a[key]}->${b[key]}`)
+  })
+}
+
 function assertImmutableFileSnapshot(filePath: string, expected: ImmutableFileSnapshot): void {
   if (JSON.stringify(immutableFileSnapshot(filePath)) !== JSON.stringify(expected)) {
     throw new Error(`PRIOR_GENERATION_FILE_CHANGED:${filePath}`)
@@ -209,7 +220,8 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
       // database or WAL between here and the final comparison fails the run.
       const sourceFiles = markets.flatMap((market) => [args.plan.sourceDatabasePaths[market],
         `${args.plan.sourceDatabasePaths[market]}-wal`])
-      const sourceState = () => JSON.stringify(sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null)))
+      const sourceLabels = markets.flatMap((market) => [`${market}.db`, `${market}.wal`])
+      const sourceState = () => sourceFiles.map((file) => (fs.existsSync(file) ? immutableFileSnapshot(file) : null))
       const sourceStateAtHoldStart = sourceState()
       const stoppedObservation = await args.observeDynamicGate()
       assertWeeklyBackupDynamicGate(args.plan, stoppedObservation)
@@ -251,8 +263,10 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
             + Math.max(0, destinationFreeBytesAtStart - afterSync),
         }
         await assertHoldValid()
+        // Checked after each market (last, as before), so a change stops the run early and says when it was first seen.
+        const changes = sourceStateChanges(sourceLabels, sourceStateAtHoldStart, sourceState())
+        if (changes.length) throw new Error(`SOURCE_CHANGED_DURING_HOLD:after=${market}:${changes.join(',')}`)
       }
-      if (sourceState() !== sourceStateAtHoldStart) throw new Error('SOURCE_CHANGED_DURING_HOLD')
       return acquired
     },
   })

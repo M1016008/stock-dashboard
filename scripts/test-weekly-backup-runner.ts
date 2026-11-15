@@ -296,6 +296,7 @@ async function main(): Promise<void> {
     // A write to the other market while JP is copying must fail the whole run.
     const crossPlan = structuredClone(plan)
     crossPlan.runId = 'weekly-runner-fixture-cross-market-write'
+    const crossSyncs: string[] = []
     await assert.rejects(() => runWeeklyBackupGeneration({
       plan: crossPlan,
       expectedPlanSha256: weeklyBackupPlanSha256(crossPlan),
@@ -311,14 +312,58 @@ async function main(): Promise<void> {
       operations: {
         ...operations,
         runMonitoredSqliteRsync: async (syncArgs) => {
+          crossSyncs.push(syncArgs.sourceDatabasePath)
           if (syncArgs.sourceDatabasePath === crossPlan.sourceDatabasePaths.JP) {
             fs.utimesSync(crossPlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 5_000))
           }
           return operations.runMonitoredSqliteRsync(syncArgs)
         },
       },
-    }), /SOURCE_CHANGED_DURING_HOLD/)
+    }), /SOURCE_CHANGED_DURING_HOLD:after=JP:US\.db\.mtimeMs:\d+(\.\d+)?->\d+(\.\d+)?[,;]/)
+    // The change is caught right after JP, so US is never copied.
+    assert.deepEqual(crossSyncs, [crossPlan.sourceDatabasePaths.JP])
     assert.equal(fs.existsSync(path.join(destinationRoot, crossPlan.runId, 'COMPLETE.manifest.json')), false)
+
+    // A WAL that appears during the US copy, and a write during the last hold check, are both named.
+    for (const variant of ['wal-appears', 'write-during-last-hold-check'] as const) {
+      const latePlan = structuredClone(plan)
+      latePlan.runId = `weekly-runner-fixture-${variant}`
+      const jpWal = `${latePlan.sourceDatabasePaths.JP}-wal`
+      let usCopied = false
+      await assert.rejects(() => runWeeklyBackupGeneration({
+        plan: latePlan,
+        expectedPlanSha256: weeklyBackupPlanSha256(latePlan),
+        observation: { ...observation, now: new Date().toISOString() },
+        runbookPath,
+        approvedWriters,
+        writerDriver: { ...writerDriver, observe: async (label) => {
+          if (variant === 'write-during-last-hold-check' && usCopied) {
+            fs.utimesSync(latePlan.sourceDatabasePaths.US, new Date(), new Date(Date.now() + 7_000))
+          }
+          return writerDriver.observe(label)
+        } },
+        assertRuntimeIdentity: () => undefined,
+        observeDynamicGate: async () => dynamicObservation(),
+        readDestinationFreeBytes: () => 900_000_000_000,
+        observePostflight: async () => ({ dailySchedulesUnchanged: true,
+          webHealthy: true, analogHealthy: true }),
+        operations: {
+          ...operations,
+          runMonitoredSqliteRsync: async (syncArgs) => {
+            const result = await operations.runMonitoredSqliteRsync(syncArgs)
+            if (syncArgs.sourceDatabasePath === latePlan.sourceDatabasePaths.US) {
+              if (variant === 'wal-appears') fs.writeFileSync(jpWal, '')
+              usCopied = true
+            }
+            return result
+          },
+        },
+      }), variant === 'wal-appears'
+        ? /SOURCE_CHANGED_DURING_HOLD:after=US:JP\.wal:missing->present;/
+        : /SOURCE_CHANGED_DURING_HOLD:after=US:US\.db\.mtimeMs:/)
+      fs.rmSync(jpWal, { force: true })
+      assert.equal(fs.existsSync(path.join(destinationRoot, latePlan.runId, 'COMPLETE.manifest.json')), false)
+    }
 
     // The baseline is taken before the post-stop gate, so a write during that gate fails the run.
     const gatePlan = structuredClone(plan)
@@ -342,7 +387,7 @@ async function main(): Promise<void> {
       observePostflight: async () => ({ dailySchedulesUnchanged: true,
         webHealthy: true, analogHealthy: true }),
       operations,
-    }), /SOURCE_CHANGED_DURING_HOLD/)
+    }), /SOURCE_CHANGED_DURING_HOLD:after=JP:US\.db\.mtimeMs:/)
     assert.equal(gateCalls, 2)
     assert.equal(fs.existsSync(path.join(destinationRoot, gatePlan.runId, 'COMPLETE.manifest.json')), false)
 
