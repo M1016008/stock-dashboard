@@ -205,7 +205,9 @@ for (const market of ['JP', 'US'] as const) {
   const shared = market === 'US' ? isUsMarketTradingDate : isJpMarketTradingDate
   const lab = smaLabCalendar(market)
   for (const date of SMA_LAB_CALENDAR_OVERRIDES[market].closed) {
-    assert.ok(shared(date), `${market} ${date}: override must differ from the shared calendar`)
+    // The shared JP calendar now has the 2019 accession holidays too (2026-11-16); the others still differ.
+    assert.ok(weekday(date) >= 1 && weekday(date) <= 5, `${market} ${date} is a weekday`)
+    if (!(market === 'JP' && date.startsWith('2019-'))) assert.ok(shared(date), `${market} ${date}: override must differ from the shared calendar`)
     assert.ok(!lab.isSession(date), `${market} ${date} closed in the lab`)
   }
   for (const date of SMA_LAB_CALENDAR_OVERRIDES[market].open) {
@@ -213,6 +215,10 @@ for (const market of ['JP', 'US'] as const) {
     assert.equal(date.slice(5), '12-31')
     assert.ok(!shared(date) && lab.isSession(date), `${market} ${date} open in the lab`)
   }
+}
+// JP lab and shared calendars agree over the research and serving years, except the 2020-10-01 TSE halt.
+for (let date = '2008-01-01'; date <= '2025-12-31'; date = addCalendarDays(date, 1)) {
+  if (date !== '2020-10-01') assert.equal(JP.isSession(date), isJpMarketTradingDate(date), `JP lab = shared on ${date}`)
 }
 for (let date = '2026-01-01'; date <= '2027-11-30'; date = addCalendarDays(date, 1)) {
   assert.equal(JP.isSession(date), isJpMarketTradingDate(date), `JP lab = shared on ${date}`)
