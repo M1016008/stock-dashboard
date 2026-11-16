@@ -1,8 +1,10 @@
 # P1 手順書 (main と本番の統一)
 
 記録日: 2026-11-11。実施予定: 2026-11-20 (金) 22:15〜24:00 ごろ (2026-11-16 の日程の見直し。平日の夜、日次更新の最後の回 (21:10) が終わった後)。
-確かめと戻すかどうかの判断は 11/21 (土) 8 時台。下の 3-2 の時刻表は土曜の朝の版のまま。平日の夜に置き換えた時刻表は、前日 (11/19) までに出す。
-候補は `ebd9fe70896e2769c0dc0be22c6196424105aa3c` (練習と同じ)。
+確かめと戻すかどうかの判断は 11/21 (土) 8 時台。候補は `ebd9fe70896e2769c0dc0be22c6196424105aa3c` (練習と同じ。main がこの後に進んでも、この commit を使う)。
+文中の「main の commit」「`<main>`」は、P1 ではこの候補の commit を指す。
+**注意: 3-2 の時刻表、4. の「当日の午後」、6-2 の「07:55・08:55」は土曜の朝の版のままで、11/20 の夜にはこのまま使わない。**
+平日の夜に置き換えた手順 (止める時刻・証明を作る期限・その時間帯の定期処理を含む) は、前日 (11/19) までに出して承認を得る。
 本番への操作は、すべてオーナーの実行または明示の承認の後に行う。秘密情報・キーの値はここに書かない。
 
 - release ディレクトリ: `/Users/yoshio/dev/stock-dashboard-release-7df6c23` (今は `034310b`)
@@ -22,7 +24,7 @@
 | 前の成果物の写し | 今の `.next-live` (と `SMA_RELEASE_MANIFEST.json`) の写しを release ディレクトリの外に作る。確定後に戻すときの候補にする | Claude Code |
 
 ### 1-1. Backup の写しで main の表を作る処理を試す
-- 11/15 の Backup の写し (読み取り専用) から、本番以外の場所に作業用の複製を作る (`cp -c`)。写しそのものには書かない。
+- 11/16 の Backup の写し (`stockboard-weekly-20261116-clone-v1`、読み取り専用。検査に合格した後) から、本番以外の場所に作業用の複製を作る (`cp -c`)。写しそのものには書かない。
 - `.env.local` の無い main の作業用ディレクトリで、行き先を複製に固定して表を作る処理 (`lib/db/migrate.ts`) を 1 回動かし、前後の `sqlite_master` を比べる:
   `USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=<複製の絶対パス> STOCK_DATA_MOUNT_PATH=<複製を置いたボリューム> STOCK_DATA_VOLUME_UUID=<そのボリュームの UUID> node --import tsx scripts/ensure-local-schema.ts`
   (外部ボリュームの DB には、ボリュームの確認 (Storage Guard) がかかるため、置いた場所のボリュームを明示する。UUID は `diskutil info` で確かめる)
@@ -67,7 +69,7 @@ data-freshness-guard (15 分)・trigger-historical-scan (5 分)・kabutan-materi
 | 08:15 | 配置の証明を作り (有効 15 分)、Web と類似の検索を切り替える。`STOCKBOARD_RELEASE_BASELINE_COMMIT=034310b…` | オーナー (実行) |
 | 08:30 | **終了コードが 0 で、出力が `"status":"SUCCESS"` のときだけ次へ進む。** `PRECHECK_FAILED`・`ROLLED_BACK_UNHEALTHY` なら、release ディレクトリは `034310b` のまま、3-3 の順で戻して終える。`HOLD` なら定期処理も止めたまま手を止めて相談する (3-4) | オーナー・Claude Code |
 | 08:35 | Web・類似の検索の `/api/health` が ok、主な画面が開くことを確かめる | Claude Code |
-| 08:40 | release ディレクトリを main の commit に合わせる (`git checkout --detach <main の commit>`)。`git status` が `?? .node_modules-release-prev` だけであることを確かめる | オーナー |
+| 08:40 | release ディレクトリを main の commit に合わせる (`git checkout --detach <候補の commit>`)。`git status` が `?? .node_modules-release-prev` だけであることを確かめる | オーナー |
 | 08:50 | release ディレクトリで型検査 (`./node_modules/.bin/tsc --noEmit -p .`。束に tsc があることは予行で確かめる) だけを行う。定期処理の入口は実行しない (`--help` を受け付けずに本処理が動く入口があるため) | Claude Code |
 | 09:30 | 下の 3-3 の順で戻す。weekly-optimization は戻さない (P1 の直後の日曜を飛ばす。STATUS の日程どおり、米国株の作り直しの後の 11/29 の Backup の後に戻す) | オーナー |
 | 後日 | large-holder-update の plist から PATH の回避策を外し、更新の成功を確かめる (STATUS の項目) | オーナー |
@@ -106,17 +108,17 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
 - 当日の午後に、複製に対して読み取りだけの `quick_check` を行う (本番の DB には触れない)。
 - 戻し (オーナーの承認の後): 定期処理 15 本・Web・類似の検索・friend-readonly-gateway を止め、DB・`-wal`・`-shm` を開いているものが無いことを
   `lsof` で確かめる。今の DB・`-wal`・`-shm` は 3 つ一組で別の名前に移し (消さない)、複製の DB と (あれば) `-wal` を元の名前に戻す。`-shm` は戻さない。
-- 注意: 同じディスクの上の控えなので、ディスクの故障には備えられない。故障への備えは 11/16・11/29 の正式な Backup。
+- 注意: 同じディスクの上の控えなので、ディスクの故障には備えられない。故障への備えは正式な Backup (11/16 の世代は 11/16 21:00 の時点で検査中。合格を確かめてから頼る。次は 11/29)。
 - **片付けの期限: 遅くとも 11/27 (米国株の作り直しの前)。** 作り直しで米国株の DB がほぼ全部書き換わり、複製が OWC を約 514 GB
   使うため。片付けはオーナーの承認の後に行う。
 
 ## 5. P1 の後に最初に Web を配置するとき
 - release ディレクトリは main、今の実行環境の束には `034310b` の印が残る。
-  `STOCKBOARD_RELEASE_BASELINE_COMMIT=<main の commit>` に加えて `STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT=034310b…` を渡す (PR #115)。
+  `STOCKBOARD_RELEASE_BASELINE_COMMIT=<P1 で配置した commit>` に加えて `STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT=034310b…` を渡す (PR #115)。
 
 ## 6. P1 の前の試し (本番を変えない)
 
-### 6-1. (a) 練習用の場所での入れ替えと戻し (承認済み: 候補の束とビルド (下の 1・2) は 11/16 (月) 22:00〜、3 から後は 11/17 (火) 13:00〜)
+### 6-1. (a) 練習用の場所での入れ替えと戻し (承認済み: 候補の束とビルド (下の 1・2) は 11/16 (月) 22:00〜、3 から後は 11/17 (火) 13:00〜。承認のときの番号では、場所を作る・1・2 が手順 1〜3、3〜8 が手順 4〜9)
 - 場所: OWC の `StockBoard Development/release-rehearsal/` の下 (内蔵ディスクは使わない)。候補の束とビルドは `20261117-candidate/`、
   練習用の release ディレクトリ (3. の `--root`) は `20261117/`。`--root` は `release-rehearsal/` の直下の、まだ無い名前でなければならない (道具が確かめ、
   無ければ作る。あれば止まる)。練習用のサーバーは 127.0.0.1:3200 (Web) と :3205 (類似の検索)。
@@ -125,8 +127,8 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
   練習用の release ディレクトリは repo を OWC の上に複製して作る (元の repo に worktree を登録しない)。
 - 練習用のサーバーへの停止・再開の信号は、記録した PID が練習用の port で待ち受け、作業フォルダが練習用の場所であるときだけ送る (別のプロセスには送らない)。
 - 手順 (すべて Claude Code。日次更新の時間 (平日 16:40〜21:10) と米国の 06:30・10:30 を避ける):
-  1. 候補の束: `npm run release:runtime-bundle -- --commit=<main> --baseline=034310b… --out=<練習用の場所>/runtime-<main の短い commit>` (`/usr/local/bin/node` で動かす)。
-  2. 候補のビルド: 練習用の場所に main の作業用フォルダを作り、`node_modules` を 1. の束に link して、`NEXT_DIST_DIR=.next-live npm run build`。
+  1. 候補の束: `npm run release:runtime-bundle -- --commit=<候補の commit> --baseline=034310b… --out=<練習用の場所>/runtime-<候補の短い commit>` (`/usr/local/bin/node` で動かす)。
+  2. 候補のビルド: 練習用の場所に候補の commit の作業用フォルダを作り (元の repo に worktree を登録しない)、`node_modules` を 1. の束に link して、`NEXT_DIST_DIR=.next-live npm run build`。
      `.next-live` を `candidate-artifact` に写し、`STOCKBOARD_RELEASE_BASELINE_COMMIT=034310b… npm run release:sma-manifest -- <candidate-artifact>`。
   3. `npm run release:rehearse -- prepare --root=<release-rehearsal の直下の新しい名前> --baseline=034310b… --live-source=<本番の .next-live> --runtime=<今の束>`
   4. `release:rehearse -- start` (3200・3205 で起動し、`/api/health` が ok になるのを待つ)
