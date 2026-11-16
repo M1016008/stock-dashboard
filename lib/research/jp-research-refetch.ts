@@ -38,7 +38,7 @@ export function assertRange(from: string, to: string): void {
 }
 
 /** out must be a direct child of root (root's parent must already exist). Resume needs this tool's unfinished run. */
-export function assertOutput(out: string, root: string, resume: boolean): string {
+export function assertOutput(out: string, root: string, resume: boolean, dbName = DB_NAME): string {
   if (!path.isAbsolute(out) || !path.isAbsolute(root)) throw new Error('OUTPUT_MUST_BE_ABSOLUTE')
   const realRoot = path.join(fs.realpathSync(path.dirname(root)), path.basename(root))
   if (fs.existsSync(realRoot) && (fs.lstatSync(realRoot).isSymbolicLink() || !fs.lstatSync(realRoot).isDirectory())) throw new Error('ROOT_INVALID')
@@ -52,7 +52,7 @@ export function assertOutput(out: string, root: string, resume: boolean): string
     // Only this tool's database (and its rollback journal), each a regular file and not a symlink.
     const names = fs.readdirSync(resolved)
     const regular = (name: string) => { const stat = fs.lstatSync(path.join(resolved, name)); return stat.isFile() && !stat.isSymbolicLink() }
-    if (!names.includes(DB_NAME) || names.some((name) => ![DB_NAME, `${DB_NAME}-journal`].includes(name) || !regular(name))) {
+    if (!names.includes(dbName) || names.some((name) => ![dbName, `${dbName}-journal`].includes(name) || !regular(name))) {
       throw new Error('RESUME_TARGET_UNEXPECTED_FILES')
     }
   }
@@ -84,7 +84,7 @@ function open(file: string, range: { from: string; to: string }, create: boolean
 
 const transient = (error: unknown) => /\b(429|5\d\d)\b|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN/.test(String(error))
 
-async function withRetry<T>(work: () => Promise<T>, sleep: (ms: number) => Promise<void>): Promise<T> {
+export async function withRetry<T>(work: () => Promise<T>, sleep: (ms: number) => Promise<void>): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try { return await work() } catch (error) {
       if (attempt >= 5 || !transient(error)) throw error
@@ -165,11 +165,14 @@ export async function runRefetch(args: {
       lastFetchedAt: String(db.prepare('SELECT max(fetched_at) t FROM fetched').get()?.t),
     }
   } finally { db.close() }
-  const manifest = { kind: SCHEMA, source: 'J-Quants v2 /equities/bars/daily?date= and /equities/master?date=',
-    prereg: 'research/6stage/event-path-research/PREREG_START_TIMING_20261116.md', ...summary,
-    finishedAt: now().toISOString(), files: { [DB_NAME]: { sha256: sha256File(file), bytes: fs.statSync(file).size } } }
-  // Publish the manifest whole (temp file, then a link that fails if one exists), then make the DB read-only.
-  const manifestPath = path.join(args.directory, 'manifest.json')
+  return publishManifest(file, { kind: SCHEMA, source: 'J-Quants v2 /equities/bars/daily?date= and /equities/master?date=',
+    prereg: 'research/6stage/event-path-research/PREREG_START_TIMING_20261116.md', ...summary, finishedAt: now().toISOString() })
+}
+
+/** Publish the manifest whole (temp file, then a link that fails if one exists), then make the DB read-only. */
+export function publishManifest(file: string, content: Record<string, unknown>): { manifestPath: string; manifest: Record<string, unknown> } {
+  const manifest = { ...content, files: { [path.basename(file)]: { sha256: sha256File(file), bytes: fs.statSync(file).size } } }
+  const manifestPath = path.join(path.dirname(file), 'manifest.json')
   const temporary = `${manifestPath}.tmp-${process.pid}`
   const descriptor = fs.openSync(temporary, 'wx', 0o444)
   try { fs.writeSync(descriptor, `${JSON.stringify(manifest, null, 2)}\n`); fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
