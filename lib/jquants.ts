@@ -22,6 +22,39 @@ function getApiKey(): string {
   return key
 }
 
+/**
+ * 研究の取得用: ページを最後までたどり、各ページの本文をそのまま返す。2xx 以外はすべて失敗にする (403・404 を空にしない)。
+ * `data` が配列でない答え、`pagination_key` が空でない文字列でない答え、同じ `pagination_key` が 2 回出た答えも失敗。
+ */
+export async function fetchJQuantsPagesStrict(endpoint: string, params: Record<string, string>):
+  Promise<{ rows: Record<string, unknown>[]; bodies: string[] }> {
+  const apiKey = getApiKey()
+  const rows: Record<string, unknown>[] = []
+  const bodies: string[] = []
+  const seen = new Set<string>()
+  let paginationKey: string | undefined
+  do {
+    const query = new URLSearchParams(params)
+    if (paginationKey) query.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}${endpoint}?${query}`, { headers: { 'x-api-key': apiKey } })
+    const body = await res.text()
+    if (!res.ok) throw new Error(`J-Quants ${endpoint} 失敗: ${res.status} ${body.slice(0, 200)}`)
+    const json = JSON.parse(body) as { data?: unknown; pagination_key?: unknown }
+    if (!Array.isArray(json?.data)) throw new Error(`RESPONSE_SHAPE:${endpoint}`)
+    paginationKey = undefined
+    if ('pagination_key' in json) {
+      if (typeof json.pagination_key !== 'string' || json.pagination_key === '' || seen.has(json.pagination_key)) {
+        throw new Error(`RESPONSE_PAGINATION:${endpoint}`)
+      }
+      paginationKey = json.pagination_key
+      seen.add(paginationKey)
+    }
+    bodies.push(body)
+    rows.push(...(json.data as Record<string, unknown>[]))
+  } while (paginationKey)
+  return { rows, bodies }
+}
+
 // ─────────────────────────────────────
 // ティッカー記号の正規化
 // ─────────────────────────────────────
