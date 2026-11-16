@@ -49,6 +49,7 @@
     "build:isolated": "tsx scripts/run-isolated-runtime.ts build -- next build --webpack",
     "test:runtime-isolation": "tsx scripts/test-runtime-isolation.ts",
     "test:timeframes": "tsx scripts/test-timeframes.ts",
+    "test:jp-market-calendar": "tsx scripts/test-jp-market-calendar.ts",
     "test:sma-dynamics": "tsx scripts/test-sma-dynamics.ts",
     "test:sma-dynamics-ui": "tsx scripts/test-sma-dynamics-ui.ts",
     "test:sma-dynamics-preview-isolation": "tsx scripts/test-sma-dynamics-preview-isolation.ts",

@@ -49,6 +49,13 @@ function baseJapaneseNationalHolidays(year: number): Set<string> {
   ])
 
   if (year >= 2020) holidays.add(ymd(year, 2, 23))
+  // The Emperor's Birthday was Dec 23 through 2018 (none in 2019).
+  if (year >= 1989 && year <= 2018) holidays.add(ymd(year, 12, 23))
+  // 2019 enthronement: May 1 and the ceremony on Oct 22. Apr 30 and May 2 follow from the in-between rule below.
+  if (year === 2019) {
+    holidays.add(ymd(year, 5, 1))
+    holidays.add(ymd(year, 10, 22))
+  }
   if (year >= 2016) holidays.add(ymd(year, 8, 11))
 
   if (year === 2020) {
