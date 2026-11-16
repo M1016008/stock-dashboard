@@ -48,15 +48,15 @@ export function fromJQuantsCode(code: string): string {
 // API: 日足 OHLCV (/equities/bars/daily)
 // ─────────────────────────────────────
 
-interface JBarRow {
+export interface JBarRow {
   Date: string         // "2023-03-24"
   Code: string         // 5桁、例 "86970"
   O: number | null     // open
   H: number | null     // high
   L: number | null     // low
   C: number | null     // close
-  UL: number | null    // upper limit (ストップ高)
-  LL: number | null    // lower limit (ストップ安)
+  UL: string | null    // upper limit flag "0" / "1" (ストップ高)
+  LL: string | null    // lower limit flag "0" / "1" (ストップ安)
   Vo: number | null    // volume
   Va: number | null    // value (売買代金)
   AdjFactor: number | null
@@ -220,9 +220,10 @@ export function shouldApplyJQuantsLegacyAdjustment(input: {
   })
 }
 
-export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+/** その日に売買のあった全銘柄の日足を、API の行のまま返す (調整前・調整後の両方の値)。 */
+export async function fetchJQuantsDailyBarsRawByDate(date: string): Promise<JBarRow[]> {
   const apiKey = getApiKey()
-  const all: JQuantsDailyByDateRow[] = []
+  const all: JBarRow[] = []
   let paginationKey: string | undefined
 
   do {
@@ -235,18 +236,24 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       throw new Error(`J-Quants bars/daily date=${date} 失敗: ${res.status} ${await res.text()}`)
     }
     const json = await res.json() as JBarsResponse
-    for (const row of json.data ?? []) {
-      const ohlcv = toOhlcv(row)
-      if (!ohlcv) continue
-      all.push({
-        ticker: fromJQuantsCode(row.Code),
-        adjustmentFactor: row.AdjFactor ?? 1,
-        ...ohlcv,
-      })
-    }
+    all.push(...(json.data ?? []))
     paginationKey = json.pagination_key
   } while (paginationKey)
 
+  return all
+}
+
+export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+  const all: JQuantsDailyByDateRow[] = []
+  for (const row of await fetchJQuantsDailyBarsRawByDate(date)) {
+    const ohlcv = toOhlcv(row)
+    if (!ohlcv) continue
+    all.push({
+      ticker: fromJQuantsCode(row.Code),
+      adjustmentFactor: row.AdjFactor ?? 1,
+      ...ohlcv,
+    })
+  }
   return all.sort((a, b) => a.ticker.localeCompare(b.ticker))
 }
 
@@ -269,6 +276,7 @@ export interface JListedInfoRow {
   MktNm?: string             // 市場名 (例: プライム)
   Mrgn?: string              // 信用区分コード
   MrgnNm?: string            // 信用区分名 (例: 貸借)
+  ProdCat?: string           // 商品区分 (株式・ETF など)
 }
 
 interface JListedInfoResponse {
