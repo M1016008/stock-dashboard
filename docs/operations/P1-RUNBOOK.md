@@ -18,7 +18,7 @@
 | PR #115 | P1 の後に main から最初の Web 配置ができるようにする修正を main に入れる | Claude Code (Merge は承認後) |
 | SMA の照合 | 実データ (Backup の写し) で、SMA の計算結果が本番の今の表示と一致することを確かめる (STATUS の確認項目) | Claude Code |
 | 表を作る処理の試行 | 下の 1-1 | Claude Code |
-| 実行環境の束 | main の `package-lock.json` から実行環境の束を作り、`runtime-manifest.json` の `baselineSha` を `034310b` にする (切り替えの時点では release ディレクトリが `034310b` のため) | Claude Code |
+| 実行環境の束 | 候補の commit (`ebd9fe7`) の `package-lock.json` から実行環境の束を作り、`runtime-manifest.json` の `baselineSha` を `034310b` にする (切り替えの時点では release ディレクトリが `034310b` のため) | Claude Code |
 | 予行 (a) | 練習用の場所で、入れ替え → 確認 → 戻しを通す (下の 6-1)。日時は前もって承認を得る | Claude Code |
 | 配置の証明を作る道具 | `scripts/create-sma-release-preflight-proof.ts` (10/29 に repo の外で使ったものを元にした)。束は `scripts/create-release-runtime-bundle.ts`。11/19 (木) 22:15 に確かめるだけの動かし方 (b) で本番に向けて試す (下の 6-2) | Claude Code |
 | 前の成果物の写し | 今の `.next-live` (と `SMA_RELEASE_MANIFEST.json`) の写しを release ディレクトリの外に作る。確定後に戻すときの候補にする | Claude Code |
@@ -113,7 +113,7 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
   使うため。片付けはオーナーの承認の後に行う。
 
 ## 5. P1 の後に最初に Web を配置するとき
-- release ディレクトリは main、今の実行環境の束には `034310b` の印が残る。
+- release ディレクトリは P1 で配置した commit (`ebd9fe7`)、今の実行環境の束には `034310b` の印が残る。
   `STOCKBOARD_RELEASE_BASELINE_COMMIT=<P1 で配置した commit>` に加えて `STOCKBOARD_RELEASE_PRIOR_BASELINE_COMMIT=034310b…` を渡す (PR #115)。
 
 ## 6. P1 の前の試し (本番を変えない)
