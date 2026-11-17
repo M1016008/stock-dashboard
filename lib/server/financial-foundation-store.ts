@@ -418,12 +418,24 @@ export async function rebuildFinancialFoundationForTicker(
 
   // Derived rows are reproducible outputs. Replacing only those rows prevents
   // stale derivations from surviving a definition change while preserving every
-  // source disclosure and correction snapshot.
-  await execRun(`
-    DELETE FROM normalized_financial_facts
-    WHERE ticker = ? AND is_derived = 1
-  `, [ticker])
-  await writeChunks(derivedFacts.map((fact) => factInsert(fact, computedAt)))
+  // source disclosure and correction snapshot. A derived row that comes out
+  // exactly the same keeps its row and its imported_at: valuation serving reads
+  // imported_at as "this changed", and derived rows carry old published_at
+  // dates, so restamping them recomputed each re-imported ticker's whole history.
+  const comparable = (fact: NormalizedFinancialFact) => JSON.stringify(factInsert(fact, 0).args)
+  const existing = new Map(facts.filter((fact) => fact.isDerived).map((fact) => [fact.factId, comparable(fact)]))
+  const changed = derivedFacts.filter((fact) => existing.get(fact.factId) !== comparable(fact))
+  const kept = new Set(derivedFacts.map((fact) => fact.factId))
+  const stale = [...existing.keys()].filter((factId) => !kept.has(factId))
+    .concat(changed.map((fact) => fact.factId).filter((factId) => existing.has(factId)))
+  for (let index = 0; index < stale.length; index += WRITE_CHUNK) {
+    const chunk = stale.slice(index, index + WRITE_CHUNK)
+    await execRun(`
+      DELETE FROM normalized_financial_facts
+      WHERE ticker = ? AND is_derived = 1 AND fact_id IN (${chunk.map(() => '?').join(',')})
+    `, [ticker, ...chunk])
+  }
+  await writeChunks(changed.map((fact) => factInsert(fact, computedAt)))
   const metrics = await calculateAndStoreLatestMetrics(ticker, computedAt)
   return {
     ticker,
