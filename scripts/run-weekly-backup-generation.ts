@@ -347,6 +347,7 @@ async function main(): Promise<void> {
     }),
     onPhase: (phase) => console.log(JSON.stringify({ at: new Date().toISOString(), phase })),
     onProgress: (market, progress) => console.log(JSON.stringify({ at: new Date().toISOString(), market, progress })),
+    onEvent: (event) => console.log(JSON.stringify({ at: new Date().toISOString(), ...event })),
   })
   console.log(JSON.stringify({ result: 'GENERATION_PUBLISHED', ...result }, null, 2))
 }

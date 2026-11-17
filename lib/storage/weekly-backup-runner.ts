@@ -57,6 +57,8 @@ export type WeeklyBackupRunnerArguments = {
   readSourceFreeBytes?: () => number
   onPhase?: (phase: WeeklyBackupRunnerPhase) => void
   onProgress?: (market: Market, progress: RsyncProgress) => void
+  /** Check results and failure diagnostics, one JSON line each in the run log. */
+  onEvent?: (event: Record<string, unknown>) => void
   operations?: {
     cloneReplicaSeed: typeof cloneReplicaSeed
     createLockedSqliteSnapshot: typeof createLockedSqliteSnapshot
@@ -160,6 +162,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   // The observation may predate this call by several slow probes; recheck the
   // approved start window against the current time before the first write.
   if (Date.now() >= Date.parse(args.plan.mustStartBefore)) throw new Error('START_WINDOW_CLOSED')
+  // A snapshot kept from an earlier mismatch (or left by a crash) pins Production's old blocks on OWC;
+  // it must be removed (runbook "Leftover snapshot") before another run adds more.
+  if (fs.readdirSync(args.plan.stagingRoot).length > 0) throw new Error('STAGING_ROOT_NOT_EMPTY')
   args.onPhase?.('PREFLIGHT_PASSED')
 
   const markets = ['JP', 'US'] as const
@@ -224,6 +229,7 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   }
   const snapshotSources = markets.map((market) => ({ label: market, databasePath: args.plan.sourceDatabasePaths[market] }))
   let snapshotLockHeldMs = -1
+  let keepSnapshotForDiagnosis = false
   try {
     const held = await withWeeklyWriterHold({
       approved: args.approvedWriters,
@@ -315,6 +321,7 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
         snapshotDatabasePath: snapshotPaths[market],
         deadlineMs: verificationDeadlineMs,
         check: assertSourceReserve,
+        report: (event) => args.onEvent?.({ market, ...event }),
       })
       // Taken right after this market's hashes, so a change during the other market's checks is caught.
       verifiedFileSnapshots.push(immutableFileSnapshot(candidatePaths[market]), immutableFileSnapshot(restorePaths[market]))
@@ -324,8 +331,15 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
     holdDurationMs = held.receipt.holdDurationMs
     writerStatesRestored = held.receipt.restored
     verificationStarted = verificationStartedAt
+  } catch (error) {
+    // A replica that differs from its snapshot needs both files to find out why, so this one failure
+    // keeps the snapshot clones. They share blocks with production, which uses OWC space as production
+    // rewrites them; the runbook's "Leftover snapshot" step removes them after the diagnosis.
+    keepSnapshotForDiagnosis = error instanceof Error && error.message === 'REPLICA_DIFFERS_FROM_SNAPSHOT'
+    throw error
   } finally {
-    removeLockedSnapshot(stagingDirectory, snapshotSources)
+    if (keepSnapshotForDiagnosis) args.onEvent?.({ snapshotKeptForDiagnosis: stagingDirectory })
+    else removeLockedSnapshot(stagingDirectory, snapshotSources)
   }
   args.onPhase?.('VERIFICATION_PASSED')
 
