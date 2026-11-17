@@ -9,6 +9,8 @@ export const MINIMUM_SOURCE_RESERVE_BYTES = 300_000_000_000
 export const MAXIMUM_SNAPSHOT_LOCK_MS = 5 * 60 * 1_000
 export const MAXIMUM_WRITER_HOLD_MS = 8 * 60 * 60 * 1_000
 export const MAXIMUM_VERIFICATION_MS = 96 * 60 * 60 * 1_000
+/** Recorded as integrityCheck: the weekly run does quick_check only; integrity_check runs separately, table by table. */
+export const WEEKLY_INTEGRITY_CHECK = 'DEFERRED_TO_PER_TABLE_CHECK' as const
 
 export const WEEKLY_BACKUP_WRITER_LABELS = [
   'com.stockboard.classification-sync',
@@ -117,9 +119,9 @@ export type MarketVerification = {
   generationId: string
   syncStatus: 'PASS' | 'FAIL'
   databaseSha256: string
-  /** Replica digest with the two header counters sqlite3_rsync bumps zeroed. */
+  /** Replica digest with the header fields sqlite3_rsync rewrites (bytes 24-27, 92-99) zeroed. */
   contentSha256: string
-  /** quick_check and integrity_check ran on this source clone; its content digest must equal the replica's. */
+  /** quick_check ran on this source clone; its content digest must equal the replica's. */
   snapshotContentSha256: string
   quickCheck: 'ok' | string
   integrityCheck: 'ok' | string
@@ -370,7 +372,7 @@ function assertVerification(market: Market, expectedGeneration: string, value: M
   if (!/^[a-f0-9]{64}$/.test(value.contentSha256) || value.snapshotContentSha256 !== value.contentSha256) {
     throw new Error(`${market}_REPLICA_DIFFERS_FROM_SNAPSHOT`)
   }
-  if (value.quickCheck !== 'ok' || value.integrityCheck !== 'ok' || !value.readOnlyReopen
+  if (value.quickCheck !== 'ok' || value.integrityCheck !== WEEKLY_INTEGRITY_CHECK || !value.readOnlyReopen
     || value.restoreSha256 !== value.databaseSha256 || !value.restoreReadOnlyReopen) {
     throw new Error(`${market}_SQLITE_VERIFICATION_INCOMPLETE`)
   }

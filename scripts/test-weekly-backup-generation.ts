@@ -8,6 +8,7 @@ import {
   WEEKLY_BACKUP_READER_LABELS,
   WEEKLY_BACKUP_SCHEMA_VERSION,
   WEEKLY_BACKUP_WRITER_LABELS,
+  WEEKLY_INTEGRITY_CHECK,
   buildWeeklyBackupCompleteManifest,
   type MarketVerification,
   type WeeklyBackupPlan,
@@ -15,6 +16,7 @@ import {
 import {
   checkpointSnapshotClone,
   cloneReplicaSeed,
+  describeFileDifference,
   fileDigests,
   runMonitoredCommand,
   publishVerifiedGeneration,
@@ -162,7 +164,7 @@ try {
     deadlineMs: Date.now() + 60_000, check: () => { throw new Error('SOURCE_RESERVE_BREACHED') } }), /SOURCE_RESERVE_BREACHED/)
   assert.ok(Date.now() - stubbornStarted < 15_000)
 
-  // The content digest ignores only the two header counters sqlite3_rsync bumps (bytes 24-27, 92-95).
+  // The content digest ignores only the header fields sqlite3_rsync rewrites (bytes 24-27, 92-99).
   const digestBase = path.join(root, 'digest-base.bin')
   fs.writeFileSync(digestBase, Buffer.alloc(9 * 1024 * 1024, 7))
   const flipped = (name: string, offset: number) => {
@@ -173,20 +175,60 @@ try {
     return fileDigests(file)
   }
   const baseDigest = fileDigests(digestBase)
-  for (const offset of [24, 27, 92, 95]) {
+  for (const offset of [24, 27, 92, 95, 96, 99]) {
     const digest = flipped(`counter-${offset}.bin`, offset)
     assert.equal(digest.sqliteContentSha256, baseDigest.sqliteContentSha256)
     assert.notEqual(digest.sha256, baseDigest.sha256)
   }
-  for (const offset of [0, 23, 28, 91, 96, 100, 8 * 1024 * 1024 + 24]) {
+  for (const offset of [0, 23, 28, 91, 100, 8 * 1024 * 1024 + 24]) {
     assert.notEqual(flipped(`content-${offset}.bin`, offset).sqliteContentSha256, baseDigest.sqliteContentSha256)
   }
+  // Where two files differ: header bytes always listed, masked fields never counted as a difference.
+  assert.deepEqual(describeFileDifference(digestBase, path.join(root, 'counter-96.bin')),
+    { leftBytes: 9 * 1024 * 1024, rightBytes: 9 * 1024 * 1024, headerOffsets: [96], firstOffsets: [], differingBlocks: 0, complete: true })
+  assert.deepEqual(describeFileDifference(digestBase, path.join(root, `content-${8 * 1024 * 1024 + 24}.bin`)),
+    { leftBytes: 9 * 1024 * 1024, rightBytes: 9 * 1024 * 1024, headerOffsets: [], firstOffsets: [8 * 1024 * 1024 + 24], differingBlocks: 1, complete: true })
 
-  // A replica whose bytes differ from the checked snapshot is never verified.
+  // A replica whose bytes differ from the checked snapshot is never verified, and the log says where they differ.
+  const differsReports: Record<string, unknown>[] = []
   await assert.rejects(() => verifyReplica({ sqliteBinary: SQLITE, candidateRoot,
     candidateDatabasePath: path.join(candidateRoot, 'jp-candidate.db'),
     restoreDatabasePath: path.join(candidateRoot, 'differs-restore.db'),
-    snapshotDatabasePath: snapshotClone, deadlineMs: Date.now() + 60_000 }), /REPLICA_DIFFERS_FROM_SNAPSHOT/)
+    snapshotDatabasePath: snapshotClone, deadlineMs: Date.now() + 60_000,
+    report: (event) => differsReports.push(event) }), /REPLICA_DIFFERS_FROM_SNAPSHOT/)
+  assert.deepEqual(differsReports[0], { check: 'quick_check', result: 'ok' })
+  const differs = differsReports[1].replicaDiffers as ReturnType<typeof describeFileDifference>
+  assert.ok(differs.complete && differs.differingBlocks > 0 && differs.firstOffsets.length > 0)
+
+  // 2026-11-17: production writes with another SQLite (libsql 3.45.1), and sqlite3_rsync (3.54.1) stamps its
+  // own version number into the replica header (bytes 96-99). Such a replica is still the snapshot's copy.
+  // node:sqlite (bundled SQLite 3.50.x) stands in for production's libsql; the installed @types/node predates it.
+  type SyncDatabase = { exec(sql: string): void; prepare(sql: string): { get(): unknown }; close(): void }
+  const nodeSqlite = 'node:sqlite'
+  const { DatabaseSync } = (await import(nodeSqlite)) as { DatabaseSync: new (file: string) => SyncDatabase }
+  const otherOrigin = path.join(sourceRoot, 'other-library.db')
+  const otherWriter = new DatabaseSync(otherOrigin)
+  assert.notEqual((otherWriter.prepare('SELECT sqlite_version() AS v').get() as { v: string }).v,
+    command(SQLITE, [':memory:', 'SELECT sqlite_version();']))
+  otherWriter.exec("PRAGMA journal_mode=WAL; CREATE TABLE fixture(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO fixture(value) VALUES('a');")
+  otherWriter.close()
+  const otherPrior = path.join(priorRoot, 'other-library.db')
+  fs.copyFileSync(otherOrigin, otherPrior)
+  const laterWriter = new DatabaseSync(otherOrigin)
+  laterWriter.exec("INSERT INTO fixture(value) VALUES('b');")
+  laterWriter.close()
+  const otherCandidate = path.join(candidateRoot, 'other-library-candidate.db')
+  cloneReplicaSeed({ priorGenerationRoot: priorRoot, priorDatabasePath: otherPrior, candidateRoot, candidateDatabasePath: otherCandidate })
+  command(SQLITE_RSYNC, ['--wal-only', otherOrigin, otherCandidate])
+  assert.notDeepEqual(fs.readFileSync(otherOrigin).subarray(96, 100), fs.readFileSync(otherCandidate).subarray(96, 100))
+  const otherReports: Record<string, unknown>[] = []
+  const otherVerified = await verifyReplica({ sqliteBinary: SQLITE, candidateRoot, candidateDatabasePath: otherCandidate,
+    restoreDatabasePath: path.join(candidateRoot, 'other-library-restore.db'), snapshotDatabasePath: otherOrigin,
+    deadlineMs: Date.now() + 60_000, report: (event) => otherReports.push(event) })
+  assert.notEqual(fileDigests(otherOrigin).sha256, otherVerified.databaseSha256)
+  assert.equal(otherVerified.snapshotContentSha256, otherVerified.contentSha256)
+  assert.equal(otherVerified.integrityCheck, WEEKLY_INTEGRITY_CHECK)
+  assert.deepEqual(otherReports, [{ check: 'quick_check', result: 'ok' }])
   assert.ok(reserveChecks > 0)
 
   const capacityOrigin = path.join(sourceRoot, 'jp-origin.db')

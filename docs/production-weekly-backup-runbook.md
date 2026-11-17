@@ -49,18 +49,37 @@ Web/Analog, which stay online, wrote dashboard caches into the JP database durin
    its only user, creates and removes it); the clone's size/mtime, the 150 GB
    destination reserve, the candidate-growth budget, volume identity and the
    source reserve are.
-9. Verify per market: `quick_check` and full `integrity_check` on the **clone**
-   (OWC, faster than the USB disk), a read-only reopen of the candidate, and
-   equality of the candidate's and the clone's SQLite content digests (SHA-256
-   with only the file change counter, bytes 24-27, and version-valid-for, bytes
-   92-95, zeroed; sqlite3_rsync's commit on the replica bumps exactly those).
-   Then the isolated APFS restore clone on SanDisk must equal the candidate's
-   full SHA-256 and reopen read-only. One shared deadline of at most 96 hours
-   covers the syncs and all checks.
+9. Verify per market: `quick_check` on the **clone** (OWC, faster than the USB
+   disk), a read-only reopen of the candidate, and equality of the candidate's
+   and the clone's SQLite content digests (SHA-256 with only the header fields
+   that sqlite3_rsync's commit on the replica rewrites zeroed: the file change
+   counter, bytes 24-27, version-valid-for, bytes 92-95, and the SQLite version
+   number of the writing library, bytes 96-99). Then the isolated APFS restore
+   clone on SanDisk must equal the candidate's full SHA-256 and reopen read-only.
+   One shared deadline of at most 96 hours covers the syncs and all checks. The
+   log gets one line per `quick_check` result.
+   - The weekly run does **not** run `integrity_check`; the manifest records
+     `integrityCheck: "DEFERRED_TO_PER_TABLE_CHECK"`. `quick_check` covers the
+     B-tree structure, the free list and page use; what it leaves out is the
+     comparison of each index with its table (and UNIQUE). That runs separately,
+     table by table, on a published copy (see "Per-table integrity check").
+     Decided 2026-11-17: a full check took 21.5 hours for JP on OWC and more
+     than 60 hours for US on SanDisk, and it slowed the daily update.
+   - Version number, 2026-11-17: production writes with libsql (SQLite 3.45.1)
+     and sqlite3_rsync is 3.54.1, so bytes 96-99 always differ. The first
+     production run (`stockboard-weekly-20261116-clone-v1`) failed with
+     `REPLICA_DIFFERS_FROM_SNAPSHOT` for this reason alone.
+   - On `REPLICA_DIFFERS_FROM_SNAPSHOT` the log gets a `replicaDiffers` line (both
+     content digests, the differing header bytes, the first differing offsets
+     outside the zeroed fields and the number of differing 4 KiB blocks; this
+     reads both files once more), and the staging clones are kept for diagnosis
+     (a `snapshotKeptForDiagnosis` line). They share blocks with Production, so
+     OWC free space shrinks as Production rewrites those blocks: remove them with
+     the "Leftover snapshot" step once the cause is known (owner approval).
 10. Recheck the prior generation and the candidate/restore file identity (size,
    mtime, inode; not a second hash). Publish a new `COMPLETE.manifest.json`
    atomically only after every check passes.
-11. Remove the staging clones in every case (success or failure). The
+11. Remove the staging clones in every case except a replica mismatch (above). The
    source-volume reserve is checked about every second during syncs and checks,
    and every 1 GiB while hashing, until then.
 
@@ -236,7 +255,7 @@ owner instead of being changed.
       `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`.
    Then confirm Web/Analog health and the active writer locks. Leave the
    candidate directory in place; it is never published without a new run.
-5. **Leftover snapshot (only after a crash).** A lock connection whose parent
+5. **Leftover snapshot (after a crash, or kept after a replica mismatch).** A lock connection whose parent
    died reads end-of-input, rolls back and exits without checkpointing
    (`no_ckpt_on_close`). A clone helper already running finishes on its own and
    may leave one unlocked clone (it only reads Production). Confirm
@@ -245,13 +264,39 @@ owner instead of being changed.
    never anything outside `<stagingRoot>/<runId>`.
 
 Syncs and checks run after the writers are restored, so aborting then needs no
-writer action. A running `quick_check`/`integrity_check` reads the clone, so stop
+writer action. A running `quick_check` reads the clone, so stop
 it with `pkill -INT -f '<stagingRoot>/<runId>'` (and signal the CLI): the check
 fails, the CLI removes the clones and exits non-zero. Hashing runs inside the
 CLI synchronously and a market's three hashes (clone, candidate, restore) run
 back to back, so a signal takes effect only after that market's verification
 finishes (up to about 1.5 hours per market on SanDisk). The CLI rechecks the abort flag after
 postflight, immediately before publishing, so the candidate stays unpublished.
+
+## Per-table integrity check (separate from the weekly run)
+
+Run on a published generation on SanDisk (a `COMPLETE.manifest.json` with
+status `VERIFIED`), never on Production or the OWC clone, at low priority and
+outside the daily-update window (16:30-22:00 on weekdays):
+
+```bash
+taskpolicy -b npx tsx scripts/check-backup-integrity-by-table.ts --generation=<generation dir> --market=JP --report=<report .jsonl outside the generation> --stop-starting-after=<ISO time>
+```
+
+- It opens the copy read-only and immutable (no `-wal`/`-shm` beside it) and runs
+  `PRAGMA integrity_check(<table>)` for `sqlite_schema` and every table, one
+  table at a time, appending one line per table to the report.
+- The first run hashes the copy (it must equal the manifest's
+  `databaseSha256`) and records its size, mtime and inode; later runs refuse a
+  changed copy. `--stop-starting-after` stops starting new tables after that
+  time (the running table finishes), so the check spreads over several nights.
+  The run that finishes the last table hashes the copy again and writes a
+  `complete` line (`ok` is true only when every table is `ok` and the hash
+  still matches).
+- A table that is not `ok` is a finding for the owner. Index-versus-table
+  faults are usually repaired from the table data (`REINDEX`), but the
+  generation stays as it is.
+- Do it monthly, and before a repair of Production that relies on a backup
+  (for example the 12/5 split repair).
 
 ## First Production approval must name
 

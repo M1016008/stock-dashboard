@@ -14,6 +14,8 @@
     "test:weekly-backup-apfs-clone": "tsx scripts/test-weekly-backup-apfs-clone.ts",
     "test:weekly-backup-sqlite3-rsync": "tsx scripts/test-weekly-backup-sqlite3-rsync.ts",
     "test:weekly-backup-policy": "tsx scripts/test-weekly-backup-policy.ts",
+    "test:backup-integrity-by-table": "tsx scripts/test-backup-integrity-by-table.ts",
+    "backup:integrity-by-table": "tsx scripts/check-backup-integrity-by-table.ts",
     "test:weekly-backup-generation": "tsx scripts/test-weekly-backup-generation.ts",
     "test:weekly-backup-runner": "tsx scripts/test-weekly-backup-runner.ts",
     "test:weekly-writer-hold": "tsx scripts/test-weekly-writer-hold.ts",

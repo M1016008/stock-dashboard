@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { stableJson, type WeeklyBackupCompleteManifest } from '@/lib/storage/weekly-backup-policy'
+import { stableJson, WEEKLY_INTEGRITY_CHECK, type WeeklyBackupCompleteManifest } from '@/lib/storage/weekly-backup-policy'
 
 export type RsyncMonitorLimits = {
   deadlineMs: number
@@ -62,10 +62,12 @@ function assertRegularFile(filePath: string): void {
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`REGULAR_FILE_REQUIRED:${filePath}`)
 }
 
-// sqlite3_rsync commits on the replica, which bumps two header counters (file change counter at
-// bytes 24-27, version-valid-for at 92-95). The content digest zeroes only those 8 bytes, so a
-// replica and its source compare equal exactly when every other byte matches.
-const SQLITE_HEADER_COUNTERS = [[24, 28], [92, 96]] as const
+// sqlite3_rsync commits on the replica, and that commit rewrites three header fields: the file change
+// counter (bytes 24-27), version-valid-for (92-95) and the SQLite version number of the library that
+// wrote it (96-99). Production writes with libsql (3.45.1) while sqlite3_rsync is 3.54.1, so the
+// version number always differs (2026-11-17 failure). The content digest zeroes only those 12 bytes,
+// so a replica and its source compare equal exactly when every other byte matches.
+export const SQLITE_RSYNC_HEADER_FIELDS = [[24, 28], [92, 100]] as const
 
 export function fileDigests(filePath: string, deadlineMs?: number, check?: () => void): {
   sha256: string
@@ -90,7 +92,7 @@ export function fileDigests(filePath: string, deadlineMs?: number, check?: () =>
       full.update(chunk)
       if (offset === 0) {
         const masked = Buffer.from(chunk)
-        for (const [start, end] of SQLITE_HEADER_COUNTERS) if (end <= bytes) masked.fill(0, start, end)
+        for (const [start, end] of SQLITE_RSYNC_HEADER_FIELDS) if (end <= bytes) masked.fill(0, start, end)
         content.update(masked)
       } else content.update(chunk)
       offset += bytes
@@ -103,6 +105,64 @@ export function fileDigests(filePath: string, deadlineMs?: number, check?: () =>
 
 export function fileSha256(filePath: string, deadlineMs?: number, check?: () => void): string {
   return fileDigests(filePath, deadlineMs, check).sha256
+}
+
+/**
+ * Where two database files differ, for the log of a failed comparison: the differing header bytes
+ * (0-99, masked fields included), the first differing offsets outside the masked fields and the
+ * number of differing 4 KiB blocks. It reads both files once more; at the deadline it stops early.
+ */
+export function describeFileDifference(left: string, right: string, deadlineMs?: number, check?: () => void): {
+  leftBytes: number
+  rightBytes: number
+  headerOffsets: number[]
+  firstOffsets: number[]
+  differingBlocks: number
+  complete: boolean
+} {
+  const masked = (offset: number) => SQLITE_RSYNC_HEADER_FIELDS.some(([start, end]) => offset >= start && offset < end)
+  const leftBytes = fs.statSync(left).size
+  const rightBytes = fs.statSync(right).size
+  const headerOffsets: number[] = []
+  const firstOffsets: number[] = []
+  let differingBlocks = 0
+  let complete = true
+  const leftDescriptor = fs.openSync(left, 'r')
+  const rightDescriptor = fs.openSync(right, 'r')
+  const a = Buffer.allocUnsafe(8 * 1024 * 1024)
+  const b = Buffer.allocUnsafe(8 * 1024 * 1024)
+  try {
+    for (let position = 0, chunks = 0; ; position += a.length) {
+      if (deadlineMs !== undefined && Date.now() >= deadlineMs) { complete = false; break }
+      if (check && ++chunks % 128 === 0) check()
+      const readA = fs.readSync(leftDescriptor, a, 0, a.length, position)
+      const readB = fs.readSync(rightDescriptor, b, 0, b.length, position)
+      if (readA === 0 && readB === 0) break
+      const length = Math.max(readA, readB)
+      if (readA === readB && a.subarray(0, readA).equals(b.subarray(0, readB))) continue
+      for (let block = 0; block < length; block += 4096) {
+        const end = Math.min(block + 4096, length)
+        const inHeader = position + block < 100
+        if (!inHeader && a.subarray(block, Math.min(end, readA)).equals(b.subarray(block, Math.min(end, readB)))) continue
+        if (!inHeader && firstOffsets.length >= 8) { differingBlocks += 1; continue }
+        let differs = false
+        for (let i = block; i < end; i += 1) {
+          if (i < readA && i < readB && a[i] === b[i]) continue
+          const offset = position + i
+          if (offset < 100) headerOffsets.push(offset)
+          if (masked(offset)) continue
+          differs = true
+          if (firstOffsets.length < 8) firstOffsets.push(offset)
+          else if (offset >= 100) break
+        }
+        if (differs) differingBlocks += 1
+      }
+    }
+  } finally {
+    fs.closeSync(leftDescriptor)
+    fs.closeSync(rightDescriptor)
+  }
+  return { leftBytes, rightBytes, headerOffsets, firstOffsets, differingBlocks, complete }
 }
 
 export function cloneReplicaSeed(args: {
@@ -357,6 +417,8 @@ export async function verifyReplica(args: {
   snapshotDatabasePath: string
   deadlineMs: number
   check?: () => void
+  /** Receives the check result and, on a mismatch, where the two files differ (for the run log). */
+  report?: (event: Record<string, unknown>) => void
 }): Promise<ReplicaVerification> {
   assertWithin(args.candidateRoot, args.candidateDatabasePath)
   assertWithin(args.candidateRoot, args.restoreDatabasePath)
@@ -364,12 +426,13 @@ export async function verifyReplica(args: {
   assertRegularFile(args.candidateDatabasePath)
   assertRegularFile(args.snapshotDatabasePath)
   if (fs.existsSync(args.restoreDatabasePath)) throw new Error('RESTORE_SMOKE_PATH_ALREADY_EXISTS')
-  // The full checks read the source clone, not the USB copy; byte identity then carries them to the replica.
+  // quick_check reads the source clone, not the USB copy; byte identity then carries it to the replica.
+  // The weekly run skips integrity_check (the index-versus-table comparison): it takes days on these
+  // databases, so it runs separately, table by table, on a published copy (check-backup-integrity-by-table).
   assertNoPendingWal(args.snapshotDatabasePath)
   const quickCheck = await pragma(args.sqliteBinary, args.snapshotDatabasePath,
     'PRAGMA quick_check;', args.deadlineMs, args.check)
-  const integrityCheck = await pragma(args.sqliteBinary, args.snapshotDatabasePath,
-    'PRAGMA integrity_check;', args.deadlineMs, args.check)
+  args.report?.({ check: 'quick_check', result: quickCheck })
   await pragma(args.sqliteBinary, args.candidateDatabasePath,
     'SELECT count(*) FROM sqlite_schema;', args.deadlineMs, args.check)
   // The restore clone copies only the main database file. Committed pages
@@ -387,7 +450,16 @@ export async function verifyReplica(args: {
   // blocks again; byte identity plus a read-only reopen proves the restore path.
   const snapshot = fileDigests(args.snapshotDatabasePath, args.deadlineMs, args.check)
   const candidate = fileDigests(args.candidateDatabasePath, args.deadlineMs, args.check)
-  if (candidate.sqliteContentSha256 !== snapshot.sqliteContentSha256) throw new Error('REPLICA_DIFFERS_FROM_SNAPSHOT')
+  if (candidate.sqliteContentSha256 !== snapshot.sqliteContentSha256) {
+    args.report?.({
+      replicaDiffers: {
+        snapshotContentSha256: snapshot.sqliteContentSha256,
+        contentSha256: candidate.sqliteContentSha256,
+        ...describeFileDifference(args.snapshotDatabasePath, args.candidateDatabasePath, args.deadlineMs, args.check),
+      },
+    })
+    throw new Error('REPLICA_DIFFERS_FROM_SNAPSHOT')
+  }
   const databaseSha256 = candidate.sha256
   const restoreSha256 = fileSha256(args.restoreDatabasePath, args.deadlineMs, args.check)
   await pragma(args.sqliteBinary, args.restoreDatabasePath,
@@ -399,7 +471,7 @@ export async function verifyReplica(args: {
     contentSha256: candidate.sqliteContentSha256,
     snapshotContentSha256: snapshot.sqliteContentSha256,
     quickCheck,
-    integrityCheck,
+    integrityCheck: WEEKLY_INTEGRITY_CHECK,
     readOnlyReopen: true,
     restoreSha256,
     restoreReadOnlyReopen: true,

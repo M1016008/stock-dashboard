@@ -6,6 +6,7 @@ import {
   WEEKLY_BACKUP_READER_LABELS,
   WEEKLY_BACKUP_SCHEMA_VERSION,
   WEEKLY_BACKUP_WRITER_LABELS,
+  WEEKLY_INTEGRITY_CHECK,
   assertWeeklyBackupPlanSha256,
   assertWeeklyBackupPreflight,
   availableCandidateGrowthBytes,
@@ -98,7 +99,7 @@ const verification = (market: 'JP' | 'US'): MarketVerification => ({
   contentSha256: market === 'JP' ? '2'.repeat(64) : '3'.repeat(64),
   snapshotContentSha256: market === 'JP' ? '2'.repeat(64) : '3'.repeat(64),
   quickCheck: 'ok',
-  integrityCheck: 'ok',
+  integrityCheck: WEEKLY_INTEGRITY_CHECK,
   readOnlyReopen: true,
   restoreSha256: market === 'JP' ? 'a'.repeat(64) : 'b'.repeat(64),
   restoreReadOnlyReopen: true,
@@ -178,6 +179,8 @@ rejects((_, next) => { next.priorManifestSha256 = '0'.repeat(64) }, /PRIOR_GENER
 rejects((_, next) => { next.sqliteRsyncBinarySha256 = '0'.repeat(64) }, /SQLITE_TOOL_IDENTITY_MISMATCH/)
 rejects((_, __, next) => { next.jp.generationId = 'other-generation' }, /JP_GENERATION_MISMATCH/)
 rejects((_, __, next) => { next.us.integrityCheck = 'corrupt' }, /US_SQLITE_VERIFICATION_INCOMPLETE/)
+// The weekly run no longer runs integrity_check; a manifest claiming it did (or anything else) is refused.
+rejects((_, __, next) => { next.jp.integrityCheck = 'ok' }, /JP_SQLITE_VERIFICATION_INCOMPLETE/)
 rejects((_, __, next) => { next.jp.restoreSha256 = 'c'.repeat(64) }, /JP_SQLITE_VERIFICATION_INCOMPLETE/)
 rejects((_, __, next) => { next.us.restoreReadOnlyReopen = false }, /US_SQLITE_VERIFICATION_INCOMPLETE/)
 rejects((_, __, next) => { next.jp.sourceWalGrowthBytes = 1 }, /JP_WAL_GROWTH_LIMIT_EXCEEDED/)

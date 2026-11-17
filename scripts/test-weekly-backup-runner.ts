@@ -8,6 +8,7 @@ import {
   WEEKLY_BACKUP_READER_LABELS,
   WEEKLY_BACKUP_SCHEMA_VERSION,
   WEEKLY_BACKUP_WRITER_LABELS,
+  WEEKLY_INTEGRITY_CHECK,
   weeklyBackupPlanSha256,
   type Market,
   type WeeklyBackupObservation,
@@ -212,7 +213,7 @@ async function main(): Promise<void> {
           contentSha256: fileSha256(candidateDatabasePath),
           snapshotContentSha256: fileSha256(snapshotDatabasePath),
           quickCheck: 'ok',
-          integrityCheck: 'ok',
+          integrityCheck: WEEKLY_INTEGRITY_CHECK,
           readOnlyReopen: true,
           restoreSha256: fileSha256(restoreDatabasePath),
           restoreReadOnlyReopen: true,
@@ -457,6 +458,20 @@ async function main(): Promise<void> {
       return { dailySchedulesUnchanged: true, webHealthy: true, analogHealthy: true }
     } }), /PRIOR_GENERATION_CHANGED/)
     fs.writeFileSync(priorManifestPath, priorManifestBytes)
+
+    // A replica that differs from its snapshot keeps the snapshot clones (only for this failure) and logs it.
+    const differsPlan = structuredClone(plan)
+    differsPlan.runId = 'weekly-runner-fixture-replica-differs'
+    const differsEvents: Record<string, unknown>[] = []
+    await assert.rejects(() => baseRun(differsPlan, { onEvent: (event) => differsEvents.push(event),
+      operations: { ...operations, verifyReplica: async (verifyArgs) => {
+        verifyArgs.report?.({ check: 'quick_check', result: 'ok' })
+        throw new Error('REPLICA_DIFFERS_FROM_SNAPSHOT')
+      } } }), /^Error: REPLICA_DIFFERS_FROM_SNAPSHOT$/)
+    const keptStaging = path.join(differsPlan.stagingRoot, differsPlan.runId)
+    assert.equal(fs.existsSync(path.join(keptStaging, 'JP', 'jp.db')), true)
+    assert.deepEqual(differsEvents, [{ market: 'JP', check: 'quick_check', result: 'ok' }, { snapshotKeptForDiagnosis: keptStaging }])
+    fs.rmSync(keptStaging, { recursive: true })
 
     // Not enough room on the source volume, or an existing staging directory, stops before writers are held.
     const lifecycleBeforeGates = lifecycle.length
