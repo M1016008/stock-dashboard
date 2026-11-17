@@ -62,7 +62,8 @@ async function main() {
   const previous = new Map(afterNew.map((fact) => [fact.fact_id, fact]))
   for (const fact of restamped) assert.notEqual(fact.value, previous.get(fact.fact_id)?.value)
 
-  // A derived row that no longer comes out (here: planted by hand) is removed.
+  // A derived row that no longer comes out (here: planted by hand) is removed, and because a vanished row
+  // leaves no published_at for valuation serving, every derived row is restamped (a full recompute, as before).
   await execRun(`INSERT INTO normalized_financial_facts SELECT 'planted-derived', event_id, ticker, published_at, period_start,
     period_end, fiscal_year_start, fiscal_year_end, target_fiscal_year, period_kind, accumulation_kind, value_kind, metric,
     value, unit, currency, consolidation_scope, accounting_standard, correction_status, source, source_field, disclosure_id,
@@ -71,7 +72,15 @@ async function main() {
   await upsertFinancialFoundationRows(history.slice(-1), 5_000)
   const afterStale = await derived()
   assert.equal(afterStale.some((fact) => fact.fact_id === 'planted-derived'), false)
-  assert.deepEqual(afterStale, afterCorrection)
+  assert.deepEqual(afterStale.map((fact) => ({ ...fact, imported_at: 0 })), afterCorrection.map((fact) => ({ ...fact, imported_at: 0 })))
+  assert.ok(afterStale.every((fact) => fact.imported_at === 5_000))
+  // A derived row whose published_at moves later also restamps every derived row.
+  const moved = afterStale[0]
+  await execRun(`UPDATE normalized_financial_facts SET published_at = '2000-01-01' WHERE fact_id = ?`, [moved.fact_id])
+  await upsertFinancialFoundationRows(history.slice(-1), 6_000)
+  const afterMove = await derived()
+  assert.ok(afterMove.every((fact) => fact.imported_at === 6_000))
+  assert.equal(afterMove.find((fact) => fact.fact_id === moved.fact_id)?.published_at, moved.published_at)
   console.log(`financial-foundation derived rewrite tests passed (${afterStale.length} derived rows)`)
 }
 

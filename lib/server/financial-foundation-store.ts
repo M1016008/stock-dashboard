@@ -422,12 +422,19 @@ export async function rebuildFinancialFoundationForTicker(
   // exactly the same keeps its row and its imported_at: valuation serving reads
   // imported_at as "this changed", and derived rows carry old published_at
   // dates, so restamping them recomputed each re-imported ticker's whole history.
+  // A derived row that vanishes, or whose published_at moves later, leaves its old date behind with no
+  // row for valuation serving to recompute from, so those (rare) cases rewrite every derived row as
+  // before, which recomputes the whole history.
   const comparable = (fact: NormalizedFinancialFact) => JSON.stringify(factInsert(fact, 0).args)
-  const existing = new Map(facts.filter((fact) => fact.isDerived).map((fact) => [fact.factId, comparable(fact)]))
-  const changed = derivedFacts.filter((fact) => existing.get(fact.factId) !== comparable(fact))
+  const previous = facts.filter((fact) => fact.isDerived)
+  const existing = new Map(previous.map((fact) => [fact.factId, comparable(fact)]))
+  const previousPublishedAt = new Map(previous.map((fact) => [fact.factId, fact.publishedAt]))
   const kept = new Set(derivedFacts.map((fact) => fact.factId))
-  const stale = [...existing.keys()].filter((factId) => !kept.has(factId))
-    .concat(changed.map((fact) => fact.factId).filter((factId) => existing.has(factId)))
+  const changedOnly = derivedFacts.filter((fact) => existing.get(fact.factId) !== comparable(fact))
+  const rewriteAll = previous.some((fact) => !kept.has(fact.factId))
+    || changedOnly.some((fact) => (previousPublishedAt.get(fact.factId) ?? fact.publishedAt) < fact.publishedAt)
+  const changed = rewriteAll ? derivedFacts : changedOnly
+  const stale = rewriteAll ? [...existing.keys()] : changed.map((fact) => fact.factId).filter((factId) => existing.has(factId))
   for (let index = 0; index < stale.length; index += WRITE_CHUNK) {
     const chunk = stale.slice(index, index + WRITE_CHUNK)
     await execRun(`
