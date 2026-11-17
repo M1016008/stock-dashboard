@@ -56,6 +56,11 @@ try {
   assert.deepEqual(checkBackupIntegrityByTable({ ...base, report: failedReport, sqlite: stub }),
     { done: 3, remaining: 0, failed: ['b'], complete: true, ok: false })
   assert.equal(JSON.parse(fs.readFileSync(failedReport, 'utf8').trim().split('\n').at(-1)!).ok, false)
+  // The command line exits non-zero when the check is not ok.
+  const cli = spawnSync(process.execPath, ['--import', 'tsx', path.join(__dirname, 'check-backup-integrity-by-table.ts'),
+    `--generation=${generation}`, '--market=JP', `--report=${path.join(root, 'cli.jsonl')}`, `--sqlite=${stub}`], { encoding: 'utf8' })
+  assert.equal(cli.status, 1, cli.stderr)
+  assert.equal(JSON.parse(cli.stdout.trim().split('\n').at(-1)!).ok, false)
 
   // A copy whose bytes change during the last night fails the final hash: complete, but not ok.
   const tamperGeneration = path.join(root, 'tamper')
