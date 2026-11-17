@@ -25,11 +25,17 @@ try {
   const base = { generation, market: 'JP' as const, report, sqlite: SQLITE, log: quiet }
 
   assert.throws(() => checkBackupIntegrityByTable({ ...base, report: path.join(generation, 'r.jsonl') }), /REPORT_INSIDE_GENERATION/)
+  // Only a .jsonl file, and never through a symlink (a dangling one could point into the generation or at production).
+  assert.throws(() => checkBackupIntegrityByTable({ ...base, report: path.join(root, 'stockboard.db-wal') }), /REPORT_MUST_BE_JSONL/)
+  const linked = path.join(root, 'linked.jsonl')
+  fs.symlinkSync(path.join(generation, 'JP', 'planted.jsonl'), linked)
+  assert.throws(() => checkBackupIntegrityByTable({ ...base, report: linked }), /REPORT_NOT_A_REGULAR_FILE|ELOOP/)
+  assert.equal(fs.existsSync(path.join(generation, 'JP', 'planted.jsonl')), false)
   // Night 1 stops before starting any table; it still records the copy's identity.
   assert.deepEqual(checkBackupIntegrityByTable({ ...base, stopStartingAfterMs: Date.now() }),
-    { done: 0, remaining: 3, failed: [], complete: false })
+    { done: 0, remaining: 3, failed: [], complete: false, ok: false })
   // Night 2 finishes; immutable read-only opens leave no -wal/-shm beside the copy.
-  assert.deepEqual(checkBackupIntegrityByTable(base), { done: 3, remaining: 0, failed: [], complete: true })
+  assert.deepEqual(checkBackupIntegrityByTable(base), { done: 3, remaining: 0, failed: [], complete: true, ok: true })
   const lines = fs.readFileSync(report, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
   assert.deepEqual(lines.map((line) => line.kind === 'table' ? `${line.table}:${line.result}` : line.kind),
     ['start', 'sqlite_schema:ok', 'a:ok', 'b:ok', 'complete'])
@@ -48,8 +54,21 @@ try {
   fs.writeFileSync(stub, `#!/bin/sh\ncase "$3" in *'integrity_check("b")'*) echo 'row 2 missing from index bw';; *) exec "${SQLITE}" "$@";; esac\n`, { mode: 0o700 })
   const failedReport = path.join(root, 'failed.jsonl')
   assert.deepEqual(checkBackupIntegrityByTable({ ...base, report: failedReport, sqlite: stub }),
-    { done: 3, remaining: 0, failed: ['b'], complete: true })
+    { done: 3, remaining: 0, failed: ['b'], complete: true, ok: false })
   assert.equal(JSON.parse(fs.readFileSync(failedReport, 'utf8').trim().split('\n').at(-1)!).ok, false)
+
+  // A copy whose bytes change during the last night fails the final hash: complete, but not ok.
+  const tamperGeneration = path.join(root, 'tamper')
+  fs.cpSync(generation, tamperGeneration, { recursive: true })
+  const tamperDb = path.join(tamperGeneration, 'JP', 'stockboard.db')
+  const tamperStub = path.join(root, 'sqlite-tamper.sh')
+  fs.writeFileSync(tamperStub, `#!/bin/sh\ncase "$3" in *'integrity_check("b")'*) /usr/bin/printf 'x' | /bin/dd of="${tamperDb}" bs=1 seek=5000 conv=notrunc 2>/dev/null; echo ok;; *) exec "${SQLITE}" "$@";; esac\n`, { mode: 0o700 })
+  const tamperReport = path.join(root, 'tamper.jsonl')
+  checkBackupIntegrityByTable({ ...base, generation: tamperGeneration, report: tamperReport, stopStartingAfterMs: Date.now() })
+  const keepTimes = fs.statSync(tamperDb)
+  const tampered = checkBackupIntegrityByTable({ ...base, generation: tamperGeneration, report: tamperReport, sqlite: tamperStub,
+    log: () => fs.utimesSync(tamperDb, keepTimes.atime, keepTimes.mtime) })
+  assert.deepEqual(tampered, { done: 3, remaining: 0, failed: [], complete: true, ok: false })
 
   // The copy must be the published bytes.
   manifest('0'.repeat(64))

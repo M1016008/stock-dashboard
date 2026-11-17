@@ -75,7 +75,9 @@ Web/Analog, which stay online, wrote dashboard caches into the JP database durin
      reads both files once more), and the staging clones are kept for diagnosis
      (a `snapshotKeptForDiagnosis` line). They share blocks with Production, so
      OWC free space shrinks as Production rewrites those blocks: remove them with
-     the "Leftover snapshot" step once the cause is known (owner approval).
+     the "Leftover snapshot" step once the cause is known (owner approval). A new
+     run refuses to start (`STAGING_ROOT_NOT_EMPTY`, before any write) while
+     anything is left under the staging root.
 10. Recheck the prior generation and the candidate/restore file identity (size,
    mtime, inode; not a second hash). Publish a new `COMPLETE.manifest.json`
    atomically only after every check passes.

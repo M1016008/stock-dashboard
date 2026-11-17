@@ -33,21 +33,25 @@ export function checkBackupIntegrityByTable(args: {
   sqlite: string
   stopStartingAfterMs?: number
   log?: (message: string) => void
-}): { done: number; remaining: number; failed: string[]; complete: boolean } {
+}): { done: number; remaining: number; failed: string[]; complete: boolean; ok: boolean } {
   const log = args.log ?? console.log
   const generation = fs.realpathSync(args.generation)
   const report = path.join(fs.realpathSync(path.dirname(path.resolve(args.report))), path.basename(args.report))
   if (report === generation || report.startsWith(`${generation}${path.sep}`)) throw new Error('REPORT_INSIDE_GENERATION')
+  // A .jsonl name and no symlink as the last component, so a mistyped path never lands on a database or its sidecar.
+  if (!report.endsWith('.jsonl')) throw new Error('REPORT_MUST_BE_JSONL')
   const manifest = JSON.parse(fs.readFileSync(path.join(generation, 'COMPLETE.manifest.json'), 'utf8'))
   if (manifest.status !== 'VERIFIED' || !manifest.markets?.[args.market]) throw new Error('GENERATION_NOT_VERIFIED')
   const expectedSha256: string = manifest.markets[args.market].databaseSha256
   const database = path.join(generation, args.market, DATABASE_NAMES[args.market])
   const stat = fs.statSync(database)
+  if (fs.existsSync(report) && !fs.lstatSync(report).isFile()) throw new Error('REPORT_NOT_A_REGULAR_FILE')
   const lines: Line[] = fs.existsSync(report)
     ? fs.readFileSync(report, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
     : []
   const append = (line: Line) => {
-    const descriptor = fs.openSync(report, 'a', 0o600)
+    const descriptor = fs.openSync(report,
+      fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600)
     try { fs.writeSync(descriptor, `${JSON.stringify(line)}\n`); fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
     lines.push(line)
   }
@@ -83,11 +87,12 @@ export function checkBackupIntegrityByTable(args: {
   }
   const failed = [...checked].filter(([, result]) => result !== 'ok').map(([table]) => table)
   const remaining = tables.filter((table) => !checked.has(table)).length
-  if (remaining > 0) return { done: checked.size, remaining, failed, complete: false }
+  if (remaining > 0) return { done: checked.size, remaining, failed, complete: false, ok: false }
   log(`hashing ${database} again`)
   const sha256 = fileSha256(database)
-  append({ kind: 'complete', ok: failed.length === 0 && sha256 === expectedSha256, tables: tables.length, failed, sha256, at: new Date().toISOString() })
-  return { done: checked.size, remaining: 0, failed, complete: true }
+  const ok = failed.length === 0 && sha256 === expectedSha256
+  append({ kind: 'complete', ok, tables: tables.length, failed, sha256, at: new Date().toISOString() })
+  return { done: checked.size, remaining: 0, failed, complete: true, ok }
 }
 
 if (require.main === module) {
@@ -104,5 +109,5 @@ if (require.main === module) {
     stopStartingAfterMs: stop === undefined ? undefined : Date.parse(stop),
   })
   console.log(JSON.stringify(result))
-  if (result.failed.length > 0) process.exitCode = 1
+  if (result.failed.length > 0 || (result.complete && !result.ok)) process.exitCode = 1
 }

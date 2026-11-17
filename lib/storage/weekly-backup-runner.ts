@@ -162,6 +162,9 @@ export async function runWeeklyBackupGeneration(args: WeeklyBackupRunnerArgument
   // The observation may predate this call by several slow probes; recheck the
   // approved start window against the current time before the first write.
   if (Date.now() >= Date.parse(args.plan.mustStartBefore)) throw new Error('START_WINDOW_CLOSED')
+  // A snapshot kept from an earlier mismatch (or left by a crash) pins Production's old blocks on OWC;
+  // it must be removed (runbook "Leftover snapshot") before another run adds more.
+  if (fs.readdirSync(args.plan.stagingRoot).length > 0) throw new Error('STAGING_ROOT_NOT_EMPTY')
   args.onPhase?.('PREFLIGHT_PASSED')
 
   const markets = ['JP', 'US'] as const

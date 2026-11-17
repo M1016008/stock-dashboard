@@ -107,6 +107,16 @@ export function fileSha256(filePath: string, deadlineMs?: number, check?: () => 
   return fileDigests(filePath, deadlineMs, check).sha256
 }
 
+function readFully(descriptor: number, buffer: Buffer, position: number): number {
+  let total = 0
+  while (total < buffer.length) {
+    const bytes = fs.readSync(descriptor, buffer, total, buffer.length - total, position + total)
+    if (bytes === 0) break
+    total += bytes
+  }
+  return total
+}
+
 /**
  * Where two database files differ, for the log of a failed comparison: the differing header bytes
  * (0-99, masked fields included), the first differing offsets outside the masked fields and the
@@ -135,8 +145,8 @@ export function describeFileDifference(left: string, right: string, deadlineMs?:
     for (let position = 0, chunks = 0; ; position += a.length) {
       if (deadlineMs !== undefined && Date.now() >= deadlineMs) { complete = false; break }
       if (check && ++chunks % 128 === 0) check()
-      const readA = fs.readSync(leftDescriptor, a, 0, a.length, position)
-      const readB = fs.readSync(rightDescriptor, b, 0, b.length, position)
+      const readA = readFully(leftDescriptor, a, position)
+      const readB = readFully(rightDescriptor, b, position)
       if (readA === 0 && readB === 0) break
       const length = Math.max(readA, readB)
       if (readA === readB && a.subarray(0, readA).equals(b.subarray(0, readB))) continue

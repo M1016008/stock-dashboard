@@ -484,9 +484,15 @@ async function main(): Promise<void> {
     collisionPlan.runId = 'weekly-runner-fixture-staging-collision'
     fs.mkdirSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId))
     fs.writeFileSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId, 'keep'), 'x')
-    await assert.rejects(() => baseRun(collisionPlan), /STAGING_DIRECTORY_COLLISION/)
+    await assert.rejects(() => baseRun(collisionPlan), /STAGING_ROOT_NOT_EMPTY/)
     assert.equal(fs.readFileSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId, 'keep'), 'utf8'), 'x')
     assert.equal(lifecycle.length, lifecycleBeforeGates)
+    // Any leftover under the staging root (another run's kept snapshot) stops a new run before its seeds are cloned.
+    const leftoverPlan = structuredClone(plan)
+    leftoverPlan.runId = 'weekly-runner-fixture-leftover-elsewhere'
+    await assert.rejects(() => baseRun(leftoverPlan), /STAGING_ROOT_NOT_EMPTY/)
+    assert.equal(fs.existsSync(path.join(destinationRoot, leftoverPlan.runId)), false)
+    fs.rmSync(path.join(collisionPlan.stagingRoot, collisionPlan.runId), { recursive: true })
 
     // A start window that closed after observation must fail before any write.
     const closedPlan = structuredClone(plan)
