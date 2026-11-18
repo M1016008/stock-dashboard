@@ -1,10 +1,11 @@
 # P1 手順書 (main と本番の統一)
 
-記録日: 2026-11-11。実施予定: 2026-11-20 (金) 22:15〜24:00 ごろ (2026-11-16 の日程の見直し。平日の夜、日次更新の最後の回 (21:10) が終わった後)。
-確かめと戻すかどうかの判断は 11/21 (土) 8 時台。直した Backup が 11/19 (木) 12:00 までに合格しなければ、11/28 (土) に戻す (STATUS の「11/16 の Backup の失敗」)。候補は `ebd9fe70896e2769c0dc0be22c6196424105aa3c` (練習と同じ。main がこの後に進んでも、この commit を使う)。
+記録日: 2026-11-11。実施予定: 2026-11-19 (木) 22:15〜24:00 ごろ (2026-11-18 オーナー承認で木曜の案に戻した。平日の夜、日次更新 (21:10 の回) が終わった後)。
+確かめと戻すかどうかの判断は 11/20 (金) 8 時台。直した Backup は 11/18 12:06 に合格した (STATUS の「11/18 の練習と Backup の取り直しの結果」)。候補は `ebd9fe70896e2769c0dc0be22c6196424105aa3c` (練習と同じ。main がこの後に進んでも、この commit を使う)。
 文中の「main の commit」「`<main>`」は、P1 ではこの候補の commit を指す。
-**注意: 3-2 の時刻表、4. の「当日の午後」、6-2 の「07:55・08:55」は土曜の朝の版のままで、11/20 の夜にはこのまま使わない。**
-平日の夜に置き換えた手順 (止める時刻・証明を作る期限・その時間帯の定期処理を含む) は、前日 (11/19) までに出して承認を得る。
+**注意: 3-2 の時刻表、4. の「当日の午後」、6-2 の「07:55・08:55」は土曜の朝の版のままで、11/19 の夜にはこのまま使わない。**
+平日の夜に置き換えた手順 (止める時刻・証明を作る期限・その時間帯の定期処理を含む) は、11/19 12:00 までに出して承認を得る。
+候補の束は `/Users/yoshio/dev/stockboard-runtime-bundles/ebd9fe7-node24.11.1-next16.4.3-release` (2026-11-18 に作り直した。識別 `9768e5bd…`)。
 本番への操作は、すべてオーナーの実行または明示の承認の後に行う。秘密情報・キーの値はここに書かない。
 
 - release ディレクトリ: `/Users/yoshio/dev/stock-dashboard-release-7df6c23` (今は `034310b`)
@@ -20,11 +21,12 @@
 | 表を作る処理の試行 | 下の 1-1 | Claude Code |
 | 実行環境の束 | 候補の commit (`ebd9fe7`) の `package-lock.json` から実行環境の束を作り、`runtime-manifest.json` の `baselineSha` を `034310b` にする (切り替えの時点では release ディレクトリが `034310b` のため) | Claude Code |
 | 予行 (a) | 練習用の場所で、入れ替え → 確認 → 戻しを通す (下の 6-1)。日時は前もって承認を得る | Claude Code |
-| 配置の証明を作る道具 | `scripts/create-sma-release-preflight-proof.ts` (10/29 に repo の外で使ったものを元にした)。束は `scripts/create-release-runtime-bundle.ts`。11/19 (木) 22:15 に確かめるだけの動かし方 (b) で本番に向けて試す (下の 6-2) | Claude Code |
+| 配置の証明を作る道具 | `scripts/create-sma-release-preflight-proof.ts` (10/29 に repo の外で使ったものを元にした)。束は `scripts/create-release-runtime-bundle.ts`。11/18 (水) 22:15 に確かめるだけの動かし方 (b) で本番に向けて試す (下の 6-2) | Claude Code |
 | 前の成果物の写し | 今の `.next-live` (と `SMA_RELEASE_MANIFEST.json`) の写しを release ディレクトリの外に作る。確定後に戻すときの候補にする | Claude Code |
 
 ### 1-1. Backup の写しで main の表を作る処理を試す
-- 直した Backup の写し (11/17 からの取り直しの世代。読み取り専用。公開 (`COMPLETE.manifest.json`) の後。11/16 の `stockboard-weekly-20261116-clone-v1` は失敗で使わない) から、本番以外の場所に作業用の複製を作る (`cp -c`)。写しそのものには書かない。
+- 直した Backup の写し (11/17 からの取り直しの世代。読み取り専用。公開 (`COMPLETE.manifest.json`) の後。11/16 の `stockboard-weekly-20261116-clone-v1` は失敗で使わない) から、本番以外の場所に作業用の複製を作る。写しそのものには書かない。複製は `fs.copyFileSync(元, 先, COPYFILE_FICLONE_FORCE)` で作る
+  (`cp -c` は複製できないと黙って普通のコピーにするので使わない。下の 4. と同じ理由。2026-11-18 に改めた。当日の手順は 11/19 午前の分として別に出した)。
 - `.env.local` の無い main の作業用ディレクトリで、行き先を複製に固定して表を作る処理 (`lib/db/migrate.ts`) を 1 回動かし、前後の `sqlite_master` を比べる:
   `USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=<複製の絶対パス> STOCK_DATA_MOUNT_PATH=<複製を置いたボリューム> STOCK_DATA_VOLUME_UUID=<そのボリュームの UUID> node --import tsx scripts/ensure-local-schema.ts`
   (外部ボリュームの DB には、ボリュームの確認 (Storage Guard) がかかるため、置いた場所のボリュームを明示する。UUID は `diskutil info` で確かめる)
@@ -123,7 +125,8 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
   候補のビルドは `20261117-candidate/candidate-artifact` (manifest の treeSha256 `c01b2d38…`)、練習用の release ディレクトリは `20261117/`。
   手順 5 (上の 4. start) で、前の世代 (本番の 034310b のビルド) の health が preview の環境を拒んで `storageStatus: unavailable` を返し、時間切れで止まった。
   道具の直し (PR #143: preview を知らない世代に限り、この 503 を「動いている」と認め、その回数を記録に残す) の Merge の後、
-  11/18 (水) の夜に手順 5〜9 (上の 4.〜8.) を main の作業用のコピーで、同じ `--root` から続ける。
+  手順 5〜9 (上の 4.〜8.) を main の作業用のコピーで、同じ `--root` から続けた (予定は 11/18 の夜だったが、オーナー指示で日中に早めた)。
+  **11/18 15:09〜15:11 に行い、合格した** (STATUS の「11/18 の木曜の案への戻し」)。もう一度行う必要は無い。
 - 場所: OWC の `StockBoard Development/release-rehearsal/` の下 (内蔵ディスクは使わない)。候補の束とビルドは `20261117-candidate/`、
   練習用の release ディレクトリ (3. の `--root`) は `20261117/`。`--root` は `release-rehearsal/` の直下の、まだ無い名前でなければならない (道具が確かめ、
   無ければ作る。あれば止まる)。練習用のサーバーは 127.0.0.1:3200 (Web) と :3205 (類似の検索)。
@@ -145,7 +148,7 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
   8. `release:rehearse -- stop`。結果: `rehearsal-log.jsonl` と、練習用の `release-state` の記録 (`committed-*` 2 つ、`rolled-back-*` 1 つ)。
 - 片付け: 練習用の場所 (候補の束とビルドを含め数 GB) は、P1 に同じ候補を使うため P1 の確認まで残す。消すのは承認の後。
 
-### 6-2. (b) 本番に向けた、確かめるだけの動かし方 (11/19 (木) 22:15〜。日次更新の最後の回が終わった後)
+### 6-2. (b) 本番に向けた、確かめるだけの動かし方 (2026-11-18 (水) 22:15〜。日次更新の最後の回が終わった後)
 - `/usr/local/bin/node --import tsx scripts/create-sma-release-preflight-proof.ts --check --release-root=/Users/yoshio/dev/stock-dashboard-release-7df6c23 --artifact=<候補のビルド> --runtime=<候補の束> --baseline=034310b…`
 - 書くもの: なし。結果は画面に出すだけ。ファイルを書く処理は、すべて `--check` で戻った後 (`--write` のときだけ) にあり、その順番はテストで確かめている。
 - 本番に対して行うこと: ファイルと記録の読み取り (release ディレクトリの git の状態、`.next-live`、束の記録、鮮度の見張りのログ、ロックが無いこと) と `ps` だけ。
@@ -164,6 +167,7 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
   (b) を本当の候補で行う。`--substitute-candidate` は `--check` でだけ使え、証明は作らない (道具はそのまま)。
 
 ### 6-3. 道具を作る中で見つかった、P1 を止める点 (2026-11-12、読み取りだけで確認)
+- **2026-11-18 の状況: 本番の release ディレクトリに `.node_modules-release-prev` は無い (読み取りだけで確かめた)。この止める点は、今は当たらない。** 下は 11/12 の記録。
 - 本番の release ディレクトリでは、`node_modules` と `.node_modules-release-prev` が同じ束 (`c9fb796…`) を指している (10/29 の配置で束を変えなかったため)。
 - この状態では、配置の仕組みの最初の確認が `release_runner_owned_rollback_runtime_matches_active_runtime` で止まる (読み取り専用で確かめた)。P1 の配置も、証明を作る道具も、ここで止まる。
 - 直し方の案: P1 の前 (または当日の切り替えの前) に、オーナーが本番の release ディレクトリの `.node_modules-release-prev` (シンボリックリンク) を消す。
