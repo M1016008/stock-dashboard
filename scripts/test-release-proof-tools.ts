@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parseBundleArguments } from './create-release-runtime-bundle'
 import { JP_FRESHNESS_KEYS, US_FRESHNESS_KEYS, assertOutputDirectory, checkFreshness, checkHealth, checkHistory, parseArguments, parseUsCompletion, writerProcesses } from './create-sma-release-preflight-proof'
-import { REHEARSAL_PARENT, REHEARSAL_PORTS, assertRehearsalRoot } from './rehearse-web-analog-release'
+import { REHEARSAL_PARENT, REHEARSAL_PORTS, assertRehearsalRoot, buildKnowsIsolation, rehearsalHealthAccepted } from './rehearse-web-analog-release'
 
 const sha = (c: string) => c.repeat(40)
 
@@ -107,6 +107,26 @@ assert.throws(() => assertRehearsalRoot('/Users/yoshio/dev/practice'), /direct c
 assert.throws(() => assertRehearsalRoot(path.join(REHEARSAL_PARENT, 'a', 'b')), /direct child/)
 assert.equal(assertRehearsalRoot(path.join(REHEARSAL_PARENT, '20261121')), path.join(REHEARSAL_PARENT, '20261121'))
 assert.deepEqual(Object.values(REHEARSAL_PORTS), [3200, 3205])
+// 練習: preview を知らない前の世代のビルドだけ、storage unavailable (503) でも動いていれば足りる
+{
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'rehearsal-isolation-'))
+  fs.mkdirSync(path.join(fixture, 'server', 'chunks'), { recursive: true })
+  fs.writeFileSync(path.join(fixture, 'server', 'chunks', 'a.js'), 'process.env.STOCK_DATA_MOUNT_PATH')
+  assert.equal(buildKnowsIsolation(fixture), false)
+  fs.writeFileSync(path.join(fixture, 'server', 'chunks', 'b.js'), 'process.env.STOCKBOARD_RUNTIME_SCOPE')
+  assert.equal(buildKnowsIsolation(fixture), true)
+  fs.rmSync(fixture, { recursive: true })
+}
+const degraded = { status: 'degraded', appStatus: 'running', storageStatus: 'unavailable' }
+assert.equal(rehearsalHealthAccepted(200, { status: 'ok' }, true), true)
+assert.equal(rehearsalHealthAccepted(200, { status: 'ok' }, false), true)
+assert.equal(rehearsalHealthAccepted(503, degraded, false), true)
+assert.equal(rehearsalHealthAccepted(503, degraded, true), false, 'a build that knows preview must report ok')
+assert.equal(rehearsalHealthAccepted(503, { ...degraded, storageStatus: 'verifying' }, false), false)
+assert.equal(rehearsalHealthAccepted(503, { ...degraded, appStatus: 'stopped' }, false), false)
+assert.equal(rehearsalHealthAccepted(500, degraded, false), false)
+assert.equal(rehearsalHealthAccepted(503, { ...degraded, status: 'ok' }, false), false)
+assert.equal(rehearsalHealthAccepted(503, { appStatus: 'running', storageStatus: 'unavailable' }, false), false)
 const rehearsalSource = readFileSync('scripts/rehearse-web-analog-release.ts', 'utf8')
 assert.doesNotMatch(rehearsalSource, /\/bin\/launchctl|'launchctl'/)
 assert.doesNotMatch(rehearsalSource, /stock-dashboard-release-7df6c23|Application Support/)
