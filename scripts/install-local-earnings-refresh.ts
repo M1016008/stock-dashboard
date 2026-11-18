@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseEnv } from 'node:util'
 import {
   calendarXml, cwd, ensureLaunchAgentDirs, home, installLaunchAgent, launchAgentPlist, logPath, pathEnv, xmlEscape,
 } from './lib/launchagent-install'
@@ -13,6 +14,11 @@ import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-envi
 const label = 'com.stockboard.earnings-refresh'
 const supportDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
 const deferredPath = path.join(supportDir, 'earnings-refresh-deferred')
+const configDir = path.join(supportDir, 'config')
+// Scoped credential file: J-Quants only. The job must not inherit unrelated
+// secrets (OpenAI, Gmail OAuth, Tiingo) from the shared runtime.env.
+const jquantsEnvPath = path.join(configDir, 'jquants.env')
+const productionEnvPath = path.join(configDir, 'production.env')
 const scheduleHour = Number(process.env.EARNINGS_REFRESH_HOUR ?? '7')
 const scheduleMinute = Number(process.env.EARNINGS_REFRESH_MINUTE ?? '10')
 
@@ -26,6 +32,57 @@ function clampMinute(value: number): number {
 
 ensureLaunchAgentDirs()
 fs.mkdirSync(supportDir, { recursive: true })
+
+// util.parseEnv (the parser behind `node --env-file`) needs Node >= 20.12. Production runs
+// /usr/local/bin/node v24.11.1 and CI pins Node 24.
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number)
+if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 12) || typeof parseEnv !== 'function') {
+  throw new Error(`install-local-earnings-refresh requires Node >= 20.12 (running ${process.versions.node})`)
+}
+
+// Value of KEY in one line, parsed exactly as `node --env-file` does (quotes, # comments).
+function dotenvValue(line: string | undefined, key: string): string {
+  return (line ? parseEnv(line)[key] ?? '' : '').trim()
+}
+
+// Keep the scoped file in sync with the canonical runtime.env (owner-only, values never printed).
+// A reissued key in runtime.env is propagated here on every install.
+const runtimeEnvPath = path.join(configDir, 'runtime.env')
+const runtimeText = fs.existsSync(runtimeEnvPath) ? fs.readFileSync(runtimeEnvPath, 'utf8') : ''
+const runtimeKeyLines = runtimeText.split('\n')
+  .filter((entry) => /^\s*(export\s+)?JQUANTS_API_KEY\s*=/.test(entry))
+// Refuse ambiguity instead of guessing which assignment is current (Node uses the last one).
+if (runtimeKeyLines.length > 1) {
+  throw new Error('runtime.env has more than one JQUANTS_API_KEY assignment; keep exactly one and rerun')
+}
+const runtimeLine = runtimeKeyLines[0]
+if (runtimeLine && dotenvValue(runtimeLine, 'JQUANTS_API_KEY')
+  && (parseEnv(runtimeText).JQUANTS_API_KEY ?? '').trim() === dotenvValue(runtimeLine, 'JQUANTS_API_KEY')) {
+  const current = fs.existsSync(jquantsEnvPath) ? fs.readFileSync(jquantsEnvPath, 'utf8') : null
+  const desired = `${runtimeLine.trim()}\n`
+  if (current !== desired) {
+    const temporary = `${jquantsEnvPath}.${process.pid}.tmp`
+    fs.writeFileSync(temporary, desired, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, jquantsEnvPath)
+    console.log(`${current === null ? 'provisioned' : 'synchronized'} ${jquantsEnvPath} from runtime.env (key: JQUANTS_API_KEY)`)
+  }
+} else {
+  // runtime.env is canonical: never keep a scoped copy whose source key was removed or emptied.
+  throw new Error(`runtime.env has no usable JQUANTS_API_KEY; ${jquantsEnvPath} is not trusted on its own`)
+}
+for (const envPath of [jquantsEnvPath, productionEnvPath]) {
+  if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
+  if ((fs.statSync(envPath).mode & 0o077) !== 0) {
+    throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
+  }
+}
+const jquantsEnvLines = fs.readFileSync(jquantsEnvPath, 'utf8')
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith('#'))
+if (jquantsEnvLines.length !== 1 || !dotenvValue(jquantsEnvLines[0], 'JQUANTS_API_KEY')) {
+  throw new Error('jquants.env must contain exactly one key: JQUANTS_API_KEY (non-empty)')
+}
 
 const hour = clampHour(scheduleHour)
 const minute = clampMinute(scheduleMinute)
@@ -44,7 +101,12 @@ const command = [
   'export EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS=${EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS:-2700}',
   'export EARNINGS_REFRESH_LOCK_POLL_SECONDS=${EARNINGS_REFRESH_LOCK_POLL_SECONDS:-30}',
   `export EARNINGS_REFRESH_DEFERRED_PATH=${JSON.stringify(deferredPath)}`,
-  'npm run batch:earnings-refresh',
+  [
+    JSON.stringify(process.execPath),
+    `--env-file=${JSON.stringify(jquantsEnvPath)}`,
+    `--env-file=${JSON.stringify(productionEnvPath)}`,
+    '--import tsx scripts/refresh-earnings.ts',
+  ].join(' '),
 ].join(' && ')
 
 const plist = launchAgentPlist(label, command, `  <key>StartCalendarInterval</key>
@@ -82,5 +144,5 @@ console.log(
   + `${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} and `
   + `${String(closeHour).padStart(2, '0')}:${String(closeMinute).padStart(2, '0')} JST`,
 )
-console.log('command: npm run batch:earnings-refresh')
+console.log('command: node --env-file=jquants.env --env-file=production.env --import tsx scripts/refresh-earnings.ts')
 console.log(`logs: ${logPath('earnings-refresh.log')}`)
