@@ -160,6 +160,7 @@
     "test:storage-paths": "tsx scripts/test-storage-paths.ts",
     "test:jquants-adjustments": "tsx scripts/test-jquants-adjustments.ts",
     "test:financial-foundation": "tsx scripts/test-financial-foundation.ts",
+    "test:financial-foundation-derived-rewrite": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-financial-foundation-derived-rewrite.ts",
     "test:financial-overview": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-financial-overview-read-model.ts",
     "test:financial-performance-timeline": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-financial-performance-timeline.ts",
     "test:financial-performance-detail": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-financial-performance-detail.ts",
