@@ -119,6 +119,11 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
 ## 6. P1 の前の試し (本番を変えない)
 
 ### 6-1. (a) 練習用の場所での入れ替えと戻し (承認済み。2026-11-16 のオーナー指示で、手順 1〜9 を 11/17 (火) の日次更新の後 (21:52〜) にまとめて行う。だめなら 11/18 (水) の夜。承認のときの番号では、場所を作る・1・2 が手順 1〜3、3〜8 が手順 4〜9)
+- 2026-11-18 の状況: 手順 1〜4 (場所を作る・上の 1.〜3.) は済んだ。候補の束は `20261117-candidate/runtime-ebd9fe7` (識別 `9768e5bd…`)、
+  候補のビルドは `20261117-candidate/candidate-artifact` (manifest の treeSha256 `c01b2d38…`)、練習用の release ディレクトリは `20261117/`。
+  手順 5 (上の 4. start) で、前の世代 (本番の 034310b のビルド) の health が preview の環境を拒んで `storageStatus: unavailable` を返し、時間切れで止まった。
+  道具の直し (PR #143: preview を知らない世代に限り、この 503 を「動いている」と認め、その回数を記録に残す) の Merge の後、
+  11/18 (水) の夜に手順 5〜9 (上の 4.〜8.) を main の作業用のコピーで、同じ `--root` から続ける。
 - 場所: OWC の `StockBoard Development/release-rehearsal/` の下 (内蔵ディスクは使わない)。候補の束とビルドは `20261117-candidate/`、
   練習用の release ディレクトリ (3. の `--root`) は `20261117/`。`--root` は `release-rehearsal/` の直下の、まだ無い名前でなければならない (道具が確かめ、
   無ければ作る。あれば止まる)。練習用のサーバーは 127.0.0.1:3200 (Web) と :3205 (類似の検索)。
@@ -129,6 +134,8 @@ APFS の複製 (同じ OWC の上に一瞬で複製を作り、書き換わっ�
 - 手順 (すべて Claude Code。日次更新の時間 (平日 16:40〜21:10) と米国の 06:30・10:30 を避ける):
   1. 候補の束: `npm run release:runtime-bundle -- --commit=<候補の commit> --baseline=034310b… --out=<練習用の場所>/runtime-<候補の短い commit>` (`/usr/local/bin/node` で動かす)。
   2. 候補のビルド: 練習用の場所に候補の commit の作業用フォルダを作り (元の repo に worktree を登録しない)、`node_modules` を 1. の束に link して、`NEXT_DIST_DIR=.next-live npm run build`。
+     ビルドの途中で Next が作業用フォルダの `tsconfig.json` に `.next-live/types/**/*.ts` などの 2 行を足すので、`git checkout -- tsconfig.json` で戻す
+     (戻さないと次の manifest の道具が `candidate_worktree_must_be_clean` で止まる。ビルドの中身には関係しない。2026-11-18 の練習で分かった)。
      `.next-live` を `candidate-artifact` に写し、`STOCKBOARD_RELEASE_BASELINE_COMMIT=034310b… npm run release:sma-manifest -- <candidate-artifact>`。
   3. `npm run release:rehearse -- prepare --root=<release-rehearsal の直下の新しい名前> --baseline=034310b… --live-source=<本番の .next-live> --runtime=<今の束>`
   4. `release:rehearse -- start` (3200・3205 で起動し、`/api/health` が ok になるのを待つ)
