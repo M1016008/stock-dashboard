@@ -114,12 +114,45 @@ function stopTarget(config: Config, label: Target): void {
   fs.writeFileSync(pidFile(config.root), `${JSON.stringify(pids)}\n`)
 }
 
+// 隔離の実行モード (preview) より前に作ったビルド (例: 本番の 034310b) は、NODE_ENV=production と
+// EXTERNAL_STORAGE_REQUIRED=false の組を「本番の外付けの保護を外す」として拒み、health が storageStatus: unavailable (503) を返す。
+// そのビルドに限り、アプリが動いていること (appStatus: running) で足りるとする。preview を知るビルドには今までどおり ok を求める。
+export function buildKnowsIsolation(live: string): boolean {
+  const pending = [path.join(live, 'server')]
+  while (pending.length > 0) {
+    const directory = pending.pop()!
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) pending.push(file)
+      else if (entry.isFile() && file.endsWith('.js') && fs.readFileSync(file, 'utf8').includes('STOCKBOARD_RUNTIME_SCOPE')) return true
+    }
+  }
+  return false
+}
+const isolationByBuild = new Map<string, boolean>()
+function liveBuildKnowsIsolation(): boolean {
+  const live = path.join(practiceRelease, '.next-live')
+  // 入れ替えは .next-live の名前を付け替えるので、世代ごとに inode が変わる。BUILD_ID が同じでも取り違えない。
+  const build = `${fs.readFileSync(path.join(live, 'BUILD_ID'), 'utf8').trim()}:${fs.statSync(live).ino}`
+  if (!isolationByBuild.has(build)) isolationByBuild.set(build, buildKnowsIsolation(live))
+  return isolationByBuild.get(build)!
+}
+export function rehearsalHealthAccepted(status: number, body: { status?: unknown; appStatus?: unknown; storageStatus?: unknown }, knowsIsolation: boolean): boolean {
+  if (status === 200 && body.status === 'ok') return true
+  return !knowsIsolation && status === 503 && body.status === 'degraded' && body.appStatus === 'running' && body.storageStatus === 'unavailable'
+}
+let relaxedHealthChecks = 0  // 前の世代の 503 を「動いている」と認めた回数 (記録に残す)
+
 async function healthy(label: Target, timeoutSeconds = 90): Promise<void> {
   const deadline = Date.now() + timeoutSeconds * 1000
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${REHEARSAL_PORTS[label]}/api/health`, { signal: AbortSignal.timeout(5000) })
-      if (response.ok && (await response.json()).status === 'ok') return
+      const knowsIsolation = liveBuildKnowsIsolation()
+      if (rehearsalHealthAccepted(response.status, await response.json(), knowsIsolation)) {
+        if (response.status !== 200) relaxedHealthChecks += 1
+        return
+      }
     } catch { /* starting */ }
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
@@ -220,7 +253,7 @@ async function run(config: Config): Promise<void> {
       && after.build === before.build && after.runtime === before.runtime
     : outcome.status === 'SUCCESS' && journals.includes(archived) && after.build === readBuild(artifact)
       && after.runtime === fs.realpathSync(path.join(candidateRuntime, 'node_modules')))
-  const entry = { step: `run:${direction}`, passed, serversHealthy, ...outcome, before, after, candidateBuild: readBuild(artifact), expectedJournal: archived, journals }
+  const entry = { step: `run:${direction}`, passed, serversHealthy, liveBuildKnowsIsolation: liveBuildKnowsIsolation(), relaxedHealthChecks, ...outcome, before, after, candidateBuild: readBuild(artifact), expectedJournal: archived, journals }
   record(config, entry)
   console.log(JSON.stringify(entry, null, 2))
   if (!passed) process.exitCode = 1
@@ -235,7 +268,7 @@ async function main(): Promise<void> {
   if (mode === 'start') {
     for (const label of WEB_ANALOG_TARGETS) if (!alive(readPids(root)[label], label)) startTarget(config, label)
     for (const label of WEB_ANALOG_TARGETS) await healthy(label)
-    record(config, { step: 'start', pids: readPids(root) })
+    record(config, { step: 'start', pids: readPids(root), liveBuildKnowsIsolation: liveBuildKnowsIsolation(), relaxedHealthChecks })
   } else if (mode === 'stop') {
     for (const label of WEB_ANALOG_TARGETS) stopTarget(config, label)
     record(config, { step: 'stop' })
