@@ -67,8 +67,9 @@ import { DatabaseSync } from 'node:sqlite'
 {
   const ibo = { ticker: 'IBO', status: 'PENDING', statusReason: 'EMPTY_RESPONSE', lastObservedTargetDate: '2026-11-27', lastSuccessDataDate: '2026-11-20', endDate: '2026-11-26' }
   const runLog = { targets: 11571, activeInvestable: 11571, slaTargetDate: '2026-11-27', succeeded: 11467, rows: 11591 }
-  const payload = (over: Record<string, unknown> = {}) => JSON.stringify({ limit: null, tickers: null, slaTargetDate: '2026-11-27', pendingEmpty: 1, ...over })
-  const run = { id: 1532, status: 'partial', startedAt: 100, finishedAt: 200, totalTickers: 11571, succeeded: 11467, rowsInserted: 11591, payloadJson: payload() }
+  const payload = (over: Record<string, unknown> = {}) => JSON.stringify({ limit: null, tickers: null, slaTargetDate: '2026-11-27', pendingEmpty: 1,
+    pendingTargetMissing: 83, temporaryNotFound: 0, deferred: 0, promotionGuardTriggered: false, ...over })
+  const run = { id: 1532, status: 'partial', startedAt: 100, finishedAt: 200, totalTickers: 11571, succeeded: 11467, failed: 0, rowsInserted: 11591, payloadJson: payload() }
   const ev = (rows: any[], over: Record<string, unknown> = {}) => ({ run: { ...run, payloadJson: payload({ pendingEmpty: rows.length }), ...over }, rows })
   const withEmpty = (n: number) => ({ ...completion, pendingEmpty: n })
   const second = { ...ibo, ticker: 'ZZZ', endDate: '2026-11-25' }
@@ -91,7 +92,9 @@ import { DatabaseSync } from 'node:sqlite'
   stop(withEmpty(1), { run: null, rows: [ibo] }); stop(withEmpty(1), ev([ibo], { finishedAt: null }))
   for (const over of [{ totalTickers: 11570 }, { succeeded: 11466 }, { rowsInserted: 11590 }, { status: 'success' }, { payloadJson: '{' },
     { payloadJson: payload({ tickers: ['AAPL'] }) }, { payloadJson: payload({ limit: 100 }) }, { payloadJson: payload({ slaTargetDate: '2026-11-26' }) },
-    { payloadJson: payload({ pendingEmpty: 2 }) }]) stop(withEmpty(1), ev([ibo], over))
+    { payloadJson: payload({ pendingEmpty: 2 }) }, { failed: 1 }, { payloadJson: payload({ pendingTargetMissing: 82 }) }, { payloadJson: payload({ temporaryNotFound: 1 }) },
+    { payloadJson: payload({ deferred: 1 }) }, { payloadJson: payload({ promotionGuardTriggered: true }) }, { payloadJson: payload({ pendingTargetMissing: undefined }) }])
+    stop(withEmpty(1), ev([ibo], over))
   // 空の例外があっても、ほかの失敗は今までどおり止まる (取り込みの失敗・残り・一時的な 404・昇格の歯止め・最新日・その日の行が無い 0 件・状態)。
   for (const change of [{ failed: 1 }, { deferred: 1 }, { temporaryNotFound: 1 }, { promotionGuardTriggered: 'true' }, { latest: '2026-11-26' }, { pendingTargetMissing: 0 }, { status: 'failed' }])
     stop({ ...withEmpty(1), ...change }, ev([ibo]))
@@ -105,7 +108,9 @@ import { DatabaseSync } from 'node:sqlite'
   assert.equal(calls, 0, 'no DB read when another condition already fails')
   assert.equal(ok(withEmpty(1), loader).emptyEvidenceRunId, 1532); assert.equal(calls, 1)
   assert.deepEqual(acceptEndedEmpties(0, '2026-11-27', null), { tickers: [], runId: null })
-  assert.equal(acceptEndedEmpties(Number.NaN, '2026-11-27', ev([ibo]), runLog), null)
+  assert.equal(acceptEndedEmpties(Number.NaN, '2026-11-27', ev([ibo]), runLog, withEmpty(1)), null)
+  assert.equal(acceptEndedEmpties(1, '2026-11-27', ev([ibo]), runLog, null), null, 'the logged completion is required')
+  assert.equal(acceptEndedEmpties(1, '2026-11-27', ev([ibo]), runLog, withEmpty(1))?.runId, 1532)
   // 回のログ: 最後の complete と、その前でいちばん近い fetch start を読む (11/19 の本番のログの 2 回分を書き写し)。前の回を越えない。
   const log = ['US OHLCV fetch start: targets=11566, concurrency=2, slaTargetDate=2026-11-18, activeInvestable=11566',
     'US OHLCV complete: status=partial, succeeded=0, failed=0, pendingEmpty=0, pendingTargetMissing=11566, providerNotFound=0, temporaryNotFound=0, newlyPermanent=0, revertedFromPermanent=0, promotionGuardTriggered=false, deferred=0, rows=303, latest=2026-11-17',
@@ -128,11 +133,12 @@ import { DatabaseSync } from 'node:sqlite'
     CREATE TABLE market_data_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, market TEXT NOT NULL, job_type TEXT NOT NULL, status TEXT NOT NULL,
       started_at INTEGER NOT NULL, finished_at INTEGER, total_tickers INTEGER NOT NULL DEFAULT 0, succeeded INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
       rows_inserted INTEGER NOT NULL DEFAULT 0, error_summary TEXT, payload_json TEXT NOT NULL DEFAULT '{}');
-    INSERT INTO market_data_runs VALUES (1530,'US','tiingo_ohlcv','partial',1795037424,1795037535,11566,0,0,303,NULL,'{"limit":null,"tickers":null,"slaTargetDate":"2026-11-18","pendingEmpty":0}');
+    INSERT INTO market_data_runs VALUES (1530,'US','tiingo_ohlcv','partial',1795037424,1795037535,11566,0,0,303,NULL,'{"limit":null,"tickers":null,"slaTargetDate":"2026-11-18","pendingEmpty":0,"pendingTargetMissing":11566,"temporaryNotFound":0,"deferred":0,"promotionGuardTriggered":false}');
     INSERT INTO market_data_runs VALUES (1531,'US','tiingo_universe','success',1795051700,1795051800,0,0,0,0,NULL,'{}');
-    INSERT INTO market_data_runs VALUES (1532,'US','tiingo_ohlcv','partial',1795051815,1795056708,11571,11498,0,11657,NULL,'{"limit":null,"tickers":null,"slaTargetDate":"2026-11-18","pendingEmpty":1}');
+    INSERT INTO market_data_runs VALUES (1532,'US','tiingo_ohlcv','partial',1795051815,1795056708,11571,11498,0,11657,NULL,'{"limit":null,"tickers":null,"slaTargetDate":"2026-11-18","pendingEmpty":1,"pendingTargetMissing":72,"temporaryNotFound":0,"deferred":0,"promotionGuardTriggered":false}');
     INSERT INTO market_source_availability VALUES ('US','IBO','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18','2026-11-11',200,1795056707);
     INSERT INTO market_source_availability VALUES ('US','OLD2','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18','2026-11-01',200,1795037500);
+    INSERT INTO market_source_availability VALUES ('US','OLD3','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18','2026-11-01',200,1795051814);
     INSERT INTO market_source_availability VALUES ('US','AAPL','tiingo','AVAILABLE','TARGET_DATE_PRESENT',0,NULL,NULL,NULL,'DATA','2026-11-18','2026-11-18',200,1795056000);
     INSERT INTO market_source_availability VALUES ('JP','IBO','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18',NULL,200,1795056000);
     INSERT INTO market_universe VALUES ('US','IBO','IBO',1,'2026-11-17'), ('US','OLD2','OLD2',0,'2026-11-01'), ('US','AAPL','AAPL',1,'2026-11-18');`)
@@ -146,9 +152,20 @@ import { DatabaseSync } from 'node:sqlite'
   const real = checkFreshness(day('2026-11-18'), new Date(), parseUsCompletion(log), (target) => readUsEmptyEvidence(dbPath, target), parseUsRunLog(log))
   assert.deepEqual(real.usIngestion.emptyEndedTickers, [{ ticker: 'IBO', endDate: '2026-11-17', lastSuccessDataDate: '2026-11-11' }])
   assert.equal(real.usIngestion.pendingEmpty, 1); assert.equal(real.usIngestion.pendingTargetMissing, 72); assert.equal(real.usIngestion.emptyEvidenceRunId, 1532)
+  // 回の時間の境目: 始まりと同じ秒・終わりと同じ秒に書かれた空の記録は、その回に入る (始まりの 1 秒前は入らない。上の OLD3)。
+  {
+    const edge = new DatabaseSync(dbPath)
+    edge.exec(`UPDATE market_source_availability SET updated_at = 1795051815 WHERE ticker = 'IBO'`)
+    edge.close()
+    assert.deepEqual(readUsEmptyEvidence(dbPath, '2026-11-18').rows.map((row) => row.ticker), ['IBO'])
+    const edge2 = new DatabaseSync(dbPath)
+    edge2.exec(`UPDATE market_source_availability SET updated_at = 1795056708 WHERE ticker = 'IBO'`)
+    edge2.close()
+    assert.deepEqual(readUsEmptyEvidence(dbPath, '2026-11-18').rows.map((row) => row.ticker), ['IBO'])
+  }
   // 後から同じ対象日に一部だけの回 (TICKERS 付き) が入ると、DB の最後の回がログの回と合わなくなり止まる。
   const later = new DatabaseSync(dbPath)
-  later.exec(`INSERT INTO market_data_runs VALUES (1533,'US','tiingo_ohlcv','partial',1795060000,1795060100,1,0,0,0,NULL,'{"limit":null,"tickers":["IBO"],"slaTargetDate":"2026-11-18","pendingEmpty":1}')`)
+  later.exec(`INSERT INTO market_data_runs VALUES (1533,'US','tiingo_ohlcv','partial',1795060000,1795060100,1,0,0,0,NULL,'{"limit":null,"tickers":["IBO"],"slaTargetDate":"2026-11-18","pendingEmpty":1,"pendingTargetMissing":72,"temporaryNotFound":0,"deferred":0,"promotionGuardTriggered":false}')`)
   later.close()
   assert.throws(() => checkFreshness(day('2026-11-18'), new Date(), parseUsCompletion(log), (target) => readUsEmptyEvidence(dbPath, target), parseUsRunLog(log)), /not_only_target_missing/)
   // 読み取りの開き方では書けない (同じ開き方で書き込みを試すと失敗する)。
@@ -164,7 +181,11 @@ import { DatabaseSync } from 'node:sqlite'
   const proofSource = readFileSync('scripts/create-sma-release-preflight-proof.ts', 'utf8')
   assert.match(proofSource, /new DatabaseSync\(dbPath, \{ readOnly: true/)
   assert.match(proofSource, /evidence\['preflight-us-source\.json'\] = \{[^}]*\.\.\.expected\.usIngestion \}/)
-  assert.ok(proofSource.indexOf("fail(`writer_process:") < proofSource.indexOf('const expected = checkFreshness('), 'writer processes are checked before the DB may be read')
+  const writerAt = proofSource.indexOf('fail(`writer_process:'); const freshnessAt = proofSource.indexOf('const expected = checkFreshness(')
+  assert.ok(writerAt >= 0 && freshnessAt >= 0 && writerAt < freshnessAt, 'writer processes are checked before the DB may be read')
+  // 米国株の取り込みを直接動かしている処理も、書き込み中として止める。
+  assert.equal(writerProcesses('3 1 00:01 S node --import tsx scripts/batch-us-ohlcv.ts').length, 1)
+  assert.equal(writerProcesses('4 1 00:01 S node --import tsx scripts/batch-us-universe.ts').length, 1)
 }
 // 代わりの候補は --check でだけ。
 const common = ['--release-root=/x', '--artifact=/a', '--runtime=/r', `--baseline=${sha('c')}`]

@@ -116,7 +116,7 @@ export type UsEmptyEvidenceRow = { ticker: string; status: string | null; status
 export type UsEmptyEndedTicker = { ticker: string; endDate: string; lastSuccessDataDate: string | null }
 // market_data_runs の最後の米国株の取り込みの回 (Tiingo の OHLCV)。
 export type UsOhlcvRunRow = { id: number; status: string; startedAt: number; finishedAt: number | null; totalTickers: number; succeeded: number
-  rowsInserted: number; payloadJson: string }
+  failed: number; rowsInserted: number; payloadJson: string }
 // DB から読む記録: 最後の回と、その回の間に「空」と記録された銘柄 (対象の日)。
 export type UsEmptyEvidence = { run: UsOhlcvRunRow | null; rows: readonly UsEmptyEvidenceRow[] }
 // 記録は、そのまま渡すか、読む関数で渡す (関数は 1〜2 件で、ほかの安い条件がすべて通った後にだけ呼ぶ)。
@@ -129,17 +129,21 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 //   TICKERS・US_OHLCV_LIMIT を付けていない (payload の tickers・limit が null)。終わっている。
 // - その回の間 (started_at〜finished_at) に「空」と記録された銘柄の数がログと一致し、どれも PENDING・EMPTY_RESPONSE・対象の日で、end_date < 対象の日。
 export function acceptEndedEmpties(pendingEmpty: number, target: string, source: UsEmptyEvidenceSource, runLog: UsRunLog | null = null,
-  logStatus: string | null = 'partial'): { tickers: UsEmptyEndedTicker[]; runId: number | null } | null {
+  logged: UsCompletion | null = null): { tickers: UsEmptyEndedTicker[]; runId: number | null } | null {
   if (pendingEmpty === 0) return { tickers: [], runId: null }
   if (!Number.isInteger(pendingEmpty) || pendingEmpty < 1 || pendingEmpty > US_EMPTY_ENDED_MAX || source === null) return null
   if (!runLog || !Number.isInteger(runLog.targets) || runLog.targets <= 0 || runLog.targets !== runLog.activeInvestable
     || runLog.slaTargetDate !== target || !Number.isInteger(runLog.succeeded) || !Number.isInteger(runLog.rows)) return null
   const { run, rows } = typeof source === 'function' ? source(target) : source
-  if (!run || run.finishedAt == null || run.status !== logStatus || run.totalTickers !== runLog.targets || run.succeeded !== runLog.succeeded
-    || run.rowsInserted !== runLog.rows) return null
+  if (!logged || logged.pendingEmpty !== pendingEmpty) return null
+  if (!run || run.finishedAt == null || run.status !== logged.status || run.totalTickers !== runLog.targets || run.succeeded !== runLog.succeeded
+    || run.rowsInserted !== runLog.rows || run.failed !== logged.failed) return null
   let payload: any
   try { payload = JSON.parse(run.payloadJson) } catch { return null }
-  if (payload?.tickers != null || payload?.limit != null || payload?.slaTargetDate !== target || payload?.pendingEmpty !== pendingEmpty) return null
+  // ログに回の番号が出ないので、ログの数と DB の回の記録の数をすべて照らす (別の回を取り違えないため)。
+  if (payload?.tickers != null || payload?.limit != null || payload?.slaTargetDate !== target || payload?.pendingEmpty !== pendingEmpty
+    || payload?.pendingTargetMissing !== logged.pendingTargetMissing || payload?.temporaryNotFound !== logged.temporaryNotFound
+    || payload?.deferred !== logged.deferred || String(payload?.promotionGuardTriggered) !== logged.promotionGuardTriggered) return null
   if (rows.length !== pendingEmpty || new Set(rows.map((row) => row.ticker)).size !== rows.length) return null
   const accepted: UsEmptyEndedTicker[] = []
   for (const row of rows) {
@@ -182,7 +186,7 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
     if (!c || c.status !== 'partial' || c.latest !== us || c.failed !== 0 || c.temporaryNotFound !== 0
       || c.deferred !== 0 || c.promotionGuardTriggered !== 'false' || !(c.pendingTargetMissing > 0)) fail('us_ingestion_failure_not_only_target_missing')
     // ほかの条件がすべて通った後にだけ、空の例外を見る (DB を読むのはこの中で、1〜2 件で全件の回のときだけ)。
-    const emptyEnded = acceptEndedEmpties(c.pendingEmpty, us, usEmptyEvidence, usRunLog, c.status)
+    const emptyEnded = acceptEndedEmpties(c.pendingEmpty, us, usEmptyEvidence, usRunLog, c)
     if (emptyEnded === null) fail('us_ingestion_failure_not_only_target_missing')
     usIngestion = { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: automation.coveragePct,
       pendingTargetMissing: c.pendingTargetMissing, completionLatest: c.latest, pendingEmpty: c.pendingEmpty, emptyEndedTickers: emptyEnded.tickers,
@@ -193,7 +197,7 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
 
 export function writerProcesses(psOutput: string): string[] {
   return psOutput.split('\n').filter((line) => (
-    /scripts\/(?:update-latest|update-us-latest|run-weekly-optimization|run-us-ml-job|ensure-us-adjusted-foundation|build-us-analytics-db)\.ts/.test(line)
+    /scripts\/(?:update-latest|update-us-latest|run-weekly-optimization|run-us-ml-job|ensure-us-adjusted-foundation|build-us-analytics-db|batch-us-ohlcv|batch-us-universe)\.ts/.test(line)
     || /npm (?:run )?batch:weekly-optimize/.test(line)
   ))
 }
@@ -246,7 +250,7 @@ export const US_EMPTY_EVIDENCE_SQL = `SELECT a.ticker AS ticker, a.status AS sta
     AND a.updated_at BETWEEN ? AND ?
   ORDER BY a.ticker`
 export const US_LATEST_OHLCV_RUN_SQL = `SELECT id, status, started_at AS startedAt, finished_at AS finishedAt, total_tickers AS totalTickers,
-    succeeded, rows_inserted AS rowsInserted, payload_json AS payloadJson
+    succeeded, failed, rows_inserted AS rowsInserted, payload_json AS payloadJson
   FROM market_data_runs WHERE market = 'US' AND job_type = 'tiingo_ohlcv' ORDER BY id DESC LIMIT 1`
 export function readUsEmptyEvidence(dbPath: string, target: string): UsEmptyEvidence {
   const db = new DatabaseSync(dbPath, { readOnly: true, timeout: 30_000 })
