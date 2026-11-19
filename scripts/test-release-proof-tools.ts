@@ -46,7 +46,8 @@ const partial = { ...freshness, usAutomation: { ...freshness.usAutomation, inges
   usCoverageHealth: { pmsStatus: 'ok', featureStatus: 'ok', pmsDate: '2026-11-27', featureDate: '2026-11-27' },
   actions: [{ key: 'jp-core', state: 'fresh' }, { key: 'us', state: 'would_trigger', reason: 'expected=2026-11-27, stale=-, ingestion=partial' }] }
 assert.deepEqual(checkFreshness(partial, new Date(), completion).usIngestion,
-  { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: 99.28, pendingTargetMissing: 83, completionLatest: '2026-11-27' })
+  { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: 99.28, pendingTargetMissing: 83, completionLatest: '2026-11-27',
+    pendingEmpty: 0, emptyEndedTickers: [] })
 assert.throws(() => checkFreshness({ ...partial, usAutomation: { ...partial.usAutomation, coveragePct: 97.9 } }, new Date(), completion), /us_partial_coverage_below_98/)
 assert.throws(() => checkFreshness(partial, new Date(), { ...completion, failed: 1 }), /not_only_target_missing/)
 assert.throws(() => checkFreshness(partial, new Date(), { ...completion, deferred: 2 }), /not_only_target_missing/)
@@ -58,6 +59,88 @@ const stopped = parseUsCompletion(`${completionLine('pendingTargetMissing=83')}\
 assert.throws(() => checkFreshness(partial, new Date(), stopped), /not_only_target_missing/)
 assert.throws(() => checkFreshness(partial, new Date(), parseUsCompletion('US OHLCV complete: succeeded=447, failed=0, unavailable=0, deferred=0, rows=0, latest=2026-11-27\n')), /not_only_target_missing/)
 assert.throws(() => checkFreshness({ ...partial, dates: { ...partial.dates, us: { ...partial.dates.us, mlSimilar: '2026-11-26' } } }, new Date(), completion), /us_freshness:mlSimilar/)
+import { US_EMPTY_EVIDENCE_SQL, acceptEndedEmpties, parseUsFetchStart, readUsEmptyEvidence } from './create-sma-release-preflight-proof'
+// @ts-expect-error The pinned Node types predate Node 24's built-in SQLite module.
+import { DatabaseSync } from 'node:sqlite'
+// 空で返った銘柄 (pendingEmpty) の例外 (11/19 の IBO): 全件の回で、Tiingo の end_date が対象の日より前の銘柄だけ、1〜2 件まで、DB の記録と数が一致するときだけ通す。
+{
+  const ibo = { ticker: 'IBO', status: 'PENDING', statusReason: 'EMPTY_RESPONSE', lastObservedTargetDate: '2026-11-27', lastSuccessDataDate: '2026-11-20', endDate: '2026-11-26' }
+  const full = { targets: 11571, activeInvestable: 11571, slaTargetDate: '2026-11-27' }
+  const withEmpty = (n: number) => ({ ...completion, pendingEmpty: n })
+  const second = { ...ibo, ticker: 'ZZZ', endDate: '2026-11-25' }
+  const ok = (c: any, rows: any, start: any = full) => checkFreshness(partial, new Date(), c, rows, start).usIngestion
+  const stop = (c: any, rows: any, start: any = full) => assert.throws(() => checkFreshness(partial, new Date(), c, rows, start), /not_only_target_missing/)
+  assert.deepEqual(ok(withEmpty(1), [ibo]),
+    { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: 99.28, pendingTargetMissing: 83, completionLatest: '2026-11-27',
+      pendingEmpty: 1, emptyEndedTickers: [{ ticker: 'IBO', endDate: '2026-11-26', lastSuccessDataDate: '2026-11-20' }] })
+  assert.deepEqual(ok(withEmpty(2), [second, ibo]).emptyEndedTickers?.map((row) => row.ticker), ['IBO', 'ZZZ'])
+  // 止まるもの: 記録を渡していない・記録が無い・数が合わない、3 件以上、end_date が対象の日以降・無い・形が違う、別の日の記録、空でない状態、同じ銘柄の重複。
+  stop(withEmpty(1), null); stop(withEmpty(1), []); stop(withEmpty(1), [ibo, second]); stop(withEmpty(2), [ibo])
+  stop(withEmpty(3), [ibo, second, { ...ibo, ticker: 'YYY' }])
+  for (const endDate of ['2026-11-27', '2026-11-28', null, '2026/11/26']) stop(withEmpty(1), [{ ...ibo, endDate }])
+  stop(withEmpty(1), [{ ...ibo, lastObservedTargetDate: '2026-11-26' }]); stop(withEmpty(1), [{ ...ibo, status: 'PERMANENTLY_UNAVAILABLE' }])
+  stop(withEmpty(1), [{ ...ibo, statusReason: 'TARGET_DATE_MISSING' }]); stop(withEmpty(2), [ibo, ibo])
+  // 一部だけの回 (TICKERS・US_OHLCV_LIMIT・US_INCLUDE_INACTIVE で targets と activeInvestable が違う)、始まりの行が無い、対象の日が違う回は止まる。
+  stop(withEmpty(1), [ibo], { ...full, targets: 1 }); stop(withEmpty(1), [ibo], { ...full, targets: 12000 }); stop(withEmpty(1), [ibo], null)
+  stop(withEmpty(1), [ibo], { ...full, slaTargetDate: '2026-11-26' }); stop(withEmpty(1), [ibo], { targets: NaN, activeInvestable: NaN, slaTargetDate: '2026-11-27' })
+  // 空の例外があっても、ほかの失敗は今までどおり止まる (取り込みの失敗・残り・一時的な 404・昇格の歯止め・最新日・その日の行が無い 0 件・状態)。
+  for (const change of [{ failed: 1 }, { deferred: 1 }, { temporaryNotFound: 1 }, { promotionGuardTriggered: 'true' }, { latest: '2026-11-26' }, { pendingTargetMissing: 0 }, { status: 'failed' }])
+    stop({ ...withEmpty(1), ...change }, [ibo])
+  assert.throws(() => checkFreshness({ ...partial, usAutomation: { ...partial.usAutomation, coveragePct: 97.9 } }, new Date(), withEmpty(1), [ibo], full), /us_partial_coverage_below_98/)
+  // DB を読む関数は、空 1〜2 件・全件の回・ほかの安い条件が通ったときにだけ呼ばれる。
+  let calls = 0
+  const loader = (target: string) => { calls += 1; assert.equal(target, '2026-11-27'); return [ibo] }
+  checkFreshness(partial, new Date(), completion, loader, full); assert.equal(calls, 0, 'empty 0: no DB read')
+  stop(withEmpty(3), loader); stop({ ...withEmpty(1), failed: 1 }, loader); stop({ ...withEmpty(1), latest: '2026-11-26' }, loader); stop(withEmpty(1), loader, { ...full, targets: 1 })
+  assert.equal(calls, 0, 'no DB read when another condition already fails')
+  assert.deepEqual(ok(withEmpty(1), loader).emptyEndedTickers, [{ ticker: 'IBO', endDate: '2026-11-26', lastSuccessDataDate: '2026-11-20' }]); assert.equal(calls, 1)
+  // 空 0 件の日は今までどおり。古い形の行 (pendingEmpty が読めない) は止まる。
+  assert.deepEqual(acceptEndedEmpties(0, '2026-11-27', null), [])
+  assert.equal(acceptEndedEmpties(Number.NaN, '2026-11-27', [ibo], full), null)
+  // 始まりの行: 最後の「complete」の行に対応する、いちばん近い前の「fetch start」の行を読む (11/19 の本番のログの 2 回分を書き写し)。
+  const log = ['US OHLCV fetch start: targets=11566, concurrency=2, slaTargetDate=2026-11-18, activeInvestable=11566',
+    'US OHLCV complete: status=partial, succeeded=0, failed=0, pendingEmpty=0, pendingTargetMissing=11566, providerNotFound=0, temporaryNotFound=0, newlyPermanent=0, revertedFromPermanent=0, promotionGuardTriggered=false, deferred=0, rows=303, latest=2026-11-17',
+    'US latest update started: expected=2026-11-18, ohlcv=2026-11-17, snapshots=2026-11-17',
+    'US OHLCV fetch start: targets=11571, concurrency=2, slaTargetDate=2026-11-18, activeInvestable=11571',
+    '[11571/11571] rows=11657, failed=0, empty=1, notFound=0',
+    'US OHLCV complete: status=partial, succeeded=11498, failed=0, pendingEmpty=1, pendingTargetMissing=72, providerNotFound=0, temporaryNotFound=0, newlyPermanent=0, revertedFromPermanent=0, promotionGuardTriggered=false, deferred=0, rows=11657, latest=2026-11-18', ''].join('\n')
+  assert.deepEqual(parseUsFetchStart(log), { targets: 11571, activeInvestable: 11571, slaTargetDate: '2026-11-18' })
+  assert.equal(parseUsFetchStart(log.split('\n').filter((row) => !row.startsWith('US OHLCV fetch start: targets=11571')).join('\n')), null, 'must not reach across the previous run')
+  assert.equal(parseUsFetchStart('nothing\n'), null)
+  // 本物の SQLite で、11/19 の本番の値そのもの (IBO・対象の日 2026-11-18・end_date 2026-11-17・最後の値 2026-11-11) を読み、そのまま通ることを確かめる。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-us-empty-'))
+  const dbPath = path.join(dir, 'stockboard.db')
+  const setup = new DatabaseSync(dbPath)
+  setup.exec(`CREATE TABLE market_source_availability (market TEXT, ticker TEXT, source TEXT, status TEXT, status_reason TEXT, terminal_evidence_count INTEGER,
+      first_terminal_target_date TEXT, last_terminal_target_date TEXT, last_terminal_run_id INTEGER, last_observation_type TEXT, last_observed_target_date TEXT,
+      last_success_data_date TEXT, last_http_status INTEGER, updated_at INTEGER, PRIMARY KEY (market, ticker, source));
+    CREATE TABLE market_universe (market TEXT, ticker TEXT, name TEXT, active INTEGER, end_date TEXT, PRIMARY KEY (market, ticker));
+    INSERT INTO market_source_availability VALUES ('US','IBO','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18','2026-11-11',200,1795056707);
+    INSERT INTO market_source_availability VALUES ('US','OLD','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-17','2026-11-01',200,1);
+    INSERT INTO market_source_availability VALUES ('US','AAPL','tiingo','AVAILABLE','TARGET_DATE_PRESENT',0,NULL,NULL,NULL,'DATA','2026-11-18','2026-11-18',200,1);
+    INSERT INTO market_source_availability VALUES ('JP','IBO','tiingo','PENDING','EMPTY_RESPONSE',0,NULL,NULL,NULL,'EMPTY','2026-11-18',NULL,200,1);
+    INSERT INTO market_universe VALUES ('US','IBO','IBO',1,'2026-11-17'), ('US','OLD','OLD',0,'2026-11-01'), ('US','AAPL','AAPL',1,'2026-11-18');`)
+  setup.close()
+  const rows = readUsEmptyEvidence(dbPath, '2026-11-18')
+  assert.deepEqual(rows.map((row) => ({ ...row })), [{ ticker: 'IBO', status: 'PENDING', statusReason: 'EMPTY_RESPONSE', lastObservedTargetDate: '2026-11-18', lastSuccessDataDate: '2026-11-11', endDate: '2026-11-17' }])
+  const day = (d: string) => ({ ...partial, expected: { jp: d, us: d }, dates: { jp: dates(d), us: dates(d) },
+    usCoverageHealth: { ...partial.usCoverageHealth, pmsDate: d, featureDate: d },
+    actions: [{ key: 'jp-core', state: 'fresh' }, { key: 'us', state: 'would_trigger', reason: `expected=${d}, price=${d}, stale=-, coverage=99.37%, ingestion=partial` }] })
+  const real = checkFreshness(day('2026-11-18'), new Date(), parseUsCompletion(log), (target) => readUsEmptyEvidence(dbPath, target), parseUsFetchStart(log))
+  assert.deepEqual(real.usIngestion.emptyEndedTickers, [{ ticker: 'IBO', endDate: '2026-11-17', lastSuccessDataDate: '2026-11-11' }])
+  assert.equal(real.usIngestion.pendingEmpty, 1); assert.equal(real.usIngestion.pendingTargetMissing, 72)
+  // 読み取りの開き方では書けない (同じ開き方で書き込みを試すと失敗する)。
+  const readOnly = new DatabaseSync(dbPath, { readOnly: true, timeout: 30_000 })
+  assert.throws(() => readOnly.exec("UPDATE market_universe SET active = 0 WHERE ticker = 'IBO'"), /readonly|read-only/i)
+  readOnly.close()
+  fs.rmSync(dir, { recursive: true })
+  // 記録を読む SQL は読み取りだけ (SELECT) で、対象の日・空の理由・Tiingo の米国株だけに絞る。証明の米国株の記録のファイルに usIngestion (銘柄名と end_date) が入る。
+  assert.match(US_EMPTY_EVIDENCE_SQL, /^SELECT /)
+  assert.doesNotMatch(US_EMPTY_EVIDENCE_SQL, /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|PRAGMA|ATTACH)\b/i)
+  const proofSource = readFileSync('scripts/create-sma-release-preflight-proof.ts', 'utf8')
+  assert.match(proofSource, /new DatabaseSync\(dbPath, \{ readOnly: true/)
+  assert.match(proofSource, /evidence\['preflight-us-source\.json'\] = \{[^}]*\.\.\.expected\.usIngestion \}/)
+}
 // 代わりの候補は --check でだけ。
 const common = ['--release-root=/x', '--artifact=/a', '--runtime=/r', `--baseline=${sha('c')}`]
 assert.equal(parseArguments(['--check', '--substitute-candidate', ...common]).substituteCandidate, true)
