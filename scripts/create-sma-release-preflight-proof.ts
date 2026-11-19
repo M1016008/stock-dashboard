@@ -80,25 +80,31 @@ export function parseUsCompletion(log: string): UsCompletion | null {
     temporaryNotFound: number('temporaryNotFound'), deferred: number('deferred'), promotionGuardTriggered: value('promotionGuardTriggered'), latest: value('latest') }
 }
 
-// 同じ回の始まりの行 (最後の「US OHLCV complete:」の行より前で、いちばん近い「US OHLCV fetch start:」の行)。
-// 全件の取り込みでは targets と activeInvestable が同じ。TICKERS・US_OHLCV_LIMIT・US_INCLUDE_INACTIVE を付けた回は数が合わない。
-export type UsFetchStart = { targets: number; activeInvestable: number; slaTargetDate: string | null }
-export function parseUsFetchStart(log: string): UsFetchStart | null {
-  const rows = log.split('\n')
+// 最後の回のログ: 最後の「US OHLCV complete:」の行と、その前でいちばん近い「US OHLCV fetch start:」の行 (前の回の complete を越えない)。
+// 全件の取り込みでは targets と activeInvestable が同じ。succeeded と rows は DB の回の記録 (market_data_runs) と照らすのに使う。
+export type UsRunLog = { targets: number; activeInvestable: number; slaTargetDate: string | null; succeeded: number; rows: number }
+export function parseUsRunLog(log: string): UsRunLog | null {
+  const lines = log.split('\n')
+  const fields = (line: string) => {
+    const value = (key: string) => line.match(new RegExp(`\\b${key}=([^, ]+)`))?.[1] ?? null
+    return { value, number: (key: string) => { const raw = value(key); return raw != null && /^\d+$/.test(raw) ? Number(raw) : NaN } }
+  }
   let complete = -1
-  for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].startsWith('US OHLCV complete:')) { complete = i; break }
+  for (let i = lines.length - 1; i >= 0; i -= 1) if (lines[i].startsWith('US OHLCV complete:')) { complete = i; break }
+  if (complete < 0) return null
+  const done = fields(lines[complete])
   for (let i = complete - 1; i >= 0; i -= 1) {
-    if (rows[i].startsWith('US OHLCV complete:')) return null
-    if (!rows[i].startsWith('US OHLCV fetch start:')) continue
-    const value = (key: string) => rows[i].match(new RegExp(`\\b${key}=([^, ]+)`))?.[1] ?? null
-    const number = (key: string) => { const raw = value(key); return raw != null && /^\d+$/.test(raw) ? Number(raw) : NaN }
-    return { targets: number('targets'), activeInvestable: number('activeInvestable'), slaTargetDate: value('slaTargetDate') }
+    if (lines[i].startsWith('US OHLCV complete:')) return null
+    if (!lines[i].startsWith('US OHLCV fetch start:')) continue
+    const start = fields(lines[i])
+    return { targets: start.number('targets'), activeInvestable: start.number('activeInvestable'), slaTargetDate: start.value('slaTargetDate'),
+      succeeded: done.number('succeeded'), rows: done.number('rows') }
   }
   return null
 }
 
 export type UsIngestionEvidence = { status: 'PASS' | 'PASS_WITH_RECORDED_PARTIAL_COVERAGE'; ingestionStatus: string; coveragePct: number | null
-  pendingTargetMissing: number; completionLatest: string | null; pendingEmpty?: number; emptyEndedTickers?: UsEmptyEndedTicker[] }
+  pendingTargetMissing: number; completionLatest: string | null; pendingEmpty?: number; emptyEndedTickers?: UsEmptyEndedTicker[]; emptyEvidenceRunId?: number | null }
 
 // 空で返った銘柄 (pendingEmpty) を通す例外 (2026-11-19 オーナー決定、IBO の件)。
 // Tiingo の銘柄情報の取引の最終日 (end_date) が対象の日より前の銘柄は、対象の日の行がそもそも無いので、
@@ -108,31 +114,44 @@ export const US_EMPTY_ENDED_MAX = 2
 export type UsEmptyEvidenceRow = { ticker: string; status: string | null; statusReason: string | null; lastObservedTargetDate: string | null
   lastSuccessDataDate: string | null; endDate: string | null }
 export type UsEmptyEndedTicker = { ticker: string; endDate: string; lastSuccessDataDate: string | null }
-// 記録は、配列で渡すか、読む関数で渡す (関数は 1〜2 件で、ほかの安い条件がすべて通った後にだけ呼ぶ)。
-export type UsEmptyEvidenceSource = readonly UsEmptyEvidenceRow[] | ((target: string) => readonly UsEmptyEvidenceRow[]) | null
+// market_data_runs の最後の米国株の取り込みの回 (Tiingo の OHLCV)。
+export type UsOhlcvRunRow = { id: number; status: string; startedAt: number; finishedAt: number | null; totalTickers: number; succeeded: number
+  rowsInserted: number; payloadJson: string }
+// DB から読む記録: 最後の回と、その回の間に「空」と記録された銘柄 (対象の日)。
+export type UsEmptyEvidence = { run: UsOhlcvRunRow | null; rows: readonly UsEmptyEvidenceRow[] }
+// 記録は、そのまま渡すか、読む関数で渡す (関数は 1〜2 件で、ほかの安い条件がすべて通った後にだけ呼ぶ)。
+export type UsEmptyEvidenceSource = UsEmptyEvidence | ((target: string) => UsEmptyEvidence) | null
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-// 空 0 件は今までどおり通す (DB は見ない)。1〜2 件は、同じ回が全件の取り込みで (始まりの行の targets = activeInvestable、対象の日が同じ)、
-// DB の記録の数がログと一致し、どれも end_date < 対象の日 のときだけ、その一覧を返す。
-// 通さないとき (3 件以上・一部だけの回・記録が無い・数が合わない・end_date が対象の日以降など) は null。
-export function acceptEndedEmpties(pendingEmpty: number, target: string, source: UsEmptyEvidenceSource, fetchStart: UsFetchStart | null = null): UsEmptyEndedTicker[] | null {
-  if (pendingEmpty === 0) return []
+// 空 0 件は今までどおり通す (DB は見ない)。1〜2 件は、次がすべてそろうときだけ、その一覧を返す。通さないときは null。
+// - ログの最後の回が全件の取り込み (始まりの行の targets = activeInvestable、対象の日が同じ)。
+// - DB の最後の回 (market_data_runs) が、ログの最後の回と同じ (状態・対象の数・成功の数・行の数・空の数・対象の日が一致) で、
+//   TICKERS・US_OHLCV_LIMIT を付けていない (payload の tickers・limit が null)。終わっている。
+// - その回の間 (started_at〜finished_at) に「空」と記録された銘柄の数がログと一致し、どれも PENDING・EMPTY_RESPONSE・対象の日で、end_date < 対象の日。
+export function acceptEndedEmpties(pendingEmpty: number, target: string, source: UsEmptyEvidenceSource, runLog: UsRunLog | null = null,
+  logStatus: string | null = 'partial'): { tickers: UsEmptyEndedTicker[]; runId: number | null } | null {
+  if (pendingEmpty === 0) return { tickers: [], runId: null }
   if (!Number.isInteger(pendingEmpty) || pendingEmpty < 1 || pendingEmpty > US_EMPTY_ENDED_MAX || source === null) return null
-  if (!fetchStart || !Number.isInteger(fetchStart.targets) || fetchStart.targets <= 0 || fetchStart.targets !== fetchStart.activeInvestable
-    || fetchStart.slaTargetDate !== target) return null
-  const evidence = typeof source === 'function' ? source(target) : source
-  if (evidence.length !== pendingEmpty || new Set(evidence.map((row) => row.ticker)).size !== evidence.length) return null
+  if (!runLog || !Number.isInteger(runLog.targets) || runLog.targets <= 0 || runLog.targets !== runLog.activeInvestable
+    || runLog.slaTargetDate !== target || !Number.isInteger(runLog.succeeded) || !Number.isInteger(runLog.rows)) return null
+  const { run, rows } = typeof source === 'function' ? source(target) : source
+  if (!run || run.finishedAt == null || run.status !== logStatus || run.totalTickers !== runLog.targets || run.succeeded !== runLog.succeeded
+    || run.rowsInserted !== runLog.rows) return null
+  let payload: any
+  try { payload = JSON.parse(run.payloadJson) } catch { return null }
+  if (payload?.tickers != null || payload?.limit != null || payload?.slaTargetDate !== target || payload?.pendingEmpty !== pendingEmpty) return null
+  if (rows.length !== pendingEmpty || new Set(rows.map((row) => row.ticker)).size !== rows.length) return null
   const accepted: UsEmptyEndedTicker[] = []
-  for (const row of evidence) {
+  for (const row of rows) {
     if (row.status !== 'PENDING' || row.statusReason !== 'EMPTY_RESPONSE' || row.lastObservedTargetDate !== target) return null
     if (typeof row.endDate !== 'string' || !ISO_DATE.test(row.endDate) || !(row.endDate < target)) return null
     accepted.push({ ticker: row.ticker, endDate: row.endDate, lastSuccessDataDate: row.lastSuccessDataDate })
   }
-  return accepted.sort((a, b) => a.ticker.localeCompare(b.ticker))
+  return { tickers: accepted.sort((a, b) => a.ticker.localeCompare(b.ticker)), runId: run.id }
 }
 
 export function checkFreshness(freshness: any, now = new Date(), usCompletion: UsCompletion | null = null,
-  usEmptyEvidence: UsEmptyEvidenceSource = null, usFetchStart: UsFetchStart | null = null): { jp: string; us: string; usIngestion: UsIngestionEvidence } {
+  usEmptyEvidence: UsEmptyEvidenceSource = null, usRunLog: UsRunLog | null = null): { jp: string; us: string; usIngestion: UsIngestionEvidence } {
   const checkedAt = Date.parse(freshness?.checkedAt ?? '')
   if (!Number.isFinite(checkedAt) || checkedAt > now.getTime() + 5 * 60_000
     || now.getTime() - checkedAt > FRESHNESS_MAX_AGE_MINUTES * 60_000) fail('freshness_report_stale')
@@ -144,6 +163,9 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
   const automation = freshness.usAutomation ?? {}
   if (automation.priceBasis !== PRICE_BASIS.US || automation.derivedPriceBasis !== PRICE_BASIS.US || automation.analogPriceBasis !== PRICE_BASIS.US
     || automation.priceBasisCurrent !== true) fail('us_price_basis')
+  // 止める鍵は、米国株の確かめ (空の例外で DB を読むことがある) より前に見る。
+  const blocking = (freshness.activeLocks ?? []).filter((lock: string) => lock !== 'trigger_historical_worker')
+  if (blocking.length > 0) fail(`blocking_active_locks:${blocking.join(',')}`)
   const usAction = freshness.actions?.find((action: any) => action.key === 'us')
   if (freshness.actions?.find((action: any) => action.key === 'jp-core')?.state !== 'fresh') fail('freshness_action:jp-core')
   let usIngestion: UsIngestionEvidence
@@ -160,13 +182,12 @@ export function checkFreshness(freshness: any, now = new Date(), usCompletion: U
     if (!c || c.status !== 'partial' || c.latest !== us || c.failed !== 0 || c.temporaryNotFound !== 0
       || c.deferred !== 0 || c.promotionGuardTriggered !== 'false' || !(c.pendingTargetMissing > 0)) fail('us_ingestion_failure_not_only_target_missing')
     // ほかの条件がすべて通った後にだけ、空の例外を見る (DB を読むのはこの中で、1〜2 件で全件の回のときだけ)。
-    const emptyEnded = acceptEndedEmpties(c.pendingEmpty, us, usEmptyEvidence, usFetchStart)
+    const emptyEnded = acceptEndedEmpties(c.pendingEmpty, us, usEmptyEvidence, usRunLog, c.status)
     if (emptyEnded === null) fail('us_ingestion_failure_not_only_target_missing')
     usIngestion = { status: 'PASS_WITH_RECORDED_PARTIAL_COVERAGE', ingestionStatus: 'partial', coveragePct: automation.coveragePct,
-      pendingTargetMissing: c.pendingTargetMissing, completionLatest: c.latest, pendingEmpty: c.pendingEmpty, emptyEndedTickers: emptyEnded }
+      pendingTargetMissing: c.pendingTargetMissing, completionLatest: c.latest, pendingEmpty: c.pendingEmpty, emptyEndedTickers: emptyEnded.tickers,
+      emptyEvidenceRunId: emptyEnded.runId }
   } else fail(`us_ingestion:${automation.ingestionStatus}`)
-  const blocking = (freshness.activeLocks ?? []).filter((lock: string) => lock !== 'trigger_historical_worker')
-  if (blocking.length > 0) fail(`blocking_active_locks:${blocking.join(',')}`)
   return { jp, us, usIngestion }
 }
 
@@ -222,10 +243,18 @@ export const US_EMPTY_EVIDENCE_SQL = `SELECT a.ticker AS ticker, a.status AS sta
     a.last_observed_target_date AS lastObservedTargetDate, a.last_success_data_date AS lastSuccessDataDate, u.end_date AS endDate
   FROM market_source_availability a LEFT JOIN market_universe u ON u.market = a.market AND u.ticker = a.ticker
   WHERE a.market = 'US' AND a.source = 'tiingo' AND a.status_reason = 'EMPTY_RESPONSE' AND a.last_observed_target_date = ?
+    AND a.updated_at BETWEEN ? AND ?
   ORDER BY a.ticker`
-export function readUsEmptyEvidence(dbPath: string, target: string): UsEmptyEvidenceRow[] {
+export const US_LATEST_OHLCV_RUN_SQL = `SELECT id, status, started_at AS startedAt, finished_at AS finishedAt, total_tickers AS totalTickers,
+    succeeded, rows_inserted AS rowsInserted, payload_json AS payloadJson
+  FROM market_data_runs WHERE market = 'US' AND job_type = 'tiingo_ohlcv' ORDER BY id DESC LIMIT 1`
+export function readUsEmptyEvidence(dbPath: string, target: string): UsEmptyEvidence {
   const db = new DatabaseSync(dbPath, { readOnly: true, timeout: 30_000 })
-  try { return db.prepare(US_EMPTY_EVIDENCE_SQL).all(target) as UsEmptyEvidenceRow[] } finally { db.close() }
+  try {
+    const run = (db.prepare(US_LATEST_OHLCV_RUN_SQL).get() as UsOhlcvRunRow | undefined) ?? null
+    if (!run || run.finishedAt == null) return { run, rows: [] }
+    return { run: { ...run }, rows: (db.prepare(US_EMPTY_EVIDENCE_SQL).all(target, run.startedAt, run.finishedAt) as UsEmptyEvidenceRow[]).map((row) => ({ ...row })) }
+  } finally { db.close() }
 }
 
 function latestFreshness(): any {
@@ -263,14 +292,15 @@ async function main(): Promise<void> {
   verifyRuntimeManifest(args.runtime, { expectedIdentity: candidateRuntime.hashes.runtimeIdentitySha256, acceptedBaselines: baselines })
 
   // データの鮮度・書き込み中の処理・ロック
+  // 書き込み中の処理は、鮮度の確かめ (空の例外で DB を読むことがある) より前に見る。
+  const processes = command('/bin/ps', ['-axo', 'pid=,ppid=,etime=,state=,command='])
+  const writers = writerProcesses(processes)
+  if (writers.length > 0) fail(`writer_process:${writers.join('|')}`)
   const freshness = latestFreshness()
   const usLog = fs.readFileSync(DEFAULTS.usUpdateLog, 'utf8')
   // 空で返った銘柄の記録は、checkFreshness の中で、空 1〜2 件・全件の回・ほかの条件が通ったときだけ、JP の DB を読み取りだけで開いて読む。
   const expected = checkFreshness(freshness, new Date(), parseUsCompletion(usLog),
-    (target) => readUsEmptyEvidence(DEFAULTS.jpDb, target), parseUsFetchStart(usLog))
-  const processes = command('/bin/ps', ['-axo', 'pid=,ppid=,etime=,state=,command='])
-  const writers = writerProcesses(processes)
-  if (writers.length > 0) fail(`writer_process:${writers.join('|')}`)
+    (target) => readUsEmptyEvidence(DEFAULTS.jpDb, target), parseUsRunLog(usLog))
   const failedSafe = path.join(DEFAULTS.storageIncidents, 'FAILED_SAFE')
   const building = `${DEFAULTS.usDb}.tiingo_adj_ohlc_ratio_v1.building`
   const writerLocks = [path.join(SUPPORT, 'weekly-optimization.lock'), path.join(SUPPORT, 'us-ml-job.lock'), `${building}.process-lock`,
