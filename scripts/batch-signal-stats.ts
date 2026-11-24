@@ -9,6 +9,8 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execAll, execBatch, execRun, localDbPath } from '@/lib/db/client'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { sqliteCliReadArgs } from '@/lib/storage/sqlite-cli-read'
 
 type GroupRow = {
   signal_code: string
@@ -387,7 +389,7 @@ async function aggregateNativeHorizon(horizon: number, tempDir: string): Promise
   const output = await new Promise<string>((resolve, reject) => {
     const child = spawn(
       '/usr/bin/sqlite3',
-      ['-readonly', '-json', '-cmd', '.timeout 60000', localDbPath, nativeAggregateSql(horizon)],
+      ['-json', ...sqliteCliReadArgs(localDbPath, 60_000), nativeAggregateSql(horizon)],
       {
         env: { ...process.env, SQLITE_TMPDIR: tempDir },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -417,6 +419,8 @@ async function aggregateNativeHorizon(horizon: number, tempDir: string): Promise
 
 async function aggregateNativeParallel(): Promise<void> {
   if (localDbPath === ':memory:') throw new Error('Native signal aggregation requires a file-backed SQLite DB')
+  // The native children may create the -wal/-shm (query-only connections), so guard external storage first.
+  if (requiresExternalStorageGuard(localDbPath)) guardForDatabase(localDbPath, 'signal-stats-native').assertWritable()
   const tempDir = path.join(path.dirname(localDbPath), '.signal-stats-tmp')
   fs.mkdirSync(tempDir, { recursive: true })
   const concurrency = Math.min(4, Math.max(1, NATIVE_PARALLEL))

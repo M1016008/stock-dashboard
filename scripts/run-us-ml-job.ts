@@ -15,6 +15,7 @@ import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { sqliteCliReadArgs } from '@/lib/storage/sqlite-cli-read'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const US_ML_LOCK_PATH = path.join(
@@ -123,10 +124,12 @@ async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: Env
 
 // On failure, record the DB/-wal/-shm state and open handles before rethrowing, so an
 // intermittent "unable to open database file" can be diagnosed from the log alone.
+// A query-only connection, not `-readonly`: /usr/bin/sqlite3 cannot open a WAL DB read-only (such as
+// the .building shadow between child jobs) while its -wal/-shm are absent (lib/storage/sqlite-cli-read.ts).
 function sqliteReadonly(dbPath: string, sql: string): string {
   if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
   try {
-    return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+    return execFileSync('sqlite3', [...sqliteCliReadArgs(dbPath), sql], { encoding: 'utf8' }).trim()
   } catch (error) {
     // Diagnostics must never replace the original sqlite3 error.
     const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
@@ -254,13 +257,11 @@ function writeChunkCheckpoint(file: string, signature: string, completed: Set<st
 function pipelineTickers(env: NodeJS.ProcessEnv, includeInactive: boolean): string[] {
   const dbPath = env.STOCKBOARD_DB_PATH
   if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to split US ML feature jobs')
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
   return execFileSync(
     'sqlite3',
     [
-      '-readonly',
-      '-cmd',
-      '.timeout 30000',
-      dbPath,
+      ...sqliteCliReadArgs(dbPath),
       includeInactive
         ? `SELECT DISTINCT ticker FROM ohlcv_daily ORDER BY ticker`
         : `SELECT DISTINCT o.ticker
