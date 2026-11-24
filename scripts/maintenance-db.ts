@@ -15,6 +15,7 @@ import path from 'node:path'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { sqliteCliReadArgs } from '@/lib/storage/sqlite-cli-read'
 
 type TargetName = 'jp' | 'us'
 
@@ -113,15 +114,12 @@ function sizes(dbPath: string): SizeSnapshot {
   }
 }
 
+// readonly: a query-only connection (lib/storage/sqlite-cli-read.ts). `-readonly` cannot open a WAL
+// database while its -wal/-shm are absent.
 function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } = {}): string {
-  const target = options.readonly
-    ? `file:${dbPath}?mode=ro`
-    : dbPath
-  const args = [
-    ...(!options.readonly ? ['-cmd', '.timeout 15000'] : []),
-    target,
-    sql,
-  ]
+  const args = options.readonly
+    ? [...sqliteCliReadArgs(dbPath, 15_000), sql]
+    : ['-cmd', '.timeout 15000', dbPath, sql]
   const result = spawnSync(SQLITE_BIN, args, {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 64,
