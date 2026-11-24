@@ -21,7 +21,7 @@
     "test:weekly-writer-hold": "tsx scripts/test-weekly-writer-hold.ts",
     "test:locked-sqlite-snapshot": "tsx scripts/test-locked-sqlite-snapshot.ts",
     "test:db-maintenance": "tsx scripts/test-db-maintenance.ts",
-    "test:sqlite-readonly-query": "tsx scripts/test-sqlite-readonly-query.ts",
+    "test:sqlite-cli-read": "tsx scripts/test-sqlite-cli-read.ts",
     "test:jp-research-refetch": "tsx scripts/test-jp-research-refetch.ts",
     "test:jp-refetch-quality": "tsx scripts/test-jp-refetch-quality.ts",
     "test:jp-research-aux-fetch": "tsx scripts/test-jp-research-aux-fetch.ts",

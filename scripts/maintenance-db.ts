@@ -15,7 +15,7 @@ import path from 'node:path'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
-import { queryReadOnlyFirstColumn } from '@/lib/storage/sqlite-readonly-query'
+import { sqliteCliReadArgs } from '@/lib/storage/sqlite-cli-read'
 
 type TargetName = 'jp' | 'us'
 
@@ -114,8 +114,12 @@ function sizes(dbPath: string): SizeSnapshot {
   }
 }
 
-function runSqlite(dbPath: string, sql: string): string {
-  const args = ['-cmd', '.timeout 15000', dbPath, sql]
+// readonly: a query-only connection (lib/storage/sqlite-cli-read.ts). `-readonly` cannot open a WAL
+// database while its -wal/-shm are absent.
+function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } = {}): string {
+  const args = options.readonly
+    ? [...sqliteCliReadArgs(dbPath, 15_000), sql]
+    : ['-cmd', '.timeout 15000', dbPath, sql]
   const result = spawnSync(SQLITE_BIN, args, {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 64,
@@ -126,14 +130,13 @@ function runSqlite(dbPath: string, sql: string): string {
   return result.stdout.trim()
 }
 
-// Read-only through node:sqlite: /usr/bin/sqlite3 cannot open a WAL database read-only while its
-// -wal/-shm are absent (lib/storage/sqlite-readonly-query.ts).
 function tableExists(dbPath: string, tableName: string): boolean {
-  const [name] = queryReadOnlyFirstColumn(
+  const output = runSqlite(
     dbPath,
-    [`SELECT name FROM sqlite_master WHERE type='table' AND name=${sqlString(tableName)} LIMIT 1`],
+    `SELECT name FROM sqlite_master WHERE type='table' AND name=${sqlString(tableName)} LIMIT 1;`,
+    { readonly: true },
   )
-  return name === tableName
+  return output.trim() === tableName
 }
 
 function sqlString(value: string): string {
@@ -277,8 +280,12 @@ function listOpenHandles(dbPath: string): OpenHandle[] {
 }
 
 function runReadOnlySmoke(dbPath: string): string[] {
-  const sql = ['PRAGMA schema_version', 'PRAGMA page_count', 'PRAGMA freelist_count']
-  return queryReadOnlyFirstColumn(dbPath, sql)
+  const sql = [
+    'PRAGMA schema_version;',
+    'PRAGMA page_count;',
+    'PRAGMA freelist_count;',
+  ].join(' ')
+  return runSqlite(dbPath, sql, { readonly: true }).split('\n').filter(Boolean)
 }
 
 function runWritableMaintenance(dbPath: string): string[] {

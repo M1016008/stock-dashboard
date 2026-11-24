@@ -32,6 +32,16 @@ for (const file of sourceFiles) {
 const nativeSqlite = sourceFiles.filter((file) => /(?:spawnSync|execFileSync)\(['"]sqlite3/.test(fs.readFileSync(file, 'utf8')))
 assert.deepEqual(nativeSqlite.sort(), ['scripts/build-us-analytics-db.ts', 'scripts/run-us-ml-job.ts'])
 assert.match(fs.readFileSync('scripts/build-us-analytics-db.ts', 'utf8'), /guardForDatabase\(dbPath/)
-assert.match(fs.readFileSync('scripts/run-us-ml-job.ts', 'utf8'), /\['-readonly'/)
+// Reads go through a query-only connection (lib/storage/sqlite-cli-read.ts): /usr/bin/sqlite3 -readonly cannot open a
+// WAL database while its -wal/-shm are absent (the 2026-11-08 weekly US failure, db-maintenance since 2026-11-20).
+assert.match(fs.readFileSync('scripts/run-us-ml-job.ts', 'utf8'), /sqliteCliReadArgs\(/)
+const readonlyCli = sourceFiles.filter((file) => /['"]-readonly['"]/.test(fs.readFileSync(file, 'utf8')))
+// The backup tools run their own pinned sqlite3 3.54.1 on copies (one with immutable=1); the daily-close report is a development tool.
+assert.deepEqual(readonlyCli.sort(), [
+  'lib/storage/sqlite-rsync-generation.ts',
+  'scripts/check-backup-integrity-by-table.ts',
+  'scripts/lib/readonly-daily-close-report.ts',
+  'scripts/run-weekly-backup-generation.ts',
+], 'a new `sqlite3 -readonly` read: use sqliteCliReadArgs instead')
 assert.deepEqual(rawLocalClients, [], `unguarded direct local SQLite clients:\n${rawLocalClients.join('\n')}`)
 console.log('Production writer inventory enforcement: PASS (no unguarded direct local SQLite client)')

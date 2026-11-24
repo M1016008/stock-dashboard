@@ -7,6 +7,8 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execAll, execBatch, execRun, localDbPath } from '@/lib/db/client'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { sqliteCliReadArgs } from '@/lib/storage/sqlite-cli-read'
 
 type TargetDateRow = { date: string }
 type ReturnRow = {
@@ -285,7 +287,7 @@ async function aggregateNative(tempDir: string): Promise<NativeReturnStatRow[]> 
   const output = await new Promise<string>((resolve, reject) => {
     const child = spawn(
       '/usr/bin/sqlite3',
-      ['-readonly', '-json', '-cmd', '.timeout 60000', localDbPath, nativeReturnAggregateSql()],
+      ['-json', ...sqliteCliReadArgs(localDbPath, 60_000), nativeReturnAggregateSql()],
       {
         env: { ...process.env, SQLITE_TMPDIR: tempDir },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -337,6 +339,8 @@ async function insertNativeRows(rows: NativeReturnStatRow[]): Promise<void> {
 
 async function aggregateNativeParallel(): Promise<void> {
   if (localDbPath === ':memory:') throw new Error('Native signal-return aggregation requires a file-backed SQLite DB')
+  // The native children may create the -wal/-shm (query-only connections), so guard external storage first.
+  if (requiresExternalStorageGuard(localDbPath)) guardForDatabase(localDbPath, 'signal-return-stats-native').assertWritable()
   const tempDir = process.env.SIGNAL_RETURN_TMPDIR?.trim()
     || path.join(path.dirname(localDbPath), '.signal-return-stats-tmp')
   fs.mkdirSync(tempDir, { recursive: true })
