@@ -183,12 +183,27 @@ def main():
     if not reasons or pid is None:
         print(line + (' NO_SIGNAL' if reasons else ''), flush=True)
         return
+    if DRY:
+        write_marker(head, pid, reasons)
+        print(line + ' WOULD_TERM', flush=True)
+        return
+    again, note = find_runner()  # re-check right before the signal
+    if again != pid:
+        print(line + ' NO_SIGNAL runner_changed:%s' % (again or note), flush=True)
+        return
+    try:
+        os.kill(int(E('WD_KILL_PID') or pid), signal.SIGTERM)  # WD_KILL_PID: tests only
+    except ProcessLookupError:
+        print(line + ' SIGNAL_FAILED_ESRCH (no marker; checked again next run)', flush=True)
+        return
+    write_marker(head, pid, reasons)  # only after a delivered signal; a second TERM would be ignored by the runner anyway
+    print(line + ' SENT_SIGTERM', flush=True)
+
+
+def write_marker(head, pid, reasons):
     fd = os.open(MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as handle:
         json.dump({'at': head, 'runner': pid, 'reasons': reasons, 'dry': DRY}, handle)
-    if not DRY:
-        os.kill(pid, signal.SIGTERM)
-    print(line + (' WOULD_TERM' if DRY else ' SENT_SIGTERM'), flush=True)
 
 
 if __name__ == '__main__':

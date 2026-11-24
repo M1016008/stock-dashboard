@@ -4,6 +4,9 @@ set -u
 WD="$(cd "$(dirname "$0")" && pwd)/watchdog.py"
 T=$(mktemp -d -t us-rebuild-watchdog-test)
 mkdir -p "$T/wt/scripts" "$T/other" "$T/us"
+LEADER=""; RUNNER=""; OTHER=""
+cleanup() { [ -n "$RUNNER" ] && kill $RUNNER 2>/dev/null; [ -n "$OTHER" ] && kill $OTHER 2>/dev/null; [ -n "$LEADER" ] && kill $LEADER 2>/dev/null; rm -rf "$T"; }
+trap cleanup EXIT INT TERM
 fail=0; ok() { echo "PASS $1"; }; ng() { echo "FAIL $1: $2"; fail=1; }
 export WD_LOCK="$T/lock" WD_GUARD_LOG="$T/guard.log" WD_VOLUME=/ WD_US_DIR="$T/us" WD_MARKER="$T/marker" WD_WORKTREE="$T/wt" WD_LABEL=com.stockboard.test-not-loaded
 start_runner() { # $1 = cwd. Leader zsh -> python runner whose command line names the runner script.
@@ -43,8 +46,14 @@ o=$(WD_NOW=202612021000 WD_DRY=1 WD_WORKTREE=$T/other w $HIGH 202612050000); [[ 
 echo $$ > "$T/lock"; o=$(WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *lock_pid_not_runner*NO_SIGNAL ]] && ok "16 lock names another process -> never signals" || ng 16 "$o"
 rm -f "$T/lock"; o=$(WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *runner=no_lock*NO_SIGNAL ]] && ok "17 no lock -> never signals" || ng 17 "$o"
 echo $RUNNER > "$T/lock"
+/bin/sleep 0 & DEAD=$!; wait $DEAD
+o=$(WD_KILL_PID=$DEAD WD_NOW=202612021000 w $HIGH 202612050000); [[ $o == *SIGNAL_FAILED_ESRCH* && ! -e $T/marker ]] && kill -0 $RUNNER && ok "17b signal not delivered -> no marker, runner untouched" || ng 17b "$o"
 o=$(WD_NOW=202612021000 w $HIGH 202612050000); sleep 0.5
 if [[ $o == *SENT_SIGTERM* ]] && ! kill -0 $RUNNER 2>/dev/null && [ -e "$T/marker" ]; then ok "18 real SIGTERM reaches the runner once"; else ng 18 "$o"; fi
 stop_runner
 echo $LEADER > /dev/null; o=$(WD_NOW=202612021005 w $HIGH 202612050000); [[ $o == *ALREADY_FIRED* ]] && ok "19 after firing: no second signal" || ng 19 "$o"
-rm -rf "$T"; [ $fail = 0 ] && echo WATCHDOG_TESTS_PASS || echo WATCHDOG_TESTS_FAIL
+# launchctl print parsing against a real loaded job (read-only): com.stockboard.web
+real=$(launchctl list | awk '$3 == "com.stockboard.web" {print $1}')
+got=$(WD_LABEL=com.stockboard.web /usr/bin/python3 -I -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("wd", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.job_pid())' "$WD")
+[ -n "$real" ] && [ "$real" != "-" ] && [ "$got" = "$real" ] && ok "20 launchctl print pid parsing matches launchctl list ($got)" || ng 20 "real=$real got=$got"
+[ $fail = 0 ] && echo WATCHDOG_TESTS_PASS || echo WATCHDOG_TESTS_FAIL
