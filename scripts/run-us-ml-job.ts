@@ -5,7 +5,7 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,6 +15,7 @@ import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { queryReadOnlyFirstColumn } from '@/lib/storage/sqlite-readonly-query'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const US_ML_LOCK_PATH = path.join(
@@ -123,10 +124,12 @@ async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: Env
 
 // On failure, record the DB/-wal/-shm state and open handles before rethrowing, so an
 // intermittent "unable to open database file" can be diagnosed from the log alone.
+// Read-only through node:sqlite, not /usr/bin/sqlite3 -readonly: that build cannot open a WAL DB
+// (such as the .building shadow between child jobs) while its -wal/-shm are absent.
 function sqliteReadonly(dbPath: string, sql: string): string {
   if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
   try {
-    return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+    return queryReadOnlyFirstColumn(dbPath, [sql]).join('\n').trim()
   } catch (error) {
     // Diagnostics must never replace the original sqlite3 error.
     const files = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
@@ -254,13 +257,9 @@ function writeChunkCheckpoint(file: string, signature: string, completed: Set<st
 function pipelineTickers(env: NodeJS.ProcessEnv, includeInactive: boolean): string[] {
   const dbPath = env.STOCKBOARD_DB_PATH
   if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to split US ML feature jobs')
-  return execFileSync(
-    'sqlite3',
+  return queryReadOnlyFirstColumn(
+    dbPath,
     [
-      '-readonly',
-      '-cmd',
-      '.timeout 30000',
-      dbPath,
       includeInactive
         ? `SELECT DISTINCT ticker FROM ohlcv_daily ORDER BY ticker`
         : `SELECT DISTINCT o.ticker
@@ -268,8 +267,7 @@ function pipelineTickers(env: NodeJS.ProcessEnv, includeInactive: boolean): stri
            JOIN ticker_universe u ON u.ticker = o.ticker AND COALESCE(u.active, 1) = 1
            ORDER BY o.ticker`,
     ],
-    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
-  ).trim().split(/\r?\n/).filter(Boolean)
+  ).filter(Boolean)
 }
 
 async function runFeatureJobInTickerChunks(

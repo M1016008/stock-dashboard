@@ -15,6 +15,7 @@ import path from 'node:path'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { queryReadOnlyFirstColumn } from '@/lib/storage/sqlite-readonly-query'
 
 type TargetName = 'jp' | 'us'
 
@@ -113,15 +114,8 @@ function sizes(dbPath: string): SizeSnapshot {
   }
 }
 
-function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } = {}): string {
-  const target = options.readonly
-    ? `file:${dbPath}?mode=ro`
-    : dbPath
-  const args = [
-    ...(!options.readonly ? ['-cmd', '.timeout 15000'] : []),
-    target,
-    sql,
-  ]
+function runSqlite(dbPath: string, sql: string): string {
+  const args = ['-cmd', '.timeout 15000', dbPath, sql]
   const result = spawnSync(SQLITE_BIN, args, {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 64,
@@ -132,15 +126,14 @@ function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } 
   return result.stdout.trim()
 }
 
-// Opened the same way as the cleanup queries that follow it. A read-only open of a WAL database
-// fails with SQLITE_CANTOPEN (14) while no other connection has it open, because -wal/-shm are
-// then absent and a read-only connection cannot create them.
+// Read-only through node:sqlite: /usr/bin/sqlite3 cannot open a WAL database read-only while its
+// -wal/-shm are absent (lib/storage/sqlite-readonly-query.ts).
 function tableExists(dbPath: string, tableName: string): boolean {
-  const output = runSqlite(
+  const [name] = queryReadOnlyFirstColumn(
     dbPath,
-    `SELECT name FROM sqlite_master WHERE type='table' AND name=${sqlString(tableName)} LIMIT 1;`,
+    [`SELECT name FROM sqlite_master WHERE type='table' AND name=${sqlString(tableName)} LIMIT 1`],
   )
-  return output.trim() === tableName
+  return name === tableName
 }
 
 function sqlString(value: string): string {
@@ -284,12 +277,8 @@ function listOpenHandles(dbPath: string): OpenHandle[] {
 }
 
 function runReadOnlySmoke(dbPath: string): string[] {
-  const sql = [
-    'PRAGMA schema_version;',
-    'PRAGMA page_count;',
-    'PRAGMA freelist_count;',
-  ].join(' ')
-  return runSqlite(dbPath, sql, { readonly: true }).split('\n').filter(Boolean)
+  const sql = ['PRAGMA schema_version', 'PRAGMA page_count', 'PRAGMA freelist_count']
+  return queryReadOnlyFirstColumn(dbPath, sql)
 }
 
 function runWritableMaintenance(dbPath: string): string[] {
