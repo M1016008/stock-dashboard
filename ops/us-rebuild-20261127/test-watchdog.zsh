@@ -8,7 +8,7 @@ LEADER=""; RUNNER=""; OTHER=""
 cleanup() { [ -n "$RUNNER" ] && kill $RUNNER 2>/dev/null; [ -n "$OTHER" ] && kill $OTHER 2>/dev/null; [ -n "$LEADER" ] && kill $LEADER 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT INT TERM
 fail=0; ok() { echo "PASS $1"; }; ng() { echo "FAIL $1: $2"; fail=1; }
-export WD_LOCK="$T/lock" WD_GUARD_LOG="$T/guard.log" WD_VOLUME=/ WD_US_DIR="$T/us" WD_MARKER="$T/marker" WD_WORKTREE="$T/wt" WD_LABEL=com.stockboard.test-not-loaded
+export WD_TEST_MODE=1 WD_LOCK="$T/lock" WD_GUARD_LOG="$T/guard.log" WD_VOLUME=/ WD_US_DIR="$T/us" WD_MARKER="$T/marker" WD_WORKTREE="$T/wt" WD_LABEL=com.stockboard.test-not-loaded
 start_runner() { # $1 = cwd. Leader zsh -> python runner whose command line names the runner script.
   ( cd "$1" && exec /bin/zsh -c '/usr/bin/python3 -c "import time; time.sleep(600)" scripts/run-weekly-optimization.ts & wait' ) &
   LEADER=$!; for i in {1..50}; do RUNNER=$(pgrep -P $LEADER -f run-weekly-optimization.ts | head -1); [ -n "$RUNNER" ] && break; sleep 0.1; done
@@ -56,4 +56,7 @@ echo $LEADER > /dev/null; o=$(WD_NOW=202612021005 w $HIGH 202612050000); [[ $o =
 real=$(launchctl list | awk '$3 == "com.stockboard.web" {print $1}')
 got=$(WD_LABEL=com.stockboard.web /usr/bin/python3 -I -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("wd", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.job_pid())' "$WD")
 [ -n "$real" ] && [ "$real" != "-" ] && [ "$got" = "$real" ] && ok "20 launchctl print pid parsing matches launchctl list ($got)" || ng 20 "real=$real got=$got"
+# production mode ignores every WD_* override: with WD_TEST_MODE unset, WD_DRY/WD_LOCK/WD_KILL_PID are not honoured
+o=$(env -u WD_TEST_MODE WD_DRY=1 WD_KILL_PID=1 WD_LOCK="$T/lock" WD_MARKER="$T/marker2" /usr/bin/python3 -I "$WD" 1 209901010000 1 2>&1)
+[[ $o == *" mode=prod runner="* && $o != *"$RUNNER"* && ! -e $T/marker2 ]] && ok "21 prod mode ignores WD_* overrides" || ng 21 "$o"
 [ $fail = 0 ] && echo WATCHDOG_TESTS_PASS || echo WATCHDOG_TESTS_FAIL

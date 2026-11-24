@@ -14,7 +14,14 @@ import sys
 
 JST = dt.timezone(dt.timedelta(hours=9))
 HOME = os.path.expanduser('~')
-E = os.environ.get
+# WD_* overrides exist only for test-watchdog.zsh. They are ignored unless WD_TEST_MODE=1, and the log line says mode=test
+# when they are honoured; U2 and U-EXT require mode=prod.
+TEST_MODE = os.environ.get('WD_TEST_MODE') == '1'
+
+
+def E(name, default=None):
+    return os.environ.get(name, default) if TEST_MODE else default
+
 LABEL = E('WD_LABEL', 'com.stockboard.us-rebuild-20261127')
 WORKTREE = E('WD_WORKTREE', '/Users/yoshio/dev/stock-dashboard/.claude/worktrees/us-rebuild-ebd9fe7')
 LOCK = E('WD_LOCK', HOME + '/Library/Application Support/StockBoard/weekly-optimization.lock')
@@ -178,8 +185,8 @@ def main():
         size_gib(shadow), size_gib(shadow + '-wal'),
         size_gib(US_DIR + '/analog-sequence-us-v2.db.tiingo_adj_ohlc_ratio_v1.building'),
         size_gib(US_DIR + '/stockboard-us.db-wal')) + ' jp_wal=%s' % size_gib(JP_DB + '-wal')
-    line = '%s runner=%s free_gib=%.1f internal_gib=%.1f %s guard_at=%s reasons=%s' % (
-        head, pid or note, free, internal, sizes, guard_at, ','.join(reasons) or '-')
+    line = '%s mode=%s runner=%s free_gib=%.1f internal_gib=%.1f %s guard_at=%s reasons=%s' % (
+        head, 'test' if TEST_MODE else 'prod', pid or note, free, internal, sizes, guard_at, ','.join(reasons) or '-')
     if not reasons or pid is None:
         print(line + (' NO_SIGNAL' if reasons else ''), flush=True)
         return

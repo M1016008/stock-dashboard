@@ -1,0 +1,49 @@
+# process.cwd() / relative data paths in the reachable files
+lib/db/client.ts:37:  : path.join(process.cwd(), 'data', 'stockboard.db')
+lib/db/us-analytics.ts:8:const DEFAULT_US_ANALYTICS_PATH = 'data/stockboard-us.db'
+lib/db/us-analytics.ts:29:  return path.join(/* turbopackIgnore: true */ process.cwd(), DEFAULT_US_ANALYTICS_PATH)
+lib/runtime/isolation.ts:133:    const candidate = path.resolve(process.cwd(), distDir)
+lib/runtime/isolation.ts:257:  cwd = process.cwd(),
+scripts/build-analog-sequence-index.ts:135:    : path.join(process.cwd(), 'data', 'stockboard.db')
+scripts/build-us-analytics-db.ts:26:  : path.resolve('data/stockboard-us.db')
+scripts/build-us-analytics-db.ts:82:  const defaultLocalPath = path.resolve('data/stockboard-us.db')
+scripts/ensure-us-adjusted-foundation.ts:181:      cwd: process.cwd(),
+scripts/maintenance-db.ts:59:  return configured ? path.resolve(configured) : path.join(process.cwd(), 'data', 'stockboard.db')
+scripts/manage-ml-pipeline-generation.ts:33:    : process.env.STOCKBOARD_DB_PATH?.trim() || process.env.LOCAL_DB_PATH?.trim() || 'data/stockboard.db'
+scripts/run-jp-ml-calendar-stage-refresh.ts:188:      cwd: process.cwd(),
+scripts/run-jp-ml-weekly-efficient.ts:17:    || 'data/stockboard.db',
+scripts/run-jp-ml-weekly-efficient.ts:57:      cwd: process.cwd(),
+scripts/run-jp-physical-momentum-full.ts:68:      cwd: process.cwd(),
+scripts/run-ml-learning.ts:297:      cwd: process.cwd(),
+scripts/run-ml-learning.ts:352:      cwd: process.cwd(),
+scripts/run-ml-serving-fast.ts:80:      cwd: process.cwd(),
+scripts/run-us-ml-job.ts:113:      cwd: process.cwd(),
+scripts/run-us-ml-job.ts:175:    ? path.join(process.cwd(), 'scripts', 'batch-ml-features.ts')
+scripts/run-us-ml-job.ts:176:    : path.join(process.cwd(), 'scripts', 'batch-ml-physics-features.ts')
+scripts/run-us-ml-job.ts:687:        env.US_SIGNAL_RETURN_TMPDIR ?? '/tmp/stockboard-us-signal-return',
+scripts/run-us-ml-weekly-efficient.ts:19:  || 'data/stockboard.db'
+scripts/run-us-ml-weekly-efficient.ts:210:      cwd: process.cwd(),
+scripts/run-us-physical-momentum-full.ts:155:  const sourcePath = path.join(process.cwd(), 'scripts', 'batch-physical-momentum.ts')
+scripts/run-us-physical-momentum-full.ts:240:      cwd: process.cwd(),
+scripts/validate-us-analytics-db.ts:13:  : path.resolve('data/stockboard-us.db')
+
+# lock / state / temp / checkpoint locations
+lib/runtime/isolation.ts:208:  environment.TMPDIR = path.join(resolvedRoot, 'tmp')
+lib/storage/external-storage-guard.ts:167:  const fallback = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
+lib/storage/external-storage-guard.ts:195:    lockPath: path.join(directory, `volume-certification-${key}.lock`),
+lib/storage/external-storage-guard.ts:771:  const fallback = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
+scripts/batch-forward-extrema.ts:84:    || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'checkpoints')
+scripts/batch-forward-extrema.ts:579:  const checkpointFile = checkpointPath(signature)
+scripts/batch-signal-return-stats.ts:292:        env: { ...process.env, SQLITE_TMPDIR: tempDir },
+scripts/batch-signal-return-stats.ts:344:  const tempDir = process.env.SIGNAL_RETURN_TMPDIR?.trim()
+scripts/batch-signal-stats.ts:394:        env: { ...process.env, SQLITE_TMPDIR: tempDir },
+scripts/build-analog-sequence-index.ts:76:  const lockPath = `${target}.process.lock`
+scripts/run-us-ml-job.ts:22:  os.homedir(),
+scripts/run-us-ml-job.ts:24:  'Application Support',
+scripts/run-us-ml-job.ts:26:  'us-ml-job.lock',
+scripts/run-us-ml-job.ts:170:    || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'checkpoints')
+scripts/run-us-ml-job.ts:305:  const checkpointFile = chunkCheckpointPath(script, env, signature)
+scripts/run-us-ml-job.ts:686:      SIGNAL_RETURN_TMPDIR:
+scripts/run-us-ml-job.ts:687:        env.US_SIGNAL_RETURN_TMPDIR ?? '/tmp/stockboard-us-signal-return',
+scripts/run-us-physical-momentum-full.ts:184:    os.homedir(),
+scripts/run-us-physical-momentum-full.ts:186:    'Application Support',
