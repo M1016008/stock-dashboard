@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -36,7 +37,9 @@ assert.match(fs.readFileSync('scripts/build-us-analytics-db.ts', 'utf8'), /guard
 // WAL database while its -wal/-shm are absent (the 2026-11-08 weekly US failure, db-maintenance since 2026-11-20).
 assert.match(fs.readFileSync('scripts/run-us-ml-job.ts', 'utf8'), /sqliteCliReadArgs\(/)
 // Python's bundled SQLite opens a WAL database read-only without -wal/-shm (checked), so only JS/TS sources are scanned.
-const readonlyCli = [...files('lib'), ...files('scripts'), ...files('app')]
+// Every tracked JS/TS source in the project (app, components, lib, scripts, root files, ...).
+const readonlyCli = execFileSync('git', ['ls-files', '*.ts', '*.tsx', '*.js', '*.mjs', '*.cjs'], { encoding: 'utf8' })
+  .split('\n').filter(Boolean)
   .filter((file) => /\.(ts|tsx|js|mjs|cjs)$/.test(file) && !/scripts\/test-/.test(file))
   .filter((file) => /['"]-readonly['"]|[?&]mode=ro\b/.test(fs.readFileSync(file, 'utf8')))
 // The backup tools run their own pinned sqlite3 3.54.1 on copies (one with immutable=1); the daily-close report is a development tool.
