@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>EXTERNAL_STORAGE_REQUIRED</key>
+		<string>true</string>
+		<key>SKIP_SCHEMA_ENSURE</key>
+		<string>1</string>
+		<key>STOCKBOARD_DB_PATH</key>
+		<string>/Volumes/OWC Express 1M2 80G/stock-dashboard/stockboard.db</string>
+		<key>STOCK_DATA_MIN_FREE_BYTES</key>
+		<string>53687091200</string>
+		<key>STOCK_DATA_MIN_FREE_PERCENT</key>
+		<string>5</string>
+		<key>STOCK_DATA_MOUNT_PATH</key>
+		<string>/Volumes/OWC Express 1M2 80G</string>
+		<key>STOCK_DATA_VOLUME_UUID</key>
+		<string>11FDA3F5-D89E-414D-9B95-C2069FF0B204</string>
+		<key>USE_LOCAL_DB</key>
+		<string>1</string>
+		<key>US_ANALYTICS_DB_PATH</key>
+		<string>/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db</string>
+	</dict>
+	<key>Label</key>
+	<string>com.stockboard.us-rebuild-20261127</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>-lc</string>
+		<string>cd "/Users/yoshio/dev/stock-dashboard/.claude/worktrees/us-rebuild-ebd9fe7" &amp;&amp; export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" &amp;&amp; export USE_LOCAL_DB=1 &amp;&amp; export US_ANALYTICS_DB_PATH="/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db" &amp;&amp; export STOCKBOARD_MEMORY_MIN_FREE_PERCENT=${STOCKBOARD_MEMORY_MIN_FREE_PERCENT:-20} &amp;&amp; export STOCKBOARD_MEMORY_MIN_AVAILABLE_MB=${STOCKBOARD_MEMORY_MIN_AVAILABLE_MB:-0} &amp;&amp; export STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB=${STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB:-6144} &amp;&amp; export STOCKBOARD_MEMORY_WAIT_SECONDS=${STOCKBOARD_MEMORY_WAIT_SECONDS:-1800} &amp;&amp; export STOCKBOARD_NODE_MAX_OLD_SPACE_MB=${STOCKBOARD_NODE_MAX_OLD_SPACE_MB:-3072} &amp;&amp; export US_PMS_WEEKLY_TICKER_CHUNK=${US_PMS_WEEKLY_TICKER_CHUNK:-250} &amp;&amp; export US_PMS_WEEKLY_DATE_CHUNK=${US_PMS_WEEKLY_DATE_CHUNK:-50} &amp;&amp; export US_PMS_CHECKPOINT_ENABLED=${US_PMS_CHECKPOINT_ENABLED:-1} &amp;&amp; export ML_MODEL_DETERIORATION_STRICT=${ML_MODEL_DETERIORATION_STRICT:-1} &amp;&amp; export SQLITE_BUSY_TIMEOUT_MS=${SQLITE_BUSY_TIMEOUT_MS:-30000} &amp;&amp; export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-20} &amp;&amp; export UPDATE_CHILD_TIMEOUT_MINUTES=${UPDATE_CHILD_TIMEOUT_MINUTES:-2880} &amp;&amp; export US_PROMOTED_BACKUP_RETENTION=1 &amp;&amp; export SQLITE_TMPDIR="/Volumes/OWC Express 1M2 80G/stockboard-data/us/.us-rebuild-20261127-tmp" &amp;&amp; export US_SIGNAL_RETURN_TMPDIR="/Volumes/OWC Express 1M2 80G/stockboard-data/us/.us-rebuild-20261127-tmp" &amp;&amp; npm run batch:weekly-optimize</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/yoshio/Library/Logs/StockBoard/us-rebuild-20261127.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/yoshio/Library/Logs/StockBoard/us-rebuild-20261127.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/yoshio/dev/stock-dashboard/.claude/worktrees/us-rebuild-ebd9fe7</string>
+</dict>
+</plist>
