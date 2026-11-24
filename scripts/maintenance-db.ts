@@ -132,11 +132,13 @@ function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } 
   return result.stdout.trim()
 }
 
+// Opened the same way as the cleanup queries that follow it. A read-only open of a WAL database
+// fails with SQLITE_CANTOPEN (14) while no other connection has it open, because -wal/-shm are
+// then absent and a read-only connection cannot create them.
 function tableExists(dbPath: string, tableName: string): boolean {
   const output = runSqlite(
     dbPath,
     `SELECT name FROM sqlite_master WHERE type='table' AND name=${sqlString(tableName)} LIMIT 1;`,
-    { readonly: true },
   )
   return output.trim() === tableName
 }
