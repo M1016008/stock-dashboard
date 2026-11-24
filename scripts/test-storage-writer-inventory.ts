@@ -35,9 +35,13 @@ assert.match(fs.readFileSync('scripts/build-us-analytics-db.ts', 'utf8'), /guard
 // Reads go through a query-only connection (lib/storage/sqlite-cli-read.ts): /usr/bin/sqlite3 -readonly cannot open a
 // WAL database while its -wal/-shm are absent (the 2026-11-08 weekly US failure, db-maintenance since 2026-11-20).
 assert.match(fs.readFileSync('scripts/run-us-ml-job.ts', 'utf8'), /sqliteCliReadArgs\(/)
-const readonlyCli = sourceFiles.filter((file) => /['"]-readonly['"]/.test(fs.readFileSync(file, 'utf8')))
+// Python's bundled SQLite opens a WAL database read-only without -wal/-shm (checked), so only JS/TS sources are scanned.
+const readonlyCli = [...files('lib'), ...files('scripts'), ...files('app')]
+  .filter((file) => /\.(ts|tsx|js|mjs|cjs)$/.test(file) && !/scripts\/test-/.test(file))
+  .filter((file) => /['"]-readonly['"]|[?&]mode=ro\b/.test(fs.readFileSync(file, 'utf8')))
 // The backup tools run their own pinned sqlite3 3.54.1 on copies (one with immutable=1); the daily-close report is a development tool.
 assert.deepEqual(readonlyCli.sort(), [
+  'lib/storage/sqlite-cli-read.ts', // only its explanation of the failure
   'lib/storage/sqlite-rsync-generation.ts',
   'scripts/check-backup-integrity-by-table.ts',
   'scripts/lib/readonly-daily-close-report.ts',
