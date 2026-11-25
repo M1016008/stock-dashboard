@@ -4,18 +4,20 @@ set -u
 WD="$(cd "$(dirname "$0")" && pwd)/watchdog.py"
 T=$(mktemp -d -t us-rebuild-watchdog-test)
 mkdir -p "$T/wt/scripts" "$T/other" "$T/us"
-LEADER=""; RUNNER=""; OTHER=""
-# Only PIDs this script started and has not yet reaped are signalled (each variable is cleared after its wait).
-cleanup() { [ -n "$RUNNER" ] && kill $RUNNER 2>/dev/null; [ -n "$OTHER" ] && kill $OTHER 2>/dev/null; [ -n "$LEADER" ] && kill $LEADER 2>/dev/null; rm -rf "$T"; }
+RUNNER=""; OTHER=""; LEADER=$$
+# The fake runner and OTHER are direct children of this script; each variable is cleared right after its wait.
+# cleanup (only on an early exit) signals a PID only if it is still our own child running the expected command.
+mine() { ps -o ppid=,command= -p $1 2>/dev/null | grep -qE "^ *$$ .*$2"; }
+cleanup() { [ -n "$RUNNER" ] && mine $RUNNER run-weekly-optimization.ts && kill $RUNNER; [ -n "$OTHER" ] && mine $OTHER 'sleep 300' && kill $OTHER; wait 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT INT TERM
 fail=0; ok() { echo "PASS $1"; }; ng() { echo "FAIL $1: $2"; fail=1; }
 export WD_LOCK="$T/lock" WD_GUARD_LOG="$T/guard.log" WD_VOLUME=/ WD_US_DIR="$T/us" WD_MARKER="$T/marker" WD_WORKTREE="$T/wt" WD_LABEL=com.stockboard.test-not-loaded
-start_runner() { # $1 = cwd. Leader zsh -> python runner whose command line names the runner script.
-  ( cd "$1" && exec /bin/zsh -c '/usr/bin/python3 -c "import time; time.sleep(600)" scripts/run-weekly-optimization.ts & wait' ) &
-  LEADER=$!; for i in {1..50}; do RUNNER=$(pgrep -P $LEADER -f run-weekly-optimization.ts | head -1); [ -n "$RUNNER" ] && break; sleep 0.1; done
+start_runner() { # $1 = cwd. A python process whose command line names the runner script; this script plays the launchd job.
+  ( cd "$1" && exec /usr/bin/python3 -c "import time; time.sleep(600)" scripts/run-weekly-optimization.ts ) &
+  RUNNER=$!; for i in {1..50}; do pgrep -f run-weekly-optimization.ts | grep -qx $RUNNER && break; sleep 0.1; done
   echo $RUNNER > "$T/lock"; }
-# The runner is our grandchild: it is signalled only while still alive (so its PID cannot have been reused), then the leader is reaped.
-stop_runner() { kill -0 $RUNNER 2>/dev/null && kill $RUNNER; wait $LEADER 2>/dev/null; RUNNER=""; LEADER=""; }
+# Test 18 has already terminated the runner: only reap it (no second signal), then forget the PID.
+stop_runner() { wait $RUNNER 2>/dev/null; RUNNER=""; }
 guard() { # $1 checkedAt(UTC) $2 expected.jp $3 jp price $4 jp-core state
   printf '{\n  "status": "ok",\n  "checkedAt": "%s",\n  "expected": {"jp": "%s", "us": "x"},\n  "dates": {"jp": {"price": "%s"}},\n  "actions": [{"key": "jp-core", "state": "%s"}]\n}\n' "$1" "$2" "$3" "$4" >> "$T/guard.log"; }
 w() { WD_JOB_PID=${JOB:-$LEADER} /usr/bin/python3 -I "$WD" --test-mode "$@" ${INT:-1} 2>&1; }
@@ -58,6 +60,6 @@ real=$(launchctl list | awk '$3 == "com.stockboard.web" {print $1}')
 got=$(WD_LABEL=com.stockboard.web /usr/bin/python3 -I -c 'import importlib.util,sys; sys.argv.append("--test-mode"); s=importlib.util.spec_from_file_location("wd", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.job_pid())' "$WD")
 [ -n "$real" ] && [ "$real" != "-" ] && [ "$got" = "$real" ] && ok "20 launchctl print pid parsing matches launchctl list ($got)" || ng 20 "real=$real got=$got"
 # production mode ignores every WD_* override. Checked in memory only (main() is not run, so no real path is read).
-o=$(WD_DRY=1 WD_KILL_PID=1 WD_LOCK="$T/lock" WD_JOB_PID=1 /usr/bin/python3 -I -c 'import importlib.util,sys; sys.argv=["watchdog.py","300","202612022200","15"]; s=importlib.util.spec_from_file_location("wd", "'"$WD"'"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.TEST_MODE, m.DRY, m.LOCK.endswith("Application Support/StockBoard/weekly-optimization.lock"), m.E("WD_KILL_PID"), m.E("WD_JOB_PID"))' 2>&1)
-[ "$o" = "False False True None None" ] && ok "21 without --test-mode every WD_* override is ignored" || ng 21 "$o"
+o=$(WD_DRY=1 WD_KILL_PID=1 WD_FAKE_ESRCH=1 WD_LOCK="$T/lock" WD_JOB_PID=1 /usr/bin/python3 -I -c 'import importlib.util,sys; sys.argv=["watchdog.py","300","202612022200","15"]; s=importlib.util.spec_from_file_location("wd", "'"$WD"'"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.TEST_MODE, m.DRY, m.LOCK.endswith("Application Support/StockBoard/weekly-optimization.lock"), m.E("WD_KILL_PID"), m.E("WD_JOB_PID"), m.E("WD_FAKE_ESRCH"))' 2>&1)
+[ "$o" = "False False True None None None" ] && ok "21 without --test-mode every WD_* override is ignored" || ng 21 "$o"
 [ $fail = 0 ] && echo WATCHDOG_TESTS_PASS || echo WATCHDOG_TESTS_FAIL
