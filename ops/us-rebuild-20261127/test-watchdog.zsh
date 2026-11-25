@@ -66,4 +66,5 @@ got=$(WD_LABEL=com.stockboard.web /usr/bin/python3 -I -c 'import importlib.util,
 # production mode ignores every WD_* override. Checked in memory only (main() is not run, so no real path is read).
 o=$(WD_DRY=1 WD_KILL_PID=1 WD_FAKE_ESRCH=1 WD_LOCK="$T/lock" WD_JOB_PID=1 /usr/bin/python3 -I -c 'import importlib.util,sys; sys.argv=["watchdog.py","300","202612022200","15"]; s=importlib.util.spec_from_file_location("wd", "'"$WD"'"); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.TEST_MODE, m.DRY, m.LOCK.endswith("Application Support/StockBoard/weekly-optimization.lock"), m.E("WD_KILL_PID"), m.E("WD_JOB_PID"), m.E("WD_FAKE_ESRCH"))' 2>&1)
 [ "$o" = "False False True None None None" ] && ok "21 without --test-mode every WD_* override is ignored" || ng 21 "$o"
-[ $fail = 0 ] && echo WATCHDOG_TESTS_PASS || echo WATCHDOG_TESTS_FAIL
+[ $fail = 0 ] && { echo WATCHDOG_TESTS_PASS; exit 0; }
+echo WATCHDOG_TESTS_FAIL; exit 1
