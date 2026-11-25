@@ -5,6 +5,7 @@ WD="$(cd "$(dirname "$0")" && pwd)/watchdog.py"
 T=$(mktemp -d -t us-rebuild-watchdog-test)
 mkdir -p "$T/wt/scripts" "$T/other" "$T/us"
 LEADER=""; RUNNER=""; OTHER=""
+# Only PIDs this script started and has not yet reaped are signalled (each variable is cleared after its wait).
 cleanup() { [ -n "$RUNNER" ] && kill $RUNNER 2>/dev/null; [ -n "$OTHER" ] && kill $OTHER 2>/dev/null; [ -n "$LEADER" ] && kill $LEADER 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT INT TERM
 fail=0; ok() { echo "PASS $1"; }; ng() { echo "FAIL $1: $2"; fail=1; }
@@ -13,7 +14,8 @@ start_runner() { # $1 = cwd. Leader zsh -> python runner whose command line name
   ( cd "$1" && exec /bin/zsh -c '/usr/bin/python3 -c "import time; time.sleep(600)" scripts/run-weekly-optimization.ts & wait' ) &
   LEADER=$!; for i in {1..50}; do RUNNER=$(pgrep -P $LEADER -f run-weekly-optimization.ts | head -1); [ -n "$RUNNER" ] && break; sleep 0.1; done
   echo $RUNNER > "$T/lock"; }
-stop_runner() { kill $RUNNER 2>/dev/null; wait $LEADER 2>/dev/null; }
+# The runner is our grandchild: it is signalled only while still alive (so its PID cannot have been reused), then the leader is reaped.
+stop_runner() { kill -0 $RUNNER 2>/dev/null && kill $RUNNER; wait $LEADER 2>/dev/null; RUNNER=""; LEADER=""; }
 guard() { # $1 checkedAt(UTC) $2 expected.jp $3 jp price $4 jp-core state
   printf '{\n  "status": "ok",\n  "checkedAt": "%s",\n  "expected": {"jp": "%s", "us": "x"},\n  "dates": {"jp": {"price": "%s"}},\n  "actions": [{"key": "jp-core", "state": "%s"}]\n}\n' "$1" "$2" "$3" "$4" >> "$T/guard.log"; }
 w() { WD_JOB_PID=${JOB:-$LEADER} /usr/bin/python3 -I "$WD" --test-mode "$@" ${INT:-1} 2>&1; }
@@ -41,13 +43,12 @@ o=$(WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *owc_free_below
 o=$(INT=100000 WD_NOW=202612021000 WD_DRY=1 w $LOW 202612050000); [[ $o == *internal_free_below_100000_gib*WOULD_TERM ]] && ok "12b internal disk below the limit -> fires" || ng 12b "$o"; rm -f "$T/marker"
 o=$(WD_NOW=202612021000 WD_DRY=1 WD_VOLUME=$T/other w $LOW 202612050000); [[ $o == *owc_not_mounted*WOULD_TERM ]] && ok "13 volume not mounted -> fires" || ng 13 "$o"; rm -f "$T/marker"
 /bin/sleep 300 & OTHER=$!
-o=$(JOB=$OTHER WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *runner_not_under_job*NO_SIGNAL && ! -e $T/marker ]] && ok "14 runner not under the job -> never signals" || ng 14 "$o"; kill $OTHER; rm -f "$T/marker"
+o=$(JOB=$OTHER WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *runner_not_under_job*NO_SIGNAL && ! -e $T/marker ]] && ok "14 runner not under the job -> never signals" || ng 14 "$o"; kill $OTHER; wait $OTHER 2>/dev/null; OTHER=""; rm -f "$T/marker"
 o=$(WD_NOW=202612021000 WD_DRY=1 WD_WORKTREE=$T/other w $HIGH 202612050000); [[ $o == *runner_cwd_mismatch*NO_SIGNAL && ! -e $T/marker ]] && ok "15 runner in another folder -> never signals" || ng 15 "$o"
 echo $$ > "$T/lock"; o=$(WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *lock_pid_not_runner*NO_SIGNAL ]] && ok "16 lock names another process -> never signals" || ng 16 "$o"
 rm -f "$T/lock"; o=$(WD_NOW=202612021000 WD_DRY=1 w $HIGH 202612050000); [[ $o == *runner=no_lock*NO_SIGNAL ]] && ok "17 no lock -> never signals" || ng 17 "$o"
 echo $RUNNER > "$T/lock"
-/bin/sleep 0 & DEAD=$!; wait $DEAD
-o=$(WD_KILL_PID=$DEAD WD_NOW=202612021000 w $HIGH 202612050000); [[ $o == *SIGNAL_FAILED_ESRCH* && ! -e $T/marker ]] && kill -0 $RUNNER && ok "17b signal not delivered -> no marker, runner untouched" || ng 17b "$o"
+o=$(WD_FAKE_ESRCH=1 WD_NOW=202612021000 w $HIGH 202612050000); [[ $o == *SIGNAL_FAILED_ESRCH* && ! -e $T/marker ]] && kill -0 $RUNNER && ok "17b signal not delivered -> no marker, runner untouched" || ng 17b "$o"
 o=$(WD_NOW=202612021000 w $HIGH 202612050000); sleep 0.5
 if [[ $o == *SENT_SIGTERM* ]] && ! kill -0 $RUNNER 2>/dev/null && [ -e "$T/marker" ]; then ok "18 real SIGTERM reaches the runner once"; else ng 18 "$o"; fi
 stop_runner

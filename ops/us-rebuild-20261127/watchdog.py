@@ -1,8 +1,9 @@
 #!/usr/bin/python3 -I
 # US rebuild watchdog (2026-11-27). launchd runs it every 5 minutes. It only reads, except:
 #   - appends one line per run to its log (stdout, set by the plist),
-#   - on the first crossed limit, writes the "fired" marker and sends SIGTERM once to the rebuild runner.
-# It never sends a second signal and never uses SIGKILL. The runner then stops its steps and rolls back (PR #88).
+#   - on the first crossed limit, sends SIGTERM to the rebuild runner and then writes the "fired" marker.
+# Normally one signal: with the marker present it sends no more. If the marker cannot be written after a delivered
+# signal, the next run may signal again; the runner ignores every signal after the first. It never uses SIGKILL. The runner then stops its steps and rolls back (PR #88).
 # Limits: OWC free space, internal-disk free space, a fixed deadline, and the JP daily update (price by 18:30, jp-core fresh by 23:00 JST
 # on JP trading days, read from the data-freshness-guard log).
 import datetime as dt
@@ -201,6 +202,8 @@ def main():
         print(line + ' NO_SIGNAL runner_changed:%s' % (again or note), flush=True)
         return
     try:
+        if E('WD_FAKE_ESRCH') == '1':  # tests only: simulate a runner that exited between the check and the signal
+            raise ProcessLookupError()
         os.kill(int(E('WD_KILL_PID') or pid), signal.SIGTERM)  # WD_KILL_PID: tests only
     except ProcessLookupError:
         print(line + ' SIGNAL_FAILED_ESRCH (no marker; checked again next run)', flush=True)
