@@ -14,9 +14,11 @@ import sys
 
 JST = dt.timezone(dt.timedelta(hours=9))
 HOME = os.path.expanduser('~')
-# WD_* overrides exist only for test-watchdog.zsh. They are ignored unless WD_TEST_MODE=1, and the log line says mode=test
+# WD_* overrides exist only for test-watchdog.zsh. They are ignored unless the --test-mode argument is given, and the log line says mode=test
 # when they are honoured; U2 and U-EXT require mode=prod.
-TEST_MODE = os.environ.get('WD_TEST_MODE') == '1'
+TEST_MODE = '--test-mode' in sys.argv  # never in the plists; only test-watchdog.zsh passes it
+if TEST_MODE:
+    sys.argv.remove('--test-mode')
 
 
 def E(name, default=None):
