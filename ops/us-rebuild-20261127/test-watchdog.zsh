@@ -8,8 +8,12 @@ RUNNER=""; OTHER=""; LEADER=$$
 # The fake runner and OTHER are direct children of this script; each variable is cleared right after its wait.
 # cleanup (only on an early exit) signals a PID only if it is still our own child running the expected command.
 mine() { ps -o ppid=,command= -p $1 2>/dev/null | grep -qE "^ *$$ .*$2"; }
-cleanup() { [ -n "$RUNNER" ] && mine $RUNNER run-weekly-optimization.ts && kill $RUNNER; [ -n "$OTHER" ] && mine $OTHER 'sleep 300' && kill $OTHER; wait 2>/dev/null; rm -rf "$T"; }
-trap cleanup EXIT INT TERM
+# INT/TERM only exit; the single cleanup runs on EXIT, takes the PIDs and clears the variables first (safe to re-enter).
+cleanup() { local r=$RUNNER o=$OTHER; RUNNER=""; OTHER=""
+  [ -n "$r" ] && mine $r run-weekly-optimization.ts && kill $r; [ -n "$o" ] && mine $o 'sleep 300' && kill $o; wait 2>/dev/null; rm -rf "$T"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 fail=0; ok() { echo "PASS $1"; }; ng() { echo "FAIL $1: $2"; fail=1; }
 export WD_LOCK="$T/lock" WD_GUARD_LOG="$T/guard.log" WD_VOLUME=/ WD_US_DIR="$T/us" WD_MARKER="$T/marker" WD_WORKTREE="$T/wt" WD_LABEL=com.stockboard.test-not-loaded
 start_runner() { # $1 = cwd. A python process whose command line names the runner script; this script plays the launchd job.
